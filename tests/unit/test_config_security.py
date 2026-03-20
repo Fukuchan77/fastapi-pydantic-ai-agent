@@ -23,6 +23,7 @@ def test_llm_base_url_validates_http_url(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_llm_base_url_accepts_valid_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that llm_base_url accepts valid HTTP URLs."""
     monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
 
@@ -35,6 +36,7 @@ def test_llm_base_url_accepts_valid_http_url(monkeypatch: pytest.MonkeyPatch) ->
 def test_llm_base_url_accepts_valid_https_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that llm_base_url accepts valid HTTPS URLs."""
     monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 
@@ -79,6 +81,7 @@ def test_max_output_retries_rejects_values_above_10(monkeypatch: pytest.MonkeyPa
 def test_max_output_retries_accepts_valid_range(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that max_output_retries accepts values in valid range [0, 10]."""
     monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
 
     from app.config import Settings
@@ -101,6 +104,7 @@ def test_max_output_retries_accepts_valid_range(monkeypatch: pytest.MonkeyPatch)
 def test_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that api_key is not exposed in repr output to prevent accidental logging."""
     monkeypatch.setenv("API_KEY", "secret-key-12345")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
 
     from app.config import Settings
