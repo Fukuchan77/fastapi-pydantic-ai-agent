@@ -1,0 +1,34 @@
+[tools]
+uv = "latest"
+
+[tasks.dev]
+description = "Start FastAPI development server with hot reload"
+run = "uv run uvicorn app.main:app --reload --port 8000"
+
+[tasks.test]
+description = "Run all tests with coverage"
+run = "uv run pytest tests/ -v --cov=app --cov-report=term-missing"
+
+[tasks."test:unit"]
+description = "Run unit tests only (fast, no LLM calls)"
+run = "uv run pytest tests/unit/ -v"
+
+[tasks."test:integration"]
+description = "Run integration tests (real stores, FunctionModel LLM)"
+run = "uv run pytest tests/integration/ -v"
+
+[tasks."test:e2e"]
+description = "Run E2E tests (full HTTP stack)"
+run = "uv run pytest tests/e2e/ -v"
+
+[tasks.lint]
+description = "Run ruff linter and ty type checker"
+run = ["uv run ruff check app/ tests/", "uv run ty check app/"]
+
+[tasks.format]
+description = "Run ruff formatter"
+run = "uv run ruff format app/ tests/"
+
+[tasks.build]
+description = "Build Docker image"
+run = "docker build -t fastapi-pydantic-ai-agent:latest ."
