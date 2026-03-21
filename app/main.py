@@ -1,5 +1,6 @@
 """FastAPI application factory and lifecycle management."""
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator
@@ -12,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
 from app.models.errors import ErrorResponse
+from app.stores.session_store import InMemorySessionStore
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     - HTTP client setup
     - Agent construction
     - Observability configuration
+    - Background cleanup task for expired sessions
 
     Args:
         app: FastAPI application instance
@@ -37,8 +40,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # TODO: Task 3.1 - Initialize InMemoryVectorStore when implemented
     # app.state.vector_store = InMemoryVectorStore()
 
-    # TODO: Task 3.2 - Initialize InMemorySessionStore when implemented
-    # app.state.session_store = InMemorySessionStore()
+    # Task 3.11: Initialize InMemorySessionStore with TTL
+    app.state.session_store = InMemorySessionStore()
+    logger.info(
+        "Initialized session store with TTL of %d seconds",
+        app.state.session_store.session_ttl,
+    )
+
+    # Task 3.11: Start background cleanup task for expired sessions
+    async def cleanup_loop() -> None:
+        """Background task that periodically cleans up expired sessions."""
+        session_store = app.state.session_store
+        cleanup_interval = session_store.session_ttl // 2
+        logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
+
+        try:
+            while True:
+                await asyncio.sleep(cleanup_interval)
+                removed_count = await session_store._cleanup_expired_sessions()
+                if removed_count > 0:
+                    logger.info("Cleaned up %d expired sessions", removed_count)
+        except asyncio.CancelledError:
+            logger.info("Session cleanup task cancelled during shutdown")
+            raise
+
+    # Create and store the cleanup task
+    app.state.cleanup_task = asyncio.create_task(cleanup_loop())
 
     # TODO: Task 6.2 - Initialize chat agent when build_chat_agent() is implemented
     # app.state.chat_agent = build_chat_agent()
@@ -51,10 +78,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #     app.state.http_client = client
     #     yield
 
-    # Placeholder yield for now
     yield
 
     # Cleanup happens here after yield
+    # Task 3.11: Cancel the cleanup task during shutdown
+    if hasattr(app.state, "cleanup_task"):
+        app.state.cleanup_task.cancel()
+        try:
+            await app.state.cleanup_task
+        except asyncio.CancelledError:
+            logger.info("Session cleanup task successfully cancelled")
 
 
 app = FastAPI(

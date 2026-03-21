@@ -6,10 +6,13 @@ maintaining conversation state across agent interactions.
 
 import asyncio
 import re
+import time
 from collections.abc import Sequence
 from typing import Protocol
 
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import ModelResponse
 
 
 class SessionStore(Protocol):
@@ -65,18 +68,22 @@ class InMemorySessionStore:
     has its own lock to allow concurrent access to different sessions.
     """
 
-    def __init__(self, max_messages: int = 1000) -> None:
-        """Initialize an empty in-memory session store with per-session locks.
+    def __init__(self, max_messages: int = 1000, session_ttl: int = 3600) -> None:
+        """Initialize an empty in-memory session store with per-session locks and TTL.
 
         Args:
             max_messages: Maximum number of messages allowed per session (default: 1000).
                 Used to prevent unbounded memory growth.
+            session_ttl: Time-to-live for inactive sessions in seconds (default: 3600).
+                Sessions not accessed for this duration will be eligible for cleanup.
         """
         self._store: dict[str, list[ModelMessage]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_access: dict[str, float] = {}
         # Compile regex pattern for session_id validation (alphanumeric, underscore, hyphen only)
         self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
         self.max_messages = max_messages
+        self.session_ttl = session_ttl
 
     async def get_history(self, session_id: str) -> list[ModelMessage]:
         """Retrieve message history for a session.
@@ -95,6 +102,8 @@ class InMemorySessionStore:
                 invalid characters).
         """
         self._validate_session_id(session_id)
+        # Update last access time
+        self._last_access[session_id] = time.time()
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             return self._store.get(session_id, [])
 
@@ -118,6 +127,8 @@ class InMemorySessionStore:
         """
         self._validate_session_id(session_id)
         self._validate_messages(messages)
+        # Update last access time
+        self._last_access[session_id] = time.time()
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store[session_id] = list(messages)
 
@@ -142,6 +153,8 @@ class InMemorySessionStore:
         self._validate_session_id(session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store.pop(session_id, None)
+            # Task 3.12: Remove _last_access entry to prevent memory leak
+            self._last_access.pop(session_id, None)
         # Clean up lock entry to prevent memory leak in long-running services
         self._locks.pop(session_id, None)
 
@@ -176,8 +189,31 @@ class InMemorySessionStore:
         if len(messages) > self.max_messages:
             raise ValueError(f"Too many messages (max {self.max_messages})")
 
-        # Check that all elements are ModelMessage instances using structural validation
-        # ModelMessage types should have a 'parts' attribute
+        # Task 3.14: Use strict isinstance check instead of structural validation
+        # This prevents duck-typed objects from bypassing validation
         for msg in messages:
-            if not hasattr(msg, "parts"):
+            if not isinstance(msg, (ModelRequest, ModelResponse)):
                 raise TypeError("All messages must be ModelMessage instances")
+
+    async def _cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions based on TTL.
+
+        Iterates through all sessions and removes those that haven't been
+        accessed for longer than session_ttl seconds.
+
+        Returns:
+            Number of sessions removed.
+        """
+        now = time.time()
+        expired_sessions = []
+
+        # Find expired sessions
+        for session_id, last_access in self._last_access.items():
+            if now - last_access > self.session_ttl:
+                expired_sessions.append(session_id)
+
+        # Remove expired sessions
+        for session_id in expired_sessions:
+            await self.clear(session_id)
+
+        return len(expired_sessions)

@@ -155,6 +155,14 @@ class InMemoryVectorStore:
 
         # Tokenize query
         query_tokens = self._tokenize(query)
+
+        # Task 3.13: Validate token count to prevent DoS via excessive tokens
+        # This is defense-in-depth: with whitespace tokenization, the character
+        # limit (10000 chars) is more restrictive than the token limit (10000 tokens),
+        # but this validation guards against future tokenization changes or edge cases.
+        if len(query_tokens) > 10000:
+            raise ValueError("Query has too many tokens (max 10000 tokens)")
+
         if not query_tokens:
             return []
 
