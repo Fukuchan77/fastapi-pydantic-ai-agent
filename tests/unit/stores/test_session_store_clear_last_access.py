@@ -73,7 +73,7 @@ class TestSessionStoreClearLastAccessFix:
         await asyncio.sleep(2.5)
 
         # Run cleanup
-        removed_count = await store._cleanup_expired_sessions()
+        removed_count = await store.cleanup_expired_sessions()
 
         # Verify cleanup removed the session
         assert removed_count == 1, "Cleanup should have removed one expired session"

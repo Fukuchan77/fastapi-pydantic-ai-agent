@@ -9,8 +9,13 @@ class TestLifespanManagement:
     """Test application lifespan startup and shutdown behavior."""
 
     @pytest.mark.asyncio
-    async def test_lifespan_initializes_session_store(self) -> None:
+    async def test_lifespan_initializes_session_store(self, monkeypatch) -> None:
         """Lifespan must initialize session_store in app.state."""
+        # Set required environment variables for the lifespan to work
+        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+
         # Import app and lifespan to test them directly
         from app.main import app
         from app.main import lifespan
@@ -22,8 +27,13 @@ class TestLifespanManagement:
             assert app.state.session_store is not None
 
     @pytest.mark.asyncio
-    async def test_session_cleanup_task_is_running(self) -> None:
+    async def test_session_cleanup_task_is_running(self, monkeypatch) -> None:
         """Lifespan must start a background cleanup task for expired sessions."""
+        # Set required environment variables for the lifespan to work
+        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+
         # Import app and lifespan to test them directly
         from app.main import app
         from app.main import lifespan
@@ -48,9 +58,9 @@ class TestLifespanManagement:
             # not practical for testing.
             #
             # Instead, we verify the cleanup mechanism exists and can be called:
-            # The _cleanup_expired_sessions method should be callable
-            assert hasattr(session_store, "_cleanup_expired_sessions")
-            assert callable(session_store._cleanup_expired_sessions)
+            # The cleanup_expired_sessions method should be callable
+            assert hasattr(session_store, "cleanup_expired_sessions")
+            assert callable(session_store.cleanup_expired_sessions)
 
             # We can also verify the cleanup task attribute exists on app.state
             # This proves the background task was created during lifespan
@@ -66,8 +76,13 @@ class TestLifespanManagement:
             )
 
     @pytest.mark.asyncio
-    async def test_lifespan_cleanup_cancels_background_task(self) -> None:
+    async def test_lifespan_cleanup_cancels_background_task(self, monkeypatch) -> None:
         """Lifespan shutdown must cancel the cleanup background task."""
+        # Set required environment variables for the lifespan to work
+        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+
         # Create a new app instance for this test to have clean state
         from fastapi import FastAPI
 

@@ -22,6 +22,19 @@ class TestSessionStoreProtocol:
         assert hasattr(SessionStore, "save_history")
         assert hasattr(SessionStore, "clear")
 
+    def test_session_store_protocol_has_cleanup_expired_sessions(self) -> None:
+        """SessionStore Protocol must define cleanup_expired_sessions method.
+
+        Task 3.15: The cleanup_expired_sessions method must be public (not private)
+        so it can be called from external code like the lifespan manager.
+
+        RED PHASE: This test will fail initially because cleanup_expired_sessions
+        is not yet in the SessionStore Protocol.
+        """
+        assert hasattr(SessionStore, "cleanup_expired_sessions"), (
+            "SessionStore Protocol must define cleanup_expired_sessions method"
+        )
+
 
 class TestInMemorySessionStore:
     """Test InMemorySessionStore implementation."""
@@ -244,3 +257,105 @@ class TestInMemorySessionStore:
                                     "messages from multiple batches. This indicates "
                                     "incomplete locking protection."
                                 )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_sessions_is_public_method(self) -> None:
+        """Verify cleanup_expired_sessions is a public method, not private.
+
+        Task 3.15: The cleanup_expired_sessions method must be public so it can
+        be called from the lifespan manager and other external code.
+
+        RED PHASE: This test will fail initially because the method is currently
+        named _cleanup_expired_sessions (private).
+        """
+        store = InMemorySessionStore(session_ttl=1)  # 1 second TTL
+
+        # Add a session
+        await store.save_history(
+            "test-session", [ModelRequest(parts=[UserPromptPart(content="Test message")])]
+        )
+
+        # Wait for session to expire
+        import time
+
+        time.sleep(1.1)
+
+        # Call the public cleanup_expired_sessions method
+        removed_count = await store.cleanup_expired_sessions()
+
+        # Should have removed 1 expired session
+        assert removed_count == 1
+
+        # Session should be gone
+        history = await store.get_history("test-session")
+        assert history == []
+
+    @pytest.mark.asyncio
+    async def test_max_sessions_limit_evicts_lru(self) -> None:
+        """Verify that max_sessions limit evicts least-recently-used session.
+
+        Task 3.16: When the number of sessions exceeds max_sessions, the session
+        with the oldest _last_access time should be evicted.
+
+        RED PHASE: This test will fail initially because max_sessions limiting
+        is not yet implemented.
+        """
+        # Create store with max_sessions=3
+        store = InMemorySessionStore(max_sessions=3)
+
+        # Add 3 sessions (at the limit)
+        await store.save_history(
+            "session-1", [ModelRequest(parts=[UserPromptPart(content="Message 1")])]
+        )
+        await store.save_history(
+            "session-2", [ModelRequest(parts=[UserPromptPart(content="Message 2")])]
+        )
+        await store.save_history(
+            "session-3", [ModelRequest(parts=[UserPromptPart(content="Message 3")])]
+        )
+
+        # All 3 sessions should exist
+        assert len(await store.get_history("session-1")) == 1
+        assert len(await store.get_history("session-2")) == 1
+        assert len(await store.get_history("session-3")) == 1
+
+        # Add a 4th session (exceeds limit)
+        # This should evict session-1 (oldest _last_access)
+        await store.save_history(
+            "session-4", [ModelRequest(parts=[UserPromptPart(content="Message 4")])]
+        )
+
+        # session-1 should be evicted (LRU)
+        assert await store.get_history("session-1") == []
+
+        # Other sessions should still exist
+        assert len(await store.get_history("session-2")) == 1
+        assert len(await store.get_history("session-3")) == 1
+        assert len(await store.get_history("session-4")) == 1
+
+    @pytest.mark.asyncio
+    async def test_max_sessions_limit_edge_case_one(self) -> None:
+        """Verify max_sessions=1 edge case works correctly.
+
+        Task 3.16: With max_sessions=1, only one session should exist at a time.
+
+        RED PHASE: This test will fail initially because max_sessions limiting
+        is not yet implemented.
+        """
+        store = InMemorySessionStore(max_sessions=1)
+
+        # Add first session
+        await store.save_history(
+            "only-session", [ModelRequest(parts=[UserPromptPart(content="First")])]
+        )
+        assert len(await store.get_history("only-session")) == 1
+
+        # Add second session (should evict first)
+        await store.save_history(
+            "new-session", [ModelRequest(parts=[UserPromptPart(content="Second")])]
+        )
+
+        # First session should be evicted
+        assert await store.get_history("only-session") == []
+        # Second session should exist
+        assert len(await store.get_history("new-session")) == 1

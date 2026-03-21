@@ -6,17 +6,24 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import BackgroundTasks
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
+from app.config import get_settings
 from app.models.errors import ErrorResponse
 from app.stores.session_store import InMemorySessionStore
 
 
 logger = logging.getLogger(__name__)
+
+# Task 2.7: Minimum cleanup interval to avoid wasting CPU on frequent cleanups
+# Even if session_ttl is very short (e.g., 60 seconds in tests), the cleanup
+# interval should not be less than this value.
+CLEANUP_INTERVAL_MIN: int = 300  # seconds (5 minutes)
 
 
 @asynccontextmanager
@@ -37,6 +44,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         None: Control during application lifetime
     """
+    try:
+        # Task 2.6: Initialize settings from environment variables
+        app.state.settings = get_settings()
+        logger.info("Initialized application settings")
+
+        # Task 2.6: Initialize HTTP client for agent tool usage
+        app.state.http_client = httpx.AsyncClient()
+        logger.info("Initialized HTTP client")
+    except Exception as e:
+        logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
+        raise
+
     # TODO: Task 3.1 - Initialize InMemoryVectorStore when implemented
     # app.state.vector_store = InMemoryVectorStore()
 
@@ -51,13 +70,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async def cleanup_loop() -> None:
         """Background task that periodically cleans up expired sessions."""
         session_store = app.state.session_store
-        cleanup_interval = session_store.session_ttl // 2
+        # Task 2.7: Ensure cleanup interval has a minimum bound to avoid wasting CPU
+        cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
         logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
 
         try:
             while True:
                 await asyncio.sleep(cleanup_interval)
-                removed_count = await session_store._cleanup_expired_sessions()
+                # Task 3.15: cleanup_expired_sessions is now public
+                removed_count = await session_store.cleanup_expired_sessions()
                 if removed_count > 0:
                     logger.info("Cleaned up %d expired sessions", removed_count)
         except asyncio.CancelledError:
@@ -73,11 +94,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # TODO: Task 9.1 - Configure Logfire when configure_logfire() is implemented
     # configure_logfire(get_settings())
 
-    # TODO: Initialize httpx.AsyncClient
-    # async with httpx.AsyncClient() as client:
-    #     app.state.http_client = client
-    #     yield
-
     yield
 
     # Cleanup happens here after yield
@@ -88,6 +104,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.cleanup_task
         except asyncio.CancelledError:
             logger.info("Session cleanup task successfully cancelled")
+
+    # Task 2.6: Close HTTP client during shutdown
+    if hasattr(app.state, "http_client"):
+        await app.state.http_client.aclose()
+        logger.info("Closed HTTP client")
 
 
 app = FastAPI(

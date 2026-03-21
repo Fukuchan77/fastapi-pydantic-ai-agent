@@ -88,7 +88,7 @@ class TestInMemorySessionStoreTTL:
         await asyncio.sleep(1.2)
 
         # Run cleanup
-        removed_count = await store_with_short_ttl._cleanup_expired_sessions()
+        removed_count = await store_with_short_ttl.cleanup_expired_sessions()
 
         # Verify expired session was removed
         assert removed_count == 1, "One expired session should have been removed"
@@ -109,7 +109,7 @@ class TestInMemorySessionStoreTTL:
         await asyncio.sleep(0.3)
 
         # Run cleanup
-        removed_count = await store_with_short_ttl._cleanup_expired_sessions()
+        removed_count = await store_with_short_ttl.cleanup_expired_sessions()
 
         # Verify active session was NOT removed
         assert removed_count == 0, "No sessions should have been removed"
@@ -131,7 +131,7 @@ class TestInMemorySessionStoreTTL:
         await asyncio.sleep(1.2)
 
         # Run cleanup
-        removed_count = await store_with_short_ttl._cleanup_expired_sessions()
+        removed_count = await store_with_short_ttl.cleanup_expired_sessions()
 
         # Verify all sessions were removed
         assert removed_count == 3, "All three expired sessions should have been removed"
@@ -159,7 +159,7 @@ class TestInMemorySessionStoreTTL:
         await store_with_short_ttl.save_history(active_session, sample_messages)
 
         # Run cleanup
-        removed_count = await store_with_short_ttl._cleanup_expired_sessions()
+        removed_count = await store_with_short_ttl.cleanup_expired_sessions()
 
         # Verify only expired session was removed
         assert removed_count == 1, "Only one expired session should have been removed"
@@ -176,7 +176,7 @@ class TestInMemorySessionStoreTTL:
     ) -> None:
         """Cleanup should return 0 when no sessions are expired."""
         # Run cleanup on empty store
-        removed_count = await store_with_short_ttl._cleanup_expired_sessions()
+        removed_count = await store_with_short_ttl.cleanup_expired_sessions()
 
         # Verify no sessions were removed
         assert removed_count == 0, "No sessions should have been removed from empty store"

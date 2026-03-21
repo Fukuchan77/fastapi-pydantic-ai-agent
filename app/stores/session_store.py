@@ -54,6 +54,17 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions based on TTL.
+
+        Task 3.15: This method is public (not private) so it can be called
+        from external code like the lifespan manager.
+
+        Returns:
+            Number of sessions removed.
+        """
+        ...
+
 
 class InMemorySessionStore:
     """In-memory session history store with per-session locking.
@@ -68,7 +79,15 @@ class InMemorySessionStore:
     has its own lock to allow concurrent access to different sessions.
     """
 
-    def __init__(self, max_messages: int = 1000, session_ttl: int = 3600) -> None:
+    # Task 3.16: Maximum number of sessions to prevent memory exhaustion
+    DEFAULT_MAX_SESSIONS: int = 10_000
+
+    def __init__(
+        self,
+        max_messages: int = 1000,
+        session_ttl: int = 3600,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
+    ) -> None:
         """Initialize an empty in-memory session store with per-session locks and TTL.
 
         Args:
@@ -76,6 +95,8 @@ class InMemorySessionStore:
                 Used to prevent unbounded memory growth.
             session_ttl: Time-to-live for inactive sessions in seconds (default: 3600).
                 Sessions not accessed for this duration will be eligible for cleanup.
+            max_sessions: Maximum number of sessions to store (default: 10,000).
+                Task 3.16: When exceeded, the least-recently-used session is evicted.
         """
         self._store: dict[str, list[ModelMessage]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -84,6 +105,7 @@ class InMemorySessionStore:
         self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
         self.max_messages = max_messages
         self.session_ttl = session_ttl
+        self.max_sessions = max_sessions
 
     async def get_history(self, session_id: str) -> list[ModelMessage]:
         """Retrieve message history for a session.
@@ -131,6 +153,12 @@ class InMemorySessionStore:
         self._last_access[session_id] = time.time()
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store[session_id] = list(messages)
+
+        # Task 3.16: Evict LRU session if max_sessions limit exceeded
+        if len(self._store) > self.max_sessions:
+            # Find the session with the oldest _last_access time (LRU)
+            lru_session_id = min(self._last_access, key=self._last_access.get)  # type: ignore
+            await self.clear(lru_session_id)
 
     async def clear(self, session_id: str) -> None:
         """Remove all message history for a session.
@@ -195,8 +223,11 @@ class InMemorySessionStore:
             if not isinstance(msg, (ModelRequest, ModelResponse)):
                 raise TypeError("All messages must be ModelMessage instances")
 
-    async def _cleanup_expired_sessions(self) -> int:
+    async def cleanup_expired_sessions(self) -> int:
         """Remove expired sessions based on TTL.
+
+        Task 3.15: This method is public (not private) so it can be called
+        from external code like the lifespan manager.
 
         Iterates through all sessions and removes those that haven't been
         accessed for longer than session_ttl seconds.
