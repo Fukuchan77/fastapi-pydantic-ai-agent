@@ -86,6 +86,36 @@ class Settings(BaseSettings):
         default=None,
         description="Custom base URL for LLM provider (e.g., Ollama)",
     )
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def validate_llm_base_url_https(cls, v: HttpUrl | None) -> HttpUrl | None:
+        """Validate llm_base_url uses HTTPS for non-localhost URLs.
+
+        Args:
+            v: The llm_base_url value to validate
+
+        Returns:
+            HttpUrl | None: The validated llm_base_url value
+
+        Raises:
+            ValueError: If HTTP is used for non-localhost URLs
+        """
+        if v is None:
+            return v
+
+        # Parse URL components
+        scheme = v.scheme
+        host = v.host
+
+        # Allow HTTP only for localhost or 127.0.0.1
+        if scheme == "http" and host not in ["localhost", "127.0.0.1"]:
+            raise ValueError(
+                "llm_base_url must use HTTPS in production. HTTP is only allowed for localhost."
+            )
+
+        return v
+
     max_output_retries: int = Field(
         default=3,
         ge=0,

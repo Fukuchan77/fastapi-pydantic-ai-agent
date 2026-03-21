@@ -83,7 +83,7 @@ def test_settings_with_optional_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     # llm_base_url is now HttpUrl type, convert to string for comparison
     assert str(settings.llm_base_url) == "http://localhost:11434/v1"
     assert settings.max_output_retries == 5
-    assert settings.logfire_token == "logfire-token-123"
+    assert settings.logfire_token == "logfire-token-123"  # noqa: S105
     assert settings.logfire_service_name == "my-service"
 
 
