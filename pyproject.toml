@@ -9,7 +9,7 @@ dependencies = [
     "httpx>=0.28.1",
     "llama-index-core>=0.14.18",
     "llama-index-workflows>=2.17.0",
-    "pydantic-ai-slim[logfire]>=1.70.0",
+    "pydantic-ai-slim[logfire,openai]>=1.70.0",
     "pydantic-settings>=2.13.1",
     "uvicorn[standard]>=0.42.0",
 ]

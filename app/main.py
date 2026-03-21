@@ -12,10 +12,13 @@ from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
+from app.api.v1.router import router as v1_router
 from app.config import get_settings
 from app.models.errors import ErrorResponse
 from app.stores.session_store import InMemorySessionStore
+from app.stores.vector_store import InMemoryVectorStore
 
 
 logger = logging.getLogger(__name__)
@@ -56,8 +59,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
         raise
 
-    # TODO: Task 3.1 - Initialize InMemoryVectorStore when implemented
-    # app.state.vector_store = InMemoryVectorStore()
+    # Task 8.0: Initialize InMemoryVectorStore
+    app.state.vector_store = InMemoryVectorStore()
+    logger.info("Initialized vector store")
 
     # Task 3.11: Initialize InMemorySessionStore with TTL
     app.state.session_store = InMemorySessionStore()
@@ -88,8 +92,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create and store the cleanup task
     app.state.cleanup_task = asyncio.create_task(cleanup_loop())
 
-    # TODO: Task 6.2 - Initialize chat agent when build_chat_agent() is implemented
-    # app.state.chat_agent = build_chat_agent()
+    # Task 8.0: Initialize chat agent
+    app.state.chat_agent = build_chat_agent()
+    logger.info("Initialized chat agent")
 
     # TODO: Task 9.1 - Configure Logfire when configure_logfire() is implemented
     # configure_logfire(get_settings())
@@ -122,8 +127,8 @@ app = FastAPI(
 # Register routers
 app.include_router(health_router)
 
-# TODO: Task 8.5 - Register v1 router when implemented
-# app.include_router(v1_router, prefix="/v1")
+# Task 8.0: Register v1 router
+app.include_router(v1_router, prefix="/v1")
 
 
 @app.exception_handler(Exception)
