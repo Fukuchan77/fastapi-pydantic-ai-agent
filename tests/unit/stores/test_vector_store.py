@@ -48,7 +48,7 @@ class TestInMemoryVectorStoreConstruction:
     def test_default_initialization(self) -> None:
         """Store initializes with default parameters."""
         store = InMemoryVectorStore()
-        assert store.max_documents == 10000
+        assert store.max_documents == 1000
         assert store.max_chunk_size == 100_000
 
     def test_custom_max_documents(self) -> None:

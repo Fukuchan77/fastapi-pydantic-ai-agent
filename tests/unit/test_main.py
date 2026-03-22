@@ -174,3 +174,44 @@ def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> 
     assert actual_interval == 300, (
         f"Cleanup interval should be 300 seconds (minimum), but was {actual_interval} seconds"
     )
+
+
+def test_cors_middleware_respects_default_settings() -> None:
+    """Test that CORS middleware uses default settings from config.
+
+    Security: CORS should use configured origins, not wildcard.
+    This test verifies that CORS uses the default setting (localhost:3000).
+
+    Note: Cannot test dynamic monkeypatch because settings are loaded at module level.
+    The default from conftest.py should be http://localhost:3000 or the test env default.
+    """
+    from app.config import get_settings
+    from app.main import app
+
+    # Get the current settings to verify what CORS origins are configured
+    settings = get_settings()
+
+    # Test with TestClient to verify CORS behavior
+    with TestClient(app) as client:
+        # Test with the configured origin (default is http://localhost:3000)
+        configured_origin = (
+            settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+        )
+        response = client.get(
+            "/health",
+            headers={"Origin": configured_origin},
+        )
+
+        assert response.status_code == 200
+        # CORS header should be set for configured origin
+        assert response.headers.get("Access-Control-Allow-Origin") == configured_origin
+
+        # Test with disallowed origin (not in settings)
+        response2 = client.get(
+            "/health",
+            headers={"Origin": "https://malicious-site.com"},
+        )
+
+        assert response2.status_code == 200
+        # CORS header should NOT be set for disallowed origin
+        assert "Access-Control-Allow-Origin" not in response2.headers

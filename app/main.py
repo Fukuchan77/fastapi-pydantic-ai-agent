@@ -17,9 +17,12 @@ from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import get_settings
+from app.middleware.cors import CORSMiddleware
+from app.middleware.rate_limit import add_rate_limiting
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.request_id import request_id_var
 from app.middleware.request_size import RequestSizeLimitMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.models.errors import ErrorResponse
 from app.observability import configure_logfire
 from app.stores.session_store import InMemorySessionStore
@@ -152,6 +155,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Get settings for middleware configuration
+# This is called at module level before lifespan runs
+settings = get_settings()
+
+# Task 15.3: Initialize rate limiting (slowapi)
+# Default limit: 60 requests per minute per client (by IP address)
+# Routes can override this by using @app.state.limiter.limit("custom/limit") decorator
+add_rate_limiting(app, default_limits=["60/minute"])
+logger.info("Initialized rate limiting (60/minute default)")
+
+# Task 15.4: Add security headers middleware
+# Added first so it applies to all responses (executes last in the middleware chain)
+app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
+
 # FIX: Add request size limit middleware BEFORE request ID middleware
 # Middleware executes in REVERSE order of addition, so this ensures
 # RequestIDMiddleware runs first, adding X-Request-ID to all responses including 413
@@ -159,6 +176,21 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)  # typ
 
 # HIGH FIX: Add request ID middleware for distributed tracing
 app.add_middleware(RequestIDMiddleware)  # type: ignore[arg-type]
+
+# Task 15.1: Add CORS middleware for cross-origin requests
+# Added last so it executes first (handles preflight requests before other middleware)
+# CRITICAL FIX: Use cors_origins from settings instead of wildcard
+# This prevents CSRF attacks by restricting allowed origins
+# Note: cors_origins is validated to always be list[str] by field_validator
+app.add_middleware(
+    CORSMiddleware,  # type: ignore[arg-type]
+    allow_origins=settings.cors_origins
+    if isinstance(settings.cors_origins, list)
+    else [settings.cors_origins],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # Task 9.2: Instrument FastAPI with Logfire for HTTP tracing
 logfire.instrument_fastapi(app)

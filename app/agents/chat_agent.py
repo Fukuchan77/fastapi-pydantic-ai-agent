@@ -160,40 +160,14 @@ def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
     # Register dynamic system prompt builder
     agent.system_prompt(_build_system_prompt)
 
-    # Register web search tool only if explicitly enabled in settings
-    # In production, this should be replaced with real search API (SerpAPI/Tavily)
-    if hasattr(settings, "enable_mock_tools") and settings.enable_mock_tools:
+    # Register mock tools only in non-production environments
+    # CRITICAL: Mock tools are separated into tools_mock.py and only imported
+    # when app_env is NOT production. This prevents accidental mock tool usage
+    # in production even if enable_mock_tools is misconfigured.
+    if settings.app_env != "production" and settings.enable_mock_tools:
+        from app.agents.tools_mock import register_mock_tools
 
-        @agent.tool
-        async def mock_web_search(ctx: RunContext[AgentDeps], query: str) -> str:
-            """Mock web search tool - placeholder that returns stub data.
-
-            ⚠️ WARNING: This is a MOCK implementation for development only!
-            It does NOT perform actual web searches and returns stub data.
-
-            Args:
-                ctx: RunContext providing access to AgentDeps (http_client, settings).
-                query: The search query string.
-
-            Returns:
-                Mock search results as a formatted string (not real search data).
-            """
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "Mock web search tool called with query: %s. "
-                "This returns stub data only. Replace with real search API for production.",
-                query[:100],
-            )
-
-            # Stub implementation - returns mock data only
-            return (
-                f"Mock search results for '{query}':\n"
-                f"1. Example result about {query}\n"
-                f"2. Another relevant link about {query}\n"
-                f"3. More information on {query}"
-            )
+        register_mock_tools(agent)
 
     # TODO: Implement real web search integration
     # Example for SerpAPI:

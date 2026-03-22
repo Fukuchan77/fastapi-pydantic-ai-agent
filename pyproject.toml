@@ -12,6 +12,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.51b0",
     "pydantic-ai-slim[logfire,openai]>=1.70.0",
     "pydantic-settings>=2.13.1",
+    "slowapi>=0.1.9",
     "uvicorn[standard]>=0.42.0",
 ]
 

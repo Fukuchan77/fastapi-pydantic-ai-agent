@@ -1,5 +1,6 @@
 """Shared pytest fixtures for all tests."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,16 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+
+
+# Set minimal environment variables before importing app
+# This is required because app/main.py calls get_settings() at module level
+if "API_KEY" not in os.environ:
+    os.environ["API_KEY"] = "test-api-key-12345"
+if "LLM_MODEL" not in os.environ:
+    os.environ["LLM_MODEL"] = "openai:gpt-4"
+if "LLM_API_KEY" not in os.environ:
+    os.environ["LLM_API_KEY"] = "test-llm-key"
 
 from app.main import app
 

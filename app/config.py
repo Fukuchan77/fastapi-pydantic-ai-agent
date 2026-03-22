@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     http_timeout: float = Field(
         default=30.0,
         ge=1.0,
-        le=300.0,
+        le=120.0,  # Maximum 2 minutes to prevent resource exhaustion
         description="HTTP client timeout in seconds",
     )
     http_connect_timeout: float = Field(
@@ -154,6 +154,49 @@ class Settings(BaseSettings):
         le=10.0,
         description="Base delay in seconds for exponential backoff retries",
     )
+    cors_origins: str | list[str] = Field(
+        default=["http://localhost:3000"],
+        description="Allowed CORS origins (comma-separated or JSON array)",
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
+        """Parse cors_origins from string or list.
+
+        Supports:
+        - JSON array string: '["https://app.example.com","https://admin.example.com"]'
+        - Comma-separated string: "https://app.example.com,https://admin.example.com"
+        - Single URL string: "https://app.example.com"
+        - List: ["https://app.example.com"]
+
+        Args:
+            v: The cors_origins value to parse
+
+        Returns:
+            list[str]: Parsed list of origins
+        """
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            # Try to parse as JSON array first
+            import json
+
+            v_stripped = v.strip()
+            if v_stripped.startswith("["):
+                try:
+                    parsed = json.loads(v_stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            # Parse as comma-separated string
+            if "," in v:
+                return [origin.strip() for origin in v.split(",")]
+            # Single origin string
+            return [v.strip()]
+        return v
+
     logfire_token: str | None = Field(
         default=None,
         description="Pydantic Logfire token for observability",

@@ -75,12 +75,12 @@ class InMemoryVectorStore:
         - Default limit is 100,000 characters per chunk
     """
 
-    def __init__(self, max_documents: int = 10000, max_chunk_size: int = 100_000) -> None:
+    def __init__(self, max_documents: int = 1000, max_chunk_size: int = 100_000) -> None:
         """Initialize an empty in-memory vector store.
 
         Args:
             max_documents: Maximum number of documents to store. When exceeded,
-                oldest documents are evicted (FIFO). Defaults to 10000.
+                oldest documents are evicted (FIFO). Defaults to 1000.
             max_chunk_size: Maximum size (in characters) for each document chunk.
                 Chunks exceeding this limit will be rejected. Defaults to 100_000.
         """

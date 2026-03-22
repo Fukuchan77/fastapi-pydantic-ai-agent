@@ -180,12 +180,12 @@ class InMemorySessionStore:
                     # the session after eviction completes
                     lru_lock = self._locks.setdefault(lru_session_id, asyncio.Lock())
 
-            # If eviction is needed, acquire LRU session lock then perform eviction
+            # Acquire LRU session lock then perform eviction
             # (session lock should be acquired before store lock in the locking hierarchy)
             if lru_lock is not None and lru_session_id is not None:
                 async with lru_lock, self._store_lock:
-                    # Triple-check: verify session still needs eviction and is still LRU
-                    if len(self._store) > self.max_sessions and lru_session_id in self._store:
+                    # Final check: verify session still exists before eviction
+                    if lru_session_id in self._store:
                         # Cleanup all session data atomically
                         self._store.pop(lru_session_id, None)
                         self._last_access.pop(lru_session_id, None)

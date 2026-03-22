@@ -351,3 +351,98 @@ def test_env_example_file_covers_all_settings_fields(monkeypatch: pytest.MonkeyP
     assert not unknown_env_vars, (
         f".env.example contains variables not in Settings: {unknown_env_vars}"
     )
+
+
+def test_cors_origins_default_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that cors_origins has proper default value for development."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    # Default should be localhost for development
+    assert settings.cors_origins == ["http://localhost:3000"]
+
+
+def test_cors_origins_from_env_single(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that cors_origins can be loaded from environment variable (single origin)."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.cors_origins == ["https://app.example.com"]
+
+
+def test_cors_origins_from_env_multiple(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that cors_origins can be loaded from environment variable (multiple origins)."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    # Pydantic supports JSON array format for list fields
+    monkeypatch.setenv("CORS_ORIGINS", '["https://app.example.com","https://admin.example.com"]')
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.cors_origins == ["https://app.example.com", "https://admin.example.com"]
+
+
+def test_cors_origins_wildcard_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that wildcard '*' is allowed for cors_origins (dev/test only)."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("CORS_ORIGINS", '["*"]')
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.cors_origins == ["*"]
+
+
+def test_http_timeout_within_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that http_timeout accepts values up to 120 seconds."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("HTTP_TIMEOUT", "120.0")
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.http_timeout == 120.0
+
+
+def test_http_timeout_exceeds_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that http_timeout rejects values above 120 seconds."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("HTTP_TIMEOUT", "121.0")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+
+    errors = exc_info.value.errors()
+    assert any(error["loc"] == ("http_timeout",) for error in errors)
+
+
+def test_http_timeout_default_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that http_timeout has reasonable default value (30 seconds)."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.delenv("HTTP_TIMEOUT", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings()
+
+    assert settings.http_timeout == 30.0

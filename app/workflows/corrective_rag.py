@@ -21,6 +21,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.config import Settings
+from app.models.errors import RAGWorkflowError
 from app.stores.vector_store import VectorStore
 from app.workflows.events import EvaluateEvent
 from app.workflows.events import SearchEvent
@@ -335,10 +336,8 @@ Response:"""
                 return "insufficient"
 
             except Exception as e:
-                error_msg = str(e).lower()
-                is_transient = any(
-                    x in error_msg for x in ["timeout", "429", "rate limit", "503", "connection"]
-                )
+                # Use explicit error classification from RAGWorkflowError
+                is_transient = RAGWorkflowError.is_error_transient(e)
 
                 if attempt < max_retries - 1 and is_transient:
                     # Exponential backoff for transient errors
@@ -353,13 +352,15 @@ Response:"""
                     await asyncio.sleep(delay)
                 else:
                     # Permanent error or max retries exhausted
+                    error_type = "transient" if is_transient else "permanent"
                     logger.error(
-                        "LLM evaluation failed after %d attempts: %s",
+                        "LLM evaluation failed after %d attempts (%s error): %s",
                         attempt + 1,
+                        error_type,
                         e,
                         exc_info=True,
                     )
-                    # Return "insufficient" as safe fallback
+                    # Return "insufficient" as safe fallback (graceful error handling)
                     return "insufficient"
 
         # Fallback (should not reach here)
@@ -411,10 +412,8 @@ Answer:"""
                 return result.output.strip()
 
             except Exception as e:
-                error_msg = str(e).lower()
-                is_transient = any(
-                    x in error_msg for x in ["timeout", "429", "rate limit", "503", "connection"]
-                )
+                # Use explicit error classification from RAGWorkflowError
+                is_transient = RAGWorkflowError.is_error_transient(e)
 
                 if attempt < max_retries - 1 and is_transient:
                     # Exponential backoff for transient errors
@@ -429,13 +428,15 @@ Answer:"""
                     await asyncio.sleep(delay)
                 else:
                     # Permanent error or max retries exhausted
+                    error_type = "transient" if is_transient else "permanent"
                     logger.error(
-                        "LLM synthesis failed after %d attempts: %s",
+                        "LLM synthesis failed after %d attempts (%s error): %s",
                         attempt + 1,
+                        error_type,
                         e,
                         exc_info=True,
                     )
-                    # Return graceful error message
+                    # Return graceful error message (graceful error handling)
                     return (
                         "I encountered an error while processing your question. "
                         "Please try again or rephrase your question."
