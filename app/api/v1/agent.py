@@ -5,7 +5,9 @@ including both standard request/response and Server-Sent Events (SSE)
 streaming endpoints.
 """
 
+import asyncio
 import json
+import logging
 from typing import Protocol
 from typing import runtime_checkable
 
@@ -19,6 +21,9 @@ from app.agents.deps import get_agent_deps
 from app.deps.auth import verify_api_key
 from app.models.agent import ChatRequest
 from app.models.agent import ChatResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -73,6 +78,9 @@ class DefaultSSEAdapter:
     def format_event(self, event_type: str, content: str) -> str:
         r"""Format an SSE event with the given type and content.
 
+        Task 16.23: Added JSON serialization error handling to prevent
+        crashes from unserializable content.
+
         Args:
             event_type: Type of the event (e.g., "delta", "done", "error").
             content: Content payload for the event.
@@ -81,8 +89,14 @@ class DefaultSSEAdapter:
             Formatted SSE event string in the format:
                  {"type": "...", "content": "..."}\n\n
         """
-        payload = {"type": event_type, "content": content}
-        return f"data: {json.dumps(payload)}\n\n"
+        try:
+            payload = {"type": event_type, "content": content}
+            return f"data: {json.dumps(payload)}\n\n"
+        except (TypeError, ValueError) as e:
+            # Task 16.23: Handle JSON serialization failures gracefully
+            logger.error("Failed to serialize SSE event: %s", e, exc_info=True)
+            error_payload = {"type": "error", "content": "Serialization failed"}
+            return f" {json.dumps(error_payload)}\n\n"
 
     def format_done(self) -> str:
         """Format a terminal "done" event to signal stream completion.
@@ -192,7 +206,11 @@ async def stream_agent(
     adapter = DefaultSSEAdapter()
 
     async def generate() -> AsyncIterator[str]:
-        """Generate SSE events from agent stream."""
+        """Generate SSE events from agent stream.
+
+        Task 16.22: Added comprehensive error handling to distinguish
+        different error types and prevent leaking internal details to clients.
+        """
         try:
             # Load session history if session_id provided
             history = []
@@ -226,8 +244,22 @@ async def stream_agent(
             # Emit terminal done event
             yield adapter.format_done()
 
-        except Exception as exc:
-            # Emit error event and close stream
-            yield adapter.format_error(str(exc))
+        except asyncio.CancelledError:
+            # Task 16.22: Client disconnected - log but don't send error event
+            logger.info("Stream cancelled by client for message: %s", request.message[:50])
+            raise
+        except ValueError as e:
+            # Task 16.22: Validation errors - safe to expose message
+            logger.warning("Validation error in stream: %s", e)
+            yield adapter.format_error("Invalid request parameters")
+        except Exception as e:
+            # Task 16.22: Unexpected errors - log full details, return generic message
+            logger.error(
+                "Unexpected error in agent stream: %s",
+                e,
+                exc_info=True,
+                extra={"message": request.message[:100]},
+            )
+            yield adapter.format_error("An unexpected error occurred")
 
     return StreamingResponse(generate(), media_type="text/event-stream")

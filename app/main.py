@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+import logfire
 from fastapi import BackgroundTasks
 from fastapi import FastAPI
 from fastapi import Request
@@ -17,6 +18,7 @@ from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import get_settings
 from app.models.errors import ErrorResponse
+from app.observability import configure_logfire
 from app.stores.session_store import InMemorySessionStore
 from app.stores.vector_store import InMemoryVectorStore
 
@@ -53,8 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Initialized application settings")
 
         # Task 2.6: Initialize HTTP client for agent tool usage
-        app.state.http_client = httpx.AsyncClient()
-        logger.info("Initialized HTTP client")
+        # Task 16.26: Configure timeout to prevent indefinite hangs
+        app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
+        logger.info("Initialized HTTP client with 30s timeout (5s connect)")
     except Exception as e:
         logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
         raise
@@ -72,7 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Task 3.11: Start background cleanup task for expired sessions
     async def cleanup_loop() -> None:
-        """Background task that periodically cleans up expired sessions."""
+        """Background task that periodically cleans up expired sessions.
+
+        Task 16.19: Added comprehensive error handling to prevent cleanup
+        task from stopping on transient errors, which would cause memory leaks.
+        """
         session_store = app.state.session_store
         # Task 2.7: Ensure cleanup interval has a minimum bound to avoid wasting CPU
         cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
@@ -81,10 +88,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             while True:
                 await asyncio.sleep(cleanup_interval)
-                # Task 3.15: cleanup_expired_sessions is now public
-                removed_count = await session_store.cleanup_expired_sessions()
-                if removed_count > 0:
-                    logger.info("Cleaned up %d expired sessions", removed_count)
+                try:
+                    # Task 3.15: cleanup_expired_sessions is now public
+                    removed_count = await session_store.cleanup_expired_sessions()
+                    if removed_count > 0:
+                        logger.info("Cleaned up %d expired sessions", removed_count)
+                except Exception as e:
+                    # Task 16.19: Catch all non-CancelledError exceptions
+                    # Log the error but continue the cleanup loop to prevent memory leaks
+                    logger.error(
+                        "Error during session cleanup (will retry): %s",
+                        e,
+                        exc_info=True,
+                    )
         except asyncio.CancelledError:
             logger.info("Session cleanup task cancelled during shutdown")
             raise
@@ -96,8 +112,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.chat_agent = build_chat_agent()
     logger.info("Initialized chat agent")
 
-    # TODO: Task 9.1 - Configure Logfire when configure_logfire() is implemented
-    # configure_logfire(get_settings())
+    # Task 9.1 & 9.2: Configure Logfire observability
+    configure_logfire(app.state.settings)
+    logger.info("Configured Logfire observability")
 
     yield
 
@@ -123,6 +140,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Task 9.2: Instrument FastAPI with Logfire for HTTP tracing
+logfire.instrument_fastapi(app)
 
 # Register routers
 app.include_router(health_router)

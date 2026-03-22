@@ -1,6 +1,8 @@
 """Integration tests for FastAPI application lifespan management."""
 
 import asyncio
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -106,3 +108,41 @@ class TestLifespanManagement:
         assert cleanup_task.cancelled() or cleanup_task.exception() is not None, (
             "cleanup_task should be cancelled during shutdown"
         )
+
+    @pytest.mark.asyncio
+    @patch("app.observability.logfire.instrument_pydantic_ai")
+    @patch("app.observability.logfire.configure")
+    async def test_lifespan_configures_observability(
+        self,
+        mock_logfire_configure: MagicMock,
+        mock_instrument_pydantic: MagicMock,
+        monkeypatch,
+    ) -> None:
+        """Lifespan must configure Logfire observability during startup."""
+        # Set required environment variables
+        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        monkeypatch.setenv("LOGFIRE_TOKEN", "test-logfire-token")
+
+        # Clear the settings cache so new settings with LOGFIRE_TOKEN are loaded
+        from app.config import get_settings
+
+        get_settings.cache_clear()
+
+        # Create a new app instance for this test
+        from fastapi import FastAPI
+
+        from app.main import lifespan
+
+        test_app = FastAPI()
+
+        # Manually invoke the lifespan context manager
+        async with lifespan(test_app):
+            # Verify logfire.configure was called with token and service_name
+            mock_logfire_configure.assert_called_once_with(
+                token="test-logfire-token",  # noqa: S106
+                service_name="fastapi-pydantic-ai-agent",
+            )
+            # Verify logfire.instrument_pydantic_ai was called
+            mock_instrument_pydantic.assert_called_once()

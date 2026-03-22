@@ -8,6 +8,9 @@ Implements a three-step Corrective RAG pattern:
 Each workflow.run() call gets its own isolated Context for state management.
 """
 
+import asyncio
+import logging
+
 import logfire
 from llama_index.core.workflow import Context
 from llama_index.core.workflow import StartEvent
@@ -23,6 +26,9 @@ from app.workflows.events import EvaluateEvent
 from app.workflows.events import SearchEvent
 from app.workflows.events import SynthesizeEvent
 from app.workflows.state import WorkflowState
+
+
+logger = logging.getLogger(__name__)
 
 
 class CorrectiveRAGWorkflow(Workflow):
@@ -231,6 +237,9 @@ class CorrectiveRAGWorkflow(Workflow):
     async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
         """Evaluate relevance of retrieved chunks using LLM.
 
+        Task 16.24: Added comprehensive error handling and retry logic
+        for transient LLM API failures.
+
         Args:
             chunks: Retrieved document chunks.
             query: Original user query.
@@ -263,17 +272,57 @@ Response:"""
             output_type=str,
         )
 
-        # Run evaluation
-        result = await eval_agent.run(prompt)
-        response = result.output.strip().lower()
+        # Task 16.24: Retry logic with exponential backoff for transient errors
+        max_retries = 3
+        base_delay = 1.0  # seconds
 
-        # Normalize response
-        if "relevant" in response:
-            return "relevant"
+        for attempt in range(max_retries):
+            try:
+                # Run evaluation
+                result = await eval_agent.run(prompt)
+                response = result.output.strip().lower()
+
+                # Normalize response
+                if "relevant" in response:
+                    return "relevant"
+                return "insufficient"
+
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_transient = any(
+                    x in error_msg for x in ["timeout", "429", "rate limit", "503", "connection"]
+                )
+
+                if attempt < max_retries - 1 and is_transient:
+                    # Exponential backoff for transient errors
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        "Transient error in LLM evaluation (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Permanent error or max retries exhausted
+                    logger.error(
+                        "LLM evaluation failed after %d attempts: %s",
+                        attempt + 1,
+                        e,
+                        exc_info=True,
+                    )
+                    # Return "insufficient" as safe fallback
+                    return "insufficient"
+
+        # Fallback (should not reach here)
         return "insufficient"
 
     async def _synthesize_answer(self, chunks: list[str], query: str) -> str:
         """Synthesize final answer from relevant chunks using LLM.
+
+        Task 16.24: Added comprehensive error handling and retry logic
+        for transient LLM API failures.
 
         Args:
             chunks: Relevant document chunks.
@@ -302,6 +351,49 @@ Answer:"""
             output_type=str,
         )
 
-        # Generate answer
-        result = await synthesis_agent.run(prompt)
-        return result.output.strip()
+        # Task 16.24: Retry logic with exponential backoff for transient errors
+        max_retries = 3
+        base_delay = 1.0  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                # Generate answer
+                result = await synthesis_agent.run(prompt)
+                return result.output.strip()
+
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_transient = any(
+                    x in error_msg for x in ["timeout", "429", "rate limit", "503", "connection"]
+                )
+
+                if attempt < max_retries - 1 and is_transient:
+                    # Exponential backoff for transient errors
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        "Transient error in LLM synthesis (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Permanent error or max retries exhausted
+                    logger.error(
+                        "LLM synthesis failed after %d attempts: %s",
+                        attempt + 1,
+                        e,
+                        exc_info=True,
+                    )
+                    # Return graceful error message
+                    return (
+                        "I encountered an error while processing your question. "
+                        "Please try again or rephrase your question."
+                    )
+
+        # Fallback (should not reach here)
+        return (
+            "I encountered an error while processing your question. "
+            "Please try again or rephrase your question."
+        )
