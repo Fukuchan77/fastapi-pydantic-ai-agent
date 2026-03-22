@@ -122,6 +122,38 @@ class Settings(BaseSettings):
         le=10,
         description="Number of retries for Pydantic AI output validation",
     )
+    app_env: str = Field(
+        default="development",
+        description="Application environment (development, staging, production)",
+    )
+    enable_mock_tools: bool = Field(
+        default=False,
+        description="Enable mock tools (for development only, disable in production)",
+    )
+    http_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=300.0,
+        description="HTTP client timeout in seconds",
+    )
+    http_connect_timeout: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="HTTP client connection timeout in seconds",
+    )
+    llm_retry_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retry attempts for LLM API calls",
+    )
+    llm_retry_base_delay: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=10.0,
+        description="Base delay in seconds for exponential backoff retries",
+    )
     logfire_token: str | None = Field(
         default=None,
         description="Pydantic Logfire token for observability",
@@ -156,6 +188,28 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"llm_api_key is required when using cloud provider '{provider}'. "
                 f"Please set the LLM_API_KEY environment variable."
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_mock_tools_not_in_production(self) -> "Settings":
+        """Validate that enable_mock_tools is not enabled in production.
+
+        Mock tools should only be enabled in development environments to prevent
+        security vulnerabilities in production.
+
+        Returns:
+            Settings: The validated settings instance
+
+        Raises:
+            ValueError: If enable_mock_tools is True and app_env is "production"
+        """
+        if self.enable_mock_tools and self.app_env == "production":
+            raise ValueError(
+                "enable_mock_tools cannot be enabled in production environment. "
+                "This is a security risk. Set ENABLE_MOCK_TOOLS=false or "
+                "change APP_ENV to 'development' or 'staging'."
             )
 
         return self

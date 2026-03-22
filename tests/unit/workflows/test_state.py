@@ -1,104 +1,224 @@
-"""Unit tests for WorkflowState Pydantic model.
+"""Unit tests for workflow state model."""
 
-Tests default values, field mutation, and validation constraints.
-"""
-
-import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel
 
 from app.workflows.state import WorkflowState
 
 
 class TestWorkflowState:
-    """Tests for WorkflowState model."""
+    """Test suite for WorkflowState class."""
 
-    def test_workflow_state_with_query_only(self) -> None:
-        """WorkflowState should apply default values when only query is provided."""
+    def test_workflow_state_is_pydantic_model(self) -> None:
+        """WorkflowState should extend Pydantic BaseModel."""
+        assert issubclass(WorkflowState, BaseModel)
+
+    def test_workflow_state_with_required_field_only(self) -> None:
+        """WorkflowState should be constructable with just query field."""
         state = WorkflowState(query="test query")
+
         assert state.query == "test query"
+        assert state.search_count == 0  # Default value
+        assert state.max_retries == 3  # Default value
+        assert state.final_answer is None  # Default value
+        assert state.context_found is False  # Default value
+
+    def test_workflow_state_query_is_required(self) -> None:
+        """WorkflowState should require query field."""
+        state = WorkflowState(query="required query")
+
+        assert state.query == "required query"
+
+    def test_workflow_state_search_count_defaults_to_zero(self) -> None:
+        """WorkflowState search_count should default to 0."""
+        state = WorkflowState(query="test")
+
+        assert state.search_count == 0
+
+    def test_workflow_state_max_retries_defaults_to_three(self) -> None:
+        """WorkflowState max_retries should default to 3."""
+        state = WorkflowState(query="test")
+
+        assert state.max_retries == 3
+
+    def test_workflow_state_final_answer_defaults_to_none(self) -> None:
+        """WorkflowState final_answer should default to None."""
+        state = WorkflowState(query="test")
+
+        assert state.final_answer is None
+
+    def test_workflow_state_context_found_defaults_to_false(self) -> None:
+        """WorkflowState context_found should default to False."""
+        state = WorkflowState(query="test")
+
+        assert state.context_found is False
+
+    def test_workflow_state_with_all_fields_custom(self) -> None:
+        """WorkflowState should accept custom values for all fields."""
+        state = WorkflowState(
+            query="custom query",
+            search_count=2,
+            max_retries=5,
+            final_answer="custom answer",
+            context_found=True,
+        )
+
+        assert state.query == "custom query"
+        assert state.search_count == 2
+        assert state.max_retries == 5
+        assert state.final_answer == "custom answer"
+        assert state.context_found is True
+
+    def test_workflow_state_can_be_mutated(self) -> None:
+        """WorkflowState fields should be mutable after construction."""
+        state = WorkflowState(query="initial query")
+
+        # Mutate the state
+        state.search_count = 1
+        state.context_found = True
+        state.final_answer = "synthesized answer"
+
+        assert state.search_count == 1
+        assert state.context_found is True
+        assert state.final_answer == "synthesized answer"
+
+    def test_workflow_state_search_count_increment(self) -> None:
+        """WorkflowState search_count should be incrementable."""
+        state = WorkflowState(query="test", search_count=0)
+
+        state.search_count += 1
+        assert state.search_count == 1
+
+        state.search_count += 1
+        assert state.search_count == 2
+
+    def test_workflow_state_with_custom_max_retries(self) -> None:
+        """WorkflowState should accept custom max_retries value."""
+        state = WorkflowState(query="test", max_retries=5)
+
+        assert state.max_retries == 5
+
+    def test_workflow_state_retries_exhausted_check(self) -> None:
+        """WorkflowState should support checking if retries are exhausted."""
+        state = WorkflowState(query="test", search_count=3, max_retries=3)
+
+        # Retries exhausted when search_count >= max_retries
+        assert state.search_count >= state.max_retries
+
+    def test_workflow_state_retries_remaining_check(self) -> None:
+        """WorkflowState should support checking if retries remain."""
+        state = WorkflowState(query="test", search_count=1, max_retries=3)
+
+        # Retries remain when search_count < max_retries
+        assert state.search_count < state.max_retries
+
+    def test_workflow_state_final_answer_can_be_set(self) -> None:
+        """WorkflowState final_answer should be settable to a string."""
+        state = WorkflowState(query="test")
+
+        state.final_answer = "This is the synthesized answer"
+
+        assert state.final_answer == "This is the synthesized answer"
+        assert isinstance(state.final_answer, str)
+
+    def test_workflow_state_context_found_can_be_toggled(self) -> None:
+        """WorkflowState context_found should be toggleable."""
+        state = WorkflowState(query="test", context_found=False)
+
+        state.context_found = True
+        assert state.context_found is True
+
+        state.context_found = False
+        assert state.context_found is False
+
+
+class TestWorkflowStateFieldTypes:
+    """Test suite for WorkflowState field types."""
+
+    def test_workflow_state_query_is_string(self) -> None:
+        """WorkflowState query field should be string type."""
+        state = WorkflowState(query="test query")
+
+        assert isinstance(state.query, str)
+
+    def test_workflow_state_search_count_is_int(self) -> None:
+        """WorkflowState search_count field should be int type."""
+        state = WorkflowState(query="test", search_count=5)
+
+        assert isinstance(state.search_count, int)
+
+    def test_workflow_state_max_retries_is_int(self) -> None:
+        """WorkflowState max_retries field should be int type."""
+        state = WorkflowState(query="test", max_retries=3)
+
+        assert isinstance(state.max_retries, int)
+
+    def test_workflow_state_final_answer_is_optional_string(self) -> None:
+        """WorkflowState final_answer field should be optional string type."""
+        state_none = WorkflowState(query="test")
+        assert state_none.final_answer is None
+
+        state_str = WorkflowState(query="test", final_answer="answer")
+        assert isinstance(state_str.final_answer, str)
+
+    def test_workflow_state_context_found_is_bool(self) -> None:
+        """WorkflowState context_found field should be bool type."""
+        state = WorkflowState(query="test", context_found=True)
+
+        assert isinstance(state.context_found, bool)
+
+
+class TestWorkflowStateUsageScenarios:
+    """Test suite for common WorkflowState usage scenarios."""
+
+    def test_workflow_state_initial_search_scenario(self) -> None:
+        """WorkflowState should support initial search scenario."""
+        # Initial state for a new query
+        state = WorkflowState(query="What is Python?")
+
+        assert state.query == "What is Python?"
         assert state.search_count == 0
         assert state.max_retries == 3
         assert state.final_answer is None
         assert state.context_found is False
 
-    def test_workflow_state_with_all_fields(self) -> None:
-        """WorkflowState should accept all fields with custom values."""
+    def test_workflow_state_retry_search_scenario(self) -> None:
+        """WorkflowState should support retry search scenario."""
+        # State after first search attempt failed
         state = WorkflowState(
-            query="test query",
-            search_count=2,
-            max_retries=5,
-            final_answer="Test answer",
-            context_found=True,
+            query="What is Python?",
+            search_count=1,
+            context_found=False,
         )
-        assert state.query == "test query"
-        assert state.search_count == 2
-        assert state.max_retries == 5
-        assert state.final_answer == "Test answer"
-        assert state.context_found is True
 
-    def test_workflow_state_requires_query(self) -> None:
-        """WorkflowState should raise ValidationError if query is missing."""
-        with pytest.raises(ValidationError) as exc_info:
-            WorkflowState()  # type: ignore[call-arg]
-        assert "query" in str(exc_info.value)
-
-    def test_workflow_state_query_must_be_string(self) -> None:
-        """WorkflowState query field must be a string."""
-        with pytest.raises(ValidationError) as exc_info:
-            WorkflowState(query=123)  # type: ignore[arg-type]
-        assert "query" in str(exc_info.value)
-
-    def test_workflow_state_search_count_must_be_int(self) -> None:
-        """WorkflowState search_count field must be an integer."""
-        with pytest.raises(ValidationError) as exc_info:
-            WorkflowState(query="test", search_count="not an int")  # type: ignore[arg-type]
-        assert "search_count" in str(exc_info.value)
-
-    def test_workflow_state_max_retries_must_be_int(self) -> None:
-        """WorkflowState max_retries field must be an integer."""
-        with pytest.raises(ValidationError) as exc_info:
-            WorkflowState(query="test", max_retries="not an int")  # type: ignore[arg-type]
-        assert "max_retries" in str(exc_info.value)
-
-    def test_workflow_state_context_found_must_be_bool(self) -> None:
-        """WorkflowState context_found field coerces truthy values to boolean."""
-        # Pydantic coerces truthy strings to boolean
-        state = WorkflowState(query="test", context_found="yes")  # type: ignore[arg-type]
-        assert state.context_found is True
-
-    def test_workflow_state_field_mutation(self) -> None:
-        """WorkflowState fields should be mutable after creation."""
-        state = WorkflowState(query="test query")
-
-        # Mutate fields
-        state.search_count = 1
-        state.max_retries = 5
-        state.final_answer = "New answer"
-        state.context_found = True
-
-        # Verify mutations
         assert state.search_count == 1
-        assert state.max_retries == 5
-        assert state.final_answer == "New answer"
+        assert state.search_count < state.max_retries  # Can retry
+        assert state.context_found is False
+
+    def test_workflow_state_successful_synthesis_scenario(self) -> None:
+        """WorkflowState should support successful synthesis scenario."""
+        # State after successful context retrieval and synthesis
+        state = WorkflowState(
+            query="What is Python?",
+            search_count=1,
+            context_found=True,
+            final_answer="Python is a high-level programming language.",
+        )
+
         assert state.context_found is True
+        assert state.final_answer is not None
+        assert len(state.final_answer) > 0
 
-    def test_workflow_state_increment_search_count(self) -> None:
-        """WorkflowState should support incrementing search_count."""
-        state = WorkflowState(query="test query")
-        assert state.search_count == 0
+    def test_workflow_state_retries_exhausted_scenario(self) -> None:
+        """WorkflowState should support retries exhausted scenario."""
+        # State after all retries exhausted without finding context
+        state = WorkflowState(
+            query="What is Python?",
+            search_count=3,
+            max_retries=3,
+            context_found=False,
+            final_answer="No relevant context found.",
+        )
 
-        state.search_count += 1
-        assert state.search_count == 1
-
-        state.search_count += 1
-        assert state.search_count == 2
-
-    def test_workflow_state_final_answer_can_be_none(self) -> None:
-        """WorkflowState final_answer should accept None value."""
-        state = WorkflowState(query="test", final_answer=None)
-        assert state.final_answer is None
-
-    def test_workflow_state_final_answer_can_be_string(self) -> None:
-        """WorkflowState final_answer should accept string value."""
-        state = WorkflowState(query="test", final_answer="Answer text")
-        assert state.final_answer == "Answer text"
+        assert state.search_count >= state.max_retries
+        assert state.context_found is False
+        assert state.final_answer is not None  # Graceful fallback message

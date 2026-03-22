@@ -93,10 +93,9 @@ class DefaultSSEAdapter:
             payload = {"type": event_type, "content": content}
             return f"data: {json.dumps(payload)}\n\n"
         except (TypeError, ValueError) as e:
-            # Task 16.23: Handle JSON serialization failures gracefully
             logger.error("Failed to serialize SSE event: %s", e, exc_info=True)
             error_payload = {"type": "error", "content": "Serialization failed"}
-            return f" {json.dumps(error_payload)}\n\n"
+            return f"data: {json.dumps(error_payload)}\n\n"
 
     def format_done(self) -> str:
         """Format a terminal "done" event to signal stream completion.
@@ -234,14 +233,38 @@ async def stream_agent(
                 # Must be done inside the context manager while result is still valid
                 all_messages = result.all_messages()
 
-            # Save updated message history back to session store
+            # MEDIUM FIX: Save session BEFORE emitting done event
+            # This ensures clients are only notified of completion if the session
+            # was saved successfully. If save fails, the client won't receive a done event.
             if request.session_id:
-                await deps.session_store.save_history(
-                    request.session_id,
-                    all_messages,
-                )
+                try:
+                    await deps.session_store.save_history(
+                        request.session_id,
+                        all_messages,
+                    )
+                except ValueError as e:
+                    # Validation errors (e.g., message count exceeded) - log and notify client
+                    logger.warning(
+                        "Failed to save session history for session %s: %s",
+                        request.session_id,
+                        e,
+                    )
+                    # Emit error event instead of done event
+                    yield adapter.format_error(f"Failed to save session: {e}")
+                    return  # Don't emit done event
+                except Exception as e:
+                    # Unexpected errors during save - log and notify client
+                    logger.error(
+                        "Unexpected error saving session history for session %s: %s",
+                        request.session_id,
+                        e,
+                        exc_info=True,
+                    )
+                    # Emit error event instead of done event
+                    yield adapter.format_error("Failed to save session")
+                    return  # Don't emit done event
 
-            # Emit terminal done event
+            # Emit terminal done event (only if save succeeded or no session_id)
             yield adapter.format_done()
 
         except asyncio.CancelledError:

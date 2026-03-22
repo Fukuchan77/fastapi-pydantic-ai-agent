@@ -51,18 +51,30 @@ def _build_model(settings: Settings) -> Model:
     if provider_name == "anthropic":
         # Lazy import to avoid requiring anthropic package when not needed
         from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
 
-        # AnthropicModel reads API key from ANTHROPIC_API_KEY environment variable
-        # or from the api_key constructor parameter if provided
-        return AnthropicModel(model_name)
+        # AnthropicModel uses AnthropicProvider to configure API key
+        # Similar pattern to OpenAI provider
+        if settings.llm_api_key:
+            provider = AnthropicProvider(api_key=settings.llm_api_key)
+            return AnthropicModel(model_name, provider=provider)
+        else:
+            # Use default provider (reads from ANTHROPIC_API_KEY environment variable)
+            return AnthropicModel(model_name)
 
     elif provider_name == "groq":
         # Lazy import to avoid requiring groq package when not needed
         from pydantic_ai.models.groq import GroqModel
+        from pydantic_ai.providers.groq import GroqProvider
 
-        # GroqModel reads API key from GROQ_API_KEY environment variable
-        # or from the api_key constructor parameter if provided
-        return GroqModel(model_name)
+        # GroqModel uses GroqProvider to configure API key
+        # Similar pattern to OpenAI provider
+        if settings.llm_api_key:
+            provider = GroqProvider(api_key=settings.llm_api_key)
+            return GroqModel(model_name, provider=provider)
+        else:
+            # Use default provider (reads from GROQ_API_KEY environment variable)
+            return GroqModel(model_name)
 
     elif provider_name == "ollama":
         # Ollama uses OpenAI-compatible API with custom base_url
@@ -148,28 +160,53 @@ def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
     # Register dynamic system prompt builder
     agent.system_prompt(_build_system_prompt)
 
-    # TODO: replace with real search integration (SerpAPI/Tavily)
-    @agent.tool
-    async def mock_web_search(ctx: RunContext[AgentDeps], query: str) -> str:
-        """Mock web search tool - placeholder that returns stub data.
+    # Register web search tool only if explicitly enabled in settings
+    # In production, this should be replaced with real search API (SerpAPI/Tavily)
+    if hasattr(settings, "enable_mock_tools") and settings.enable_mock_tools:
 
-        This is a STUB implementation for development and testing purposes only.
-        It does NOT perform actual web searches and returns mock data.
-        Replace this with a real search integration before production use.
+        @agent.tool
+        async def mock_web_search(ctx: RunContext[AgentDeps], query: str) -> str:
+            """Mock web search tool - placeholder that returns stub data.
 
-        Args:
-            ctx: RunContext providing access to AgentDeps (http_client, settings).
-            query: The search query string.
+            ⚠️ WARNING: This is a MOCK implementation for development only!
+            It does NOT perform actual web searches and returns stub data.
 
-        Returns:
-            Mock search results as a formatted string (not real search data).
-        """
-        # Stub implementation - returns mock data only
-        return (
-            f"Mock search results for '{query}':\n"
-            f"1. Example result about {query}\n"
-            f"2. Another relevant link about {query}\n"
-            f"3. More information on {query}"
-        )
+            Args:
+                ctx: RunContext providing access to AgentDeps (http_client, settings).
+                query: The search query string.
+
+            Returns:
+                Mock search results as a formatted string (not real search data).
+            """
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Mock web search tool called with query: %s. "
+                "This returns stub data only. Replace with real search API for production.",
+                query[:100],
+            )
+
+            # Stub implementation - returns mock data only
+            return (
+                f"Mock search results for '{query}':\n"
+                f"1. Example result about {query}\n"
+                f"2. Another relevant link about {query}\n"
+                f"3. More information on {query}"
+            )
+
+    # TODO: Implement real web search integration
+    # Example for SerpAPI:
+    # if hasattr(settings, 'serpapi_key') and settings.serpapi_key:
+    #     @agent.tool
+    #     async def web_search(ctx: RunContext[AgentDeps], query: str) -> str:
+    #         """Search the web using SerpAPI."""
+    #         async with ctx.deps.http_client.get(
+    #             "https://serpapi.com/search",
+    #             params={"q": query, "api_key": settings.serpapi_key}
+    #         ) as response:
+    #             data = await response.json()
+    #             # Process and return formatted results
+    #             ...
 
     return agent

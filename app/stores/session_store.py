@@ -101,6 +101,8 @@ class InMemorySessionStore:
         self._store: dict[str, list[ModelMessage]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_access: dict[str, float] = {}
+        # Store-level lock to protect metadata operations (LRU eviction, lock cleanup)
+        self._store_lock: asyncio.Lock = asyncio.Lock()
         # Compile regex pattern for session_id validation (alphanumeric, underscore, hyphen only)
         self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
         self.max_messages = max_messages
@@ -154,11 +156,40 @@ class InMemorySessionStore:
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store[session_id] = list(messages)
 
+        # HIGH FIX: Perform LRU eviction AFTER releasing current session lock
+        # This prevents deadlock when two concurrent save_history() calls try to evict each other:
+        # - Thread A: holds lock for session_1, tries to evict session_2
+        # - Thread B: holds lock for session_2, tries to evict session_1
+        # - DEADLOCK: circular wait for each other's locks
+        # Solution: Never hold one session lock while trying to acquire another
+
         # Task 3.16: Evict LRU session if max_sessions limit exceeded
         if len(self._store) > self.max_sessions:
-            # Find the session with the oldest _last_access time (LRU)
-            lru_session_id = min(self._last_access, key=self._last_access.get)  # type: ignore
-            await self.clear(lru_session_id)
+            # Determine which session to evict
+            lru_session_id: str | None = None
+            lru_lock: asyncio.Lock | None = None
+
+            async with self._store_lock:
+                # Re-check after acquiring store lock (double-checked locking pattern)
+                if len(self._store) > self.max_sessions:
+                    # Find the session with the oldest _last_access time (LRU)
+                    lru_session_id = min(self._last_access.items(), key=lambda x: x[1])[0]
+
+                    # Get victim session's lock reference
+                    # This prevents concurrent save_history(lru_session) from resurrecting
+                    # the session after eviction completes
+                    lru_lock = self._locks.setdefault(lru_session_id, asyncio.Lock())
+
+            # If eviction is needed, acquire LRU session lock then perform eviction
+            # (session lock should be acquired before store lock in the locking hierarchy)
+            if lru_lock is not None and lru_session_id is not None:
+                async with lru_lock, self._store_lock:
+                    # Triple-check: verify session still needs eviction and is still LRU
+                    if len(self._store) > self.max_sessions and lru_session_id in self._store:
+                        # Cleanup all session data atomically
+                        self._store.pop(lru_session_id, None)
+                        self._last_access.pop(lru_session_id, None)
+                        self._locks.pop(lru_session_id, None)
 
     async def clear(self, session_id: str) -> None:
         """Remove all message history for a session.
@@ -183,8 +214,12 @@ class InMemorySessionStore:
             self._store.pop(session_id, None)
             # Task 3.12: Remove _last_access entry to prevent memory leak
             self._last_access.pop(session_id, None)
-        # Clean up lock entry to prevent memory leak in long-running services
-        self._locks.pop(session_id, None)
+        # FIX: Protect lock cleanup with store lock to prevent race condition
+        # where concurrent operation creates new lock via setdefault between
+        # releasing session lock and popping lock entry
+        async with self._store_lock:
+            # Clean up lock entry to prevent memory leak in long-running services
+            self._locks.pop(session_id, None)
 
     def _validate_session_id(self, session_id: str) -> None:
         """Validate session_id input.
@@ -239,7 +274,8 @@ class InMemorySessionStore:
         expired_sessions = []
 
         # Find expired sessions
-        for session_id, last_access in self._last_access.items():
+        # FIX: Create snapshot of items to prevent RuntimeError if dict is modified during iteration
+        for session_id, last_access in list(self._last_access.items()):
             if now - last_access > self.session_ttl:
                 expired_sessions.append(session_id)
 

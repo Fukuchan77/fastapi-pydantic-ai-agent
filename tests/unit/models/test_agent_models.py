@@ -9,113 +9,187 @@ from app.models.agent import ChatResponse
 
 
 class TestChatRequest:
-    """Test ChatRequest model validation."""
+    """Test suite for ChatRequest validation."""
 
-    def test_valid_chat_request_with_message_only(self) -> None:
-        """Test ChatRequest with only required message field."""
+    def test_chat_request_with_valid_message(self) -> None:
+        """ChatRequest should accept valid message."""
         request = ChatRequest(message="Hello, AI!")
         assert request.message == "Hello, AI!"
         assert request.session_id is None
 
-    def test_valid_chat_request_with_session_id(self) -> None:
-        """Test ChatRequest with message and session_id."""
-        request = ChatRequest(message="Hello, AI!", session_id="session-123")
-        assert request.message == "Hello, AI!"
+    def test_chat_request_with_session_id(self) -> None:
+        """ChatRequest should accept optional session_id."""
+        request = ChatRequest(message="Hello", session_id="session-123")
+        assert request.message == "Hello"
         assert request.session_id == "session-123"
 
-    def test_message_min_length_constraint(self) -> None:
-        """Test that empty message is rejected."""
+    def test_chat_request_message_is_required(self) -> None:
+        """ChatRequest should require message field."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatRequest()  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("message",) and e["type"] == "missing" for e in errors)
+
+    def test_chat_request_message_min_length_one(self) -> None:
+        """ChatRequest should reject empty message."""
         with pytest.raises(ValidationError) as exc_info:
             ChatRequest(message="")
+
         errors = exc_info.value.errors()
         assert any(
-            err["loc"] == ("message",) and "at least 1 character" in str(err["msg"]).lower()
-            for err in errors
+            e["loc"] == ("message",) and "at least 1 character" in e["msg"].lower() for e in errors
         )
 
-    def test_message_max_length_constraint(self) -> None:
-        """Test that message exceeding 32,000 characters is rejected."""
-        long_message = "x" * 32_001
+    def test_chat_request_message_max_length_32000(self) -> None:
+        """ChatRequest should reject message longer than 32,000 characters."""
+        long_message = "a" * 32_001
         with pytest.raises(ValidationError) as exc_info:
             ChatRequest(message=long_message)
+
         errors = exc_info.value.errors()
         assert any(
-            err["loc"] == ("message",) and "at most 32000 character" in str(err["msg"]).lower()
-            for err in errors
+            e["loc"] == ("message",) and "at most 32000 characters" in e["msg"].lower()
+            for e in errors
         )
 
-    def test_message_at_max_length_boundary(self) -> None:
-        """Test that message with exactly 32,000 characters is accepted."""
-        boundary_message = "x" * 32_000
-        request = ChatRequest(message=boundary_message)
+    def test_chat_request_message_exactly_32000_chars(self) -> None:
+        """ChatRequest should accept message with exactly 32,000 characters."""
+        max_message = "a" * 32_000
+        request = ChatRequest(message=max_message)
         assert len(request.message) == 32_000
 
-    def test_missing_message_field(self) -> None:
-        """Test that message field is required."""
-        with pytest.raises(ValidationError) as exc_info:
-            ChatRequest()  # type: ignore[call-arg]
-        errors = exc_info.value.errors()
-        assert any(err["loc"] == ("message",) for err in errors)
-
-    def test_session_id_is_optional(self) -> None:
-        """Test that session_id can be None."""
-        request = ChatRequest(message="Test", session_id=None)
+    def test_chat_request_session_id_can_be_none(self) -> None:
+        """ChatRequest should accept None for session_id."""
+        request = ChatRequest(message="Hello", session_id=None)
         assert request.session_id is None
+
+    def test_chat_request_session_id_is_optional(self) -> None:
+        """ChatRequest should not require session_id."""
+        request = ChatRequest(message="Hello")
+        assert request.session_id is None
+
+    def test_chat_request_message_whitespace_only_is_valid(self) -> None:
+        """ChatRequest should accept whitespace-only messages (min_length=1)."""
+        # min_length counts characters, not trimmed content
+        request = ChatRequest(message=" ")
+        assert request.message == " "
 
 
 class TestChatOutput:
-    """Test ChatOutput model validation."""
+    """Test suite for ChatOutput model."""
 
-    def test_valid_chat_output_minimal(self) -> None:
-        """Test ChatOutput with only required reply field."""
-        output = ChatOutput(reply="Here is the answer")
-        assert output.reply == "Here is the answer"
+    def test_chat_output_with_reply_only(self) -> None:
+        """ChatOutput should work with reply field only."""
+        output = ChatOutput(reply="Test response")
+        assert output.reply == "Test response"
         assert output.tool_calls_made == 0
 
-    def test_valid_chat_output_with_tool_calls(self) -> None:
-        """Test ChatOutput with tool_calls_made specified."""
-        output = ChatOutput(reply="Answer after tools", tool_calls_made=3)
-        assert output.reply == "Answer after tools"
-        assert output.tool_calls_made == 3
+    def test_chat_output_with_tool_calls(self) -> None:
+        """ChatOutput should accept tool_calls_made count."""
+        output = ChatOutput(reply="Result", tool_calls_made=2)
+        assert output.reply == "Result"
+        assert output.tool_calls_made == 2
 
-    def test_tool_calls_made_defaults_to_zero(self) -> None:
-        """Test that tool_calls_made has default value of 0."""
+    def test_chat_output_reply_is_required(self) -> None:
+        """ChatOutput should require reply field."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatOutput()  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("reply",) and e["type"] == "missing" for e in errors)
+
+    def test_chat_output_tool_calls_defaults_to_zero(self) -> None:
+        """ChatOutput should default tool_calls_made to 0."""
         output = ChatOutput(reply="Test")
         assert output.tool_calls_made == 0
 
-    def test_missing_reply_field(self) -> None:
-        """Test that reply field is required."""
-        with pytest.raises(ValidationError) as exc_info:
-            ChatOutput()  # type: ignore[call-arg]
-        errors = exc_info.value.errors()
-        assert any(err["loc"] == ("reply",) for err in errors)
+    def test_chat_output_tool_calls_can_be_zero(self) -> None:
+        """ChatOutput should accept 0 tool calls."""
+        output = ChatOutput(reply="Test", tool_calls_made=0)
+        assert output.tool_calls_made == 0
 
 
 class TestChatResponse:
-    """Test ChatResponse model validation."""
+    """Test suite for ChatResponse model."""
 
-    def test_valid_chat_response_minimal(self) -> None:
-        """Test ChatResponse with required fields."""
-        response = ChatResponse(reply="Answer", session_id=None, tool_calls_made=0)
-        assert response.reply == "Answer"
+    def test_chat_response_with_all_fields(self) -> None:
+        """ChatResponse should accept all fields."""
+        response = ChatResponse(
+            reply="Test reply",
+            session_id="session-123",
+            tool_calls_made=1,
+        )
+        assert response.reply == "Test reply"
+        assert response.session_id == "session-123"
+        assert response.tool_calls_made == 1
+
+    def test_chat_response_reply_is_required(self) -> None:
+        """ChatResponse should require reply field."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatResponse(session_id="123", tool_calls_made=0)  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("reply",) and e["type"] == "missing" for e in errors)
+
+    def test_chat_response_tool_calls_is_required(self) -> None:
+        """ChatResponse should require tool_calls_made field."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatResponse(reply="Test", session_id="123")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("tool_calls_made",) and e["type"] == "missing" for e in errors)
+
+    def test_chat_response_session_id_can_be_none(self) -> None:
+        """ChatResponse should accept None for session_id."""
+        response = ChatResponse(reply="Test", session_id=None, tool_calls_made=0)
+        assert response.session_id is None
+
+    def test_chat_response_with_no_session(self) -> None:
+        """ChatResponse should work without session_id."""
+        response = ChatResponse(reply="Test", session_id=None, tool_calls_made=0)
+        assert response.reply == "Test"
         assert response.session_id is None
         assert response.tool_calls_made == 0
 
-    def test_valid_chat_response_with_session(self) -> None:
-        """Test ChatResponse with all fields populated."""
-        response = ChatResponse(
-            reply="Answer with context", session_id="session-456", tool_calls_made=2
-        )
-        assert response.reply == "Answer with context"
-        assert response.session_id == "session-456"
-        assert response.tool_calls_made == 2
 
-    def test_missing_required_fields(self) -> None:
-        """Test that reply and tool_calls_made are required."""
+class TestAgentModelFieldTypes:
+    """Test suite for field type validation."""
+
+    def test_chat_request_message_must_be_string(self) -> None:
+        """ChatRequest message field must be string."""
         with pytest.raises(ValidationError) as exc_info:
-            ChatResponse(session_id="test")  # type: ignore[call-arg]
+            ChatRequest(message=123)  # type: ignore
+
         errors = exc_info.value.errors()
-        # Both reply and tool_calls_made should be in errors
-        error_locs = {err["loc"] for err in errors}
-        assert ("reply",) in error_locs
-        assert ("tool_calls_made",) in error_locs
+        assert any(e["loc"] == ("message",) for e in errors)
+
+    def test_chat_request_session_id_must_be_string_or_none(self) -> None:
+        """ChatRequest session_id must be string or None."""
+        # Valid: string
+        request1 = ChatRequest(message="Test", session_id="abc")
+        assert request1.session_id == "abc"
+
+        # Valid: None
+        request2 = ChatRequest(message="Test", session_id=None)
+        assert request2.session_id is None
+
+        # Invalid: number
+        with pytest.raises(ValidationError):
+            ChatRequest(message="Test", session_id=123)  # type: ignore
+
+    def test_chat_output_tool_calls_must_be_int(self) -> None:
+        """ChatOutput tool_calls_made must be integer."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatOutput(reply="Test", tool_calls_made="not-an-int")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("tool_calls_made",) for e in errors)
+
+    def test_chat_response_tool_calls_must_be_int(self) -> None:
+        """ChatResponse tool_calls_made must be integer."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatResponse(reply="Test", session_id=None, tool_calls_made="not-an-int")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("tool_calls_made",) for e in errors)

@@ -62,6 +62,19 @@ class CorrectiveRAGWorkflow(Workflow):
         self.llm_settings = llm_settings
         self.llm_model = llm_model
 
+        # MEDIUM FIX: Create Agent instances once during initialization
+        # instead of recreating them on every LLM call (which happens in retry loops)
+        # This reduces overhead from max_retries x 2 instances to just 2 instances total
+        resolved_model = llm_model or llm_settings.llm_model
+        self._eval_agent: Agent[None, str] = Agent(
+            model=resolved_model,
+            output_type=str,
+        )
+        self._synth_agent: Agent[None, str] = Agent(
+            model=resolved_model,
+            output_type=str,
+        )
+
     @step
     async def search(
         self,
@@ -234,6 +247,38 @@ class CorrectiveRAGWorkflow(Workflow):
                 }
             )
 
+    def _truncate_chunks(self, chunks: list[str], max_chars: int = 15000) -> list[str]:
+        """Truncate chunks to fit within character limit.
+
+        MEDIUM FIX: DRY helper to avoid code duplication between _evaluate_relevance
+        and _synthesize_answer. Truncates based on actual character count, not just
+        "first N chunks" which could still exceed the limit.
+
+        Args:
+            chunks: List of text chunks to truncate.
+            max_chars: Maximum total character count (default: 15000).
+
+        Returns:
+            List of chunks that fit within max_chars. Returns at least the first
+            chunk even if it exceeds the limit (to avoid empty context).
+        """
+        if not chunks:
+            return []
+
+        total = 0
+        result = []
+        for chunk in chunks:
+            chunk_len = len(chunk)
+            # If adding this chunk would exceed limit and we have at least one chunk, stop
+            if total + chunk_len > max_chars and result:
+                break
+            result.append(chunk)
+            total += chunk_len
+
+        # Always return at least the first chunk (even if it exceeds the limit)
+        # to ensure we have some context
+        return result if result else chunks[:1]
+
     async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
         """Evaluate relevance of retrieved chunks using LLM.
 
@@ -247,6 +292,16 @@ class CorrectiveRAGWorkflow(Workflow):
         Returns:
             "relevant" if chunks are sufficient, "insufficient" otherwise.
         """
+        # MEDIUM FIX: Use helper method to truncate chunks based on actual character count
+        original_count = len(chunks)
+        chunks = self._truncate_chunks(chunks, max_chars=15000)
+        if len(chunks) < original_count:
+            logger.warning(
+                "Context length exceeded 15000 chars, truncated from %d to %d chunks",
+                original_count,
+                len(chunks),
+            )
+
         # Build evaluation prompt
         context = "\n\n".join(f"Chunk {i + 1}: {chunk}" for i, chunk in enumerate(chunks))
         prompt = f"""Given the following chunks and query, assess if the chunks contain \
@@ -263,23 +318,15 @@ Respond with exactly one word:
 
 Response:"""
 
-        # Use configured model or override
-        model = self.llm_model or self.llm_settings.llm_model
-
-        # Create a simple agent for evaluation
-        eval_agent: Agent[None, str] = Agent(
-            model=model,
-            output_type=str,
-        )
-
         # Task 16.24: Retry logic with exponential backoff for transient errors
-        max_retries = 3
-        base_delay = 1.0  # seconds
+        # Use configurable retry parameters from settings
+        max_retries = self.llm_settings.llm_retry_max_attempts
+        base_delay = self.llm_settings.llm_retry_base_delay
 
         for attempt in range(max_retries):
             try:
-                # Run evaluation
-                result = await eval_agent.run(prompt)
+                # Run evaluation using pre-initialized agent
+                result = await self._eval_agent.run(prompt)
                 response = result.output.strip().lower()
 
                 # Normalize response
@@ -331,6 +378,16 @@ Response:"""
         Returns:
             Synthesized answer.
         """
+        # MEDIUM FIX: Use helper method to truncate chunks based on actual character count
+        original_count = len(chunks)
+        chunks = self._truncate_chunks(chunks, max_chars=15000)
+        if len(chunks) < original_count:
+            logger.warning(
+                "Context length exceeded 15000 chars, truncated from %d to %d chunks",
+                original_count,
+                len(chunks),
+            )
+
         # Build synthesis prompt
         context = "\n\n".join(f"Source {i + 1}: {chunk}" for i, chunk in enumerate(chunks))
         prompt = f"""Using the following context, provide a clear and concise answer to the query.
@@ -342,23 +399,15 @@ Context:
 
 Answer:"""
 
-        # Use configured model or override
-        model = self.llm_model or self.llm_settings.llm_model
-
-        # Create synthesis agent
-        synthesis_agent: Agent[None, str] = Agent(
-            model=model,
-            output_type=str,
-        )
-
         # Task 16.24: Retry logic with exponential backoff for transient errors
-        max_retries = 3
-        base_delay = 1.0  # seconds
+        # Use configurable retry parameters from settings
+        max_retries = self.llm_settings.llm_retry_max_attempts
+        base_delay = self.llm_settings.llm_retry_base_delay
 
         for attempt in range(max_retries):
             try:
-                # Generate answer
-                result = await synthesis_agent.run(prompt)
+                # Generate answer using pre-initialized agent
+                result = await self._synth_agent.run(prompt)
                 return result.output.strip()
 
             except Exception as e:

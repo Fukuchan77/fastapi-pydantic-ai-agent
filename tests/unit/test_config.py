@@ -304,3 +304,49 @@ def test_cloud_provider_works_with_api_key_groq(monkeypatch: pytest.MonkeyPatch)
     settings = Settings()
     assert settings.llm_model == "groq:mixtral-8x7b"
     assert settings.llm_api_key == "gsk-test"
+
+
+def test_env_example_file_covers_all_settings_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that .env.example documents all Settings fields."""
+    import re
+    from pathlib import Path
+
+    from app.config import Settings
+
+    # Read .env.example file
+    env_example_path = Path(__file__).parent.parent.parent / ".env.example"
+    assert env_example_path.exists(), ".env.example file not found"
+
+    env_example_content = env_example_path.read_text()
+
+    # Extract all variable names from .env.example (lines with = that aren't comments)
+    env_vars = set()
+    for line in env_example_content.splitlines():
+        line = line.strip()
+        # Skip empty lines and comment-only lines
+        if not line or line.startswith("#"):
+            continue
+        # Extract variable name from KEY=value lines
+        match = re.match(r"^([A-Z_]+)=", line)
+        if match:
+            env_vars.add(match.group(1))
+
+    # Get all Settings field names (converted to uppercase env var format)
+    # Settings uses model_config with env_file support
+    settings_fields = set()
+    for field_name in Settings.model_fields:
+        # Convert field name to env var format (snake_case -> UPPER_SNAKE_CASE)
+        env_var_name = field_name.upper()
+        settings_fields.add(env_var_name)
+
+    # Verify all Settings fields are documented in .env.example
+    undocumented_fields = settings_fields - env_vars
+    assert not undocumented_fields, (
+        f"Settings fields not documented in .env.example: {undocumented_fields}"
+    )
+
+    # Verify all .env.example variables are actual Settings fields (no typos/obsolete vars)
+    unknown_env_vars = env_vars - settings_fields
+    assert not unknown_env_vars, (
+        f".env.example contains variables not in Settings: {unknown_env_vars}"
+    )

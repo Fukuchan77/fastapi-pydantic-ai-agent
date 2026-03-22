@@ -17,6 +17,9 @@ from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import get_settings
+from app.middleware.request_id import RequestIDMiddleware
+from app.middleware.request_id import request_id_var
+from app.middleware.request_size import RequestSizeLimitMiddleware
 from app.models.errors import ErrorResponse
 from app.observability import configure_logfire
 from app.stores.session_store import InMemorySessionStore
@@ -56,8 +59,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         # Task 2.6: Initialize HTTP client for agent tool usage
         # Task 16.26: Configure timeout to prevent indefinite hangs
-        app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
-        logger.info("Initialized HTTP client with 30s timeout (5s connect)")
+        # HIGH FIX: Use configurable timeout values from settings
+        app.state.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                app.state.settings.http_timeout, connect=app.state.settings.http_connect_timeout
+            )
+        )
+        logger.info(
+            "Initialized HTTP client with %ss timeout (%ss connect)",
+            app.state.settings.http_timeout,
+            app.state.settings.http_connect_timeout,
+        )
     except Exception as e:
         logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
         raise
@@ -140,6 +152,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# FIX: Add request size limit middleware BEFORE request ID middleware
+# Middleware executes in REVERSE order of addition, so this ensures
+# RequestIDMiddleware runs first, adding X-Request-ID to all responses including 413
+app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)  # type: ignore[arg-type]
+
+# HIGH FIX: Add request ID middleware for distributed tracing
+app.add_middleware(RequestIDMiddleware)  # type: ignore[arg-type]
+
 # Task 9.2: Instrument FastAPI with Logfire for HTTP tracing
 logfire.instrument_fastapi(app)
 
@@ -184,11 +204,13 @@ async def unhandled_exception_handler(
     # Define background logging function
     def log_exception() -> None:
         """Log exception details in background to avoid blocking the response."""
+        # HIGH FIX: Include request ID for distributed tracing
         logger.error(
             "Unhandled exception during request to %s: %s",
             request_path,
             exc_str,
             exc_info=exc_info,
+            extra={"request_id": request_id_var.get()},
         )
 
     # Create background tasks and add logging

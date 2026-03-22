@@ -19,8 +19,8 @@ class IngestResponse(BaseModel):
 class RAGQueryRequest(BaseModel):
     """Request model for RAG query endpoint."""
 
-    query: str = Field(..., min_length=1, max_length=8_000)
-    max_retries: int = Field(default=3, ge=0, le=10)
+    query: str = Field(..., min_length=1, max_length=10000)
+    max_retries: int = Field(default=3, ge=1, le=10)
 
 
 class RAGQueryResponse(BaseModel):

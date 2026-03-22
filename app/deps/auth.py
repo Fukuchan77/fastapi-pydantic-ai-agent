@@ -1,5 +1,6 @@
 """Authentication dependencies for API endpoints."""
 
+import logging
 import secrets
 
 from fastapi import Depends
@@ -8,7 +9,11 @@ from fastapi.security import APIKeyHeader
 
 from app.config import Settings
 from app.config import get_settings
+from app.middleware.request_id import request_id_var
 from app.models.errors import ErrorResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 # Define APIKeyHeader security scheme
@@ -39,6 +44,20 @@ async def verify_api_key(
     # Task 16.28: Use constant-time comparison to prevent timing attacks
     # secrets.compare_digest() requires both arguments to be strings
     if api_key is None or not secrets.compare_digest(api_key, settings.api_key):
+        # Log authentication failure for security monitoring
+        # Do NOT log the actual API key values (security risk)
+        request_id = request_id_var.get()
+        if api_key is None:
+            logger.warning(
+                "Authentication failed: missing API key (request_id: %s)",
+                request_id,
+            )
+        else:
+            logger.warning(
+                "Authentication failed: invalid API key (request_id: %s)",
+                request_id,
+            )
+
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(message="Unauthorized").model_dump(),

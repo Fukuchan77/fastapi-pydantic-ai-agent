@@ -18,6 +18,7 @@ def test_get_rag_workflow_returns_workflow_instance(monkeypatch: pytest.MonkeyPa
     # Setup: Configure environment for Settings
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
     # Import after setting env vars
     from app.deps.workflow import get_rag_workflow
@@ -41,6 +42,7 @@ def test_get_rag_workflow_uses_app_state_vector_store(monkeypatch: pytest.Monkey
     # Setup: Configure environment for Settings
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
     # Import after setting env vars
     from app.deps.workflow import get_rag_workflow
@@ -63,6 +65,7 @@ def test_get_rag_workflow_uses_settings(monkeypatch: pytest.MonkeyPatch) -> None
     # Setup: Configure environment for Settings
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
     # Import after setting env vars
     from app.config import Settings

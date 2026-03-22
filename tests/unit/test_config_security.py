@@ -120,6 +120,66 @@ def test_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ", api_key=" not in repr_output
 
 
+def test_llm_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that llm_api_key is not exposed in repr output to prevent accidental logging."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+    monkeypatch.setenv("LLM_API_KEY", "sk-secret-llm-key-67890")
+
+    from app.config import Settings
+
+    settings = Settings()
+    repr_output = repr(settings)
+
+    # The secret value should not appear in repr output
+    assert "sk-secret-llm-key-67890" not in repr_output
+    # The llm_api_key field should not appear as a standalone field in repr
+    assert not repr_output.startswith("Settings(llm_api_key=")
+    assert ", llm_api_key=" not in repr_output
+
+
+def test_logfire_token_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that logfire_token is not exposed in repr output to prevent accidental logging."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+    monkeypatch.setenv("LOGFIRE_TOKEN", "logfire-secret-token-abc123")
+
+    from app.config import Settings
+
+    settings = Settings()
+    repr_output = repr(settings)
+
+    # The secret value should not appear in repr output
+    assert "logfire-secret-token-abc123" not in repr_output
+    # The logfire_token field should not appear as a standalone field in repr
+    assert not repr_output.startswith("Settings(logfire_token=")
+    assert ", logfire_token=" not in repr_output
+
+
+def test_all_secrets_protected_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that all secret fields are protected in repr output when all are set."""
+    monkeypatch.setenv("API_KEY", "secret-api-key-123")
+    monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+    monkeypatch.setenv("LLM_API_KEY", "sk-secret-llm-key-456")
+    monkeypatch.setenv("LOGFIRE_TOKEN", "logfire-secret-789")
+
+    from app.config import Settings
+
+    settings = Settings()
+    repr_output = repr(settings)
+
+    # None of the secret values should appear in repr output
+    assert "secret-api-key-123" not in repr_output
+    assert "sk-secret-llm-key-456" not in repr_output
+    assert "logfire-secret-789" not in repr_output
+
+    # None of the secret fields should appear as fields in repr
+    assert ", api_key=" not in repr_output
+    assert ", llm_api_key=" not in repr_output
+    assert ", logfire_token=" not in repr_output
+
+
 def test_get_settings_cache_has_maxsize_1(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that get_settings cache is configured with maxsize=1."""
     from app.config import get_settings
