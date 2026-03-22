@@ -48,7 +48,7 @@ async def ingest(
 
 @router.post("/rag/query", response_model=RAGQueryResponse)
 async def query(
-    request: RAGQueryRequest,
+    body: RAGQueryRequest,
     workflow: CorrectiveRAGWorkflow = Depends(get_rag_workflow),  # noqa: B008
     _: None = Depends(verify_api_key),
 ) -> RAGQueryResponse:
@@ -60,7 +60,7 @@ async def query(
     3. Synthesizes a final answer from relevant context
 
     Args:
-        request: RAGQueryRequest with query string and optional max_retries.
+        body: RAGQueryRequest with query string and optional max_retries.
         workflow: CorrectiveRAGWorkflow instance (per-request).
         _: Authentication dependency (validates X-API-Key header).
 
@@ -69,8 +69,8 @@ async def query(
     """
     # Run the workflow with query and max_retries
     result = await workflow.run(
-        query=request.query,
-        max_retries=request.max_retries,
+        query=body.query,
+        max_retries=body.max_retries,
     )
 
     # Extract result data from StopEvent

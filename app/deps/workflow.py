@@ -2,11 +2,12 @@
 
 from fastapi import Request
 
+from app.agents.chat_agent import _build_model
 from app.config import get_settings
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 
 
-def get_rag_workflow(request: Request) -> CorrectiveRAGWorkflow:
+def get_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
     """Create a per-request CorrectiveRAGWorkflow instance.
 
     Each request gets its own workflow instance to ensure isolation between
@@ -14,13 +15,17 @@ def get_rag_workflow(request: Request) -> CorrectiveRAGWorkflow:
     lives in the per-run LlamaIndex Context object.
 
     Args:
-        request: FastAPI request object containing app.state.vector_store.
+        req: FastAPI request object containing app.state.vector_store.
 
     Returns:
         A new CorrectiveRAGWorkflow instance configured with the application's
         vector store and LLM settings.
     """
+    settings = get_settings()
+    model = _build_model(settings)
+
     return CorrectiveRAGWorkflow(
-        vector_store=request.app.state.vector_store,
-        llm_settings=get_settings(),
+        vector_store=req.app.state.vector_store,
+        llm_settings=settings,
+        llm_model=model,
     )

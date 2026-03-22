@@ -68,7 +68,9 @@ class TestChatEndpoint:
 
         # Mock the agent result
         mock_result = MagicMock()
-        mock_result.data = "Hello! How can I help you?"
+        mock_result.output = "Hello! How can I help you?"
+        # Ensure data doesn't have a reply attribute so it falls back to output
+        mock_result.data = "Hello! How can I help you?"  # String, not an object with .reply
         mock_result.all_messages = MagicMock(
             return_value=[
                 ModelRequest(parts=[UserPromptPart(content="Hi")]),
@@ -128,7 +130,9 @@ class TestChatEndpoint:
         ]
 
         mock_result = MagicMock()
-        mock_result.data = "Response to current message"
+        mock_result.output = "Response to current message"
+        # Ensure data doesn't have a reply attribute so it falls back to output
+        mock_result.data = "Response to current message"  # String, not an object with .reply
         mock_result.all_messages = MagicMock(
             return_value=[
                 *existing_history,

@@ -23,9 +23,11 @@ class TestBuildModel:
     # lazily imported, making them difficult to unit test with mocks.
     # These providers are tested in integration tests instead.
 
-    def test_build_model_ollama_provider(self) -> None:
+    def test_build_model_ollama_provider(self, monkeypatch) -> None:
         """_build_model should create OpenAIChatModel with custom base_url for ollama."""
         from pydantic import HttpUrl
+
+        monkeypatch.delenv("LLM_API_KEY", raising=False)  # Remove to test without it
 
         settings = Settings(
             api_key="test-key",
@@ -96,8 +98,10 @@ class TestBuildModel:
             # Verify model was created
             mock_model.assert_called_once()
 
-    def test_build_model_openai_requires_api_key_for_cloud(self) -> None:
+    def test_build_model_openai_requires_api_key_for_cloud(self, monkeypatch) -> None:
         """Settings validator should require API key for cloud OpenAI provider."""
+        monkeypatch.delenv("LLM_API_KEY", raising=False)  # Remove to test validation
+
         # Cloud OpenAI requires API key
         with pytest.raises(ValueError, match="llm_api_key is required"):
             Settings(

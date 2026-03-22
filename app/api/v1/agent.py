@@ -169,8 +169,17 @@ async def chat(
     # Count tool calls from message history
     tool_calls_made = sum(1 for m in result.all_messages() if m.kind == "tool-call")
 
+    # Extract reply from result - handle both str output and Pydantic model output
+    # When output_type is a Pydantic model with 'reply' field, use result.data.reply
+    # Otherwise use result.output directly (str or other simple types)
+    if hasattr(result, "data") and hasattr(result.data, "reply"):
+        reply = result.data.reply
+    else:
+        # FunctionModel and simple str outputs use result.output
+        reply = str(result.output) if hasattr(result.output, "__str__") else result.output
+
     return ChatResponse(
-        reply=result.data,
+        reply=reply,
         session_id=request.session_id,
         tool_calls_made=tool_calls_made,
     )
@@ -281,7 +290,7 @@ async def stream_agent(
                 "Unexpected error in agent stream: %s",
                 e,
                 exc_info=True,
-                extra={"message": request.message[:100]},
+                extra={"user_message": request.message[:100]},
             )
             yield adapter.format_error("An unexpected error occurred")
 

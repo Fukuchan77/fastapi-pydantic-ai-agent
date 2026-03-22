@@ -49,6 +49,7 @@ def test_settings_with_all_required_fields(monkeypatch: pytest.MonkeyPatch) -> N
     """Test that Settings successfully initializes with required fields."""
     monkeypatch.setenv("API_KEY", "test-api-key")
     monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)  # Remove to test without it
 
     from app.config import Settings
 
@@ -206,7 +207,7 @@ def test_cloud_provider_requires_api_key_openai(monkeypatch: pytest.MonkeyPatch)
     """Test that OpenAI provider requires llm_api_key to be set."""
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    # Do NOT set LLM_API_KEY - it should fail
+    monkeypatch.delenv("LLM_API_KEY", raising=False)  # Explicitly remove it
 
     from app.config import Settings
 
@@ -224,7 +225,7 @@ def test_cloud_provider_requires_api_key_anthropic(monkeypatch: pytest.MonkeyPat
     """Test that Anthropic provider requires llm_api_key to be set."""
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "anthropic:claude-3-opus")
-    # Do NOT set LLM_API_KEY - it should fail
+    monkeypatch.delenv("LLM_API_KEY", raising=False)  # Explicitly remove it
 
     from app.config import Settings
 
@@ -241,7 +242,7 @@ def test_cloud_provider_requires_api_key_groq(monkeypatch: pytest.MonkeyPatch) -
     """Test that Groq provider requires llm_api_key to be set."""
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "groq:mixtral-8x7b")
-    # Do NOT set LLM_API_KEY - it should fail
+    monkeypatch.delenv("LLM_API_KEY", raising=False)  # Explicitly remove it
 
     from app.config import Settings
 
@@ -258,7 +259,7 @@ def test_local_provider_works_without_api_key_ollama(monkeypatch: pytest.MonkeyP
     """Test that Ollama (local provider) works without llm_api_key."""
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
-    # Do NOT set LLM_API_KEY - ollama should work without it
+    monkeypatch.delenv("LLM_API_KEY", raising=False)  # Explicitly remove it
 
     from app.config import Settings
 
