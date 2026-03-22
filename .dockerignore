@@ -1,0 +1,78 @@
+# ============================================================================
+# Docker Build Context Exclusions
+# ============================================================================
+# Exclude unnecessary files from Docker build context for faster builds
+# and smaller context size
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test files and coverage reports
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Development and environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation and project management
+README.md
+LICENSE
+.sdd/
+docs/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Logs
+*.log
+
+# Mise configuration (not needed in container)
+.mise.toml
+mise.toml
+
+# Docker files (not needed inside image)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
