@@ -292,6 +292,10 @@ class Settings(BaseSettings):
         le=100,
         description="Maximum number of keep-alive HTTP connections in the pool",
     )
+    trusted_proxies: list[str] = Field(
+        default=[],
+        description="List of trusted proxy IP addresses for X-Forwarded-For validation",
+    )
     llm_retry_max_attempts: int = Field(
         default=3,
         ge=1,

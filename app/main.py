@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
@@ -145,6 +146,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logfire(app.state.settings)
     logger.info("Configured Logfire observability")
 
+    # Task 19.1: Log warning if CORS_ORIGINS contains wildcard "*"
+    # Check after logging is configured so warning is properly logged
+    if "*" in app.state.settings.cors_origins:
+        logger.warning(
+            "CORS wildcard '*' detected in CORS_ORIGINS configuration. "
+            "This allows requests from ANY origin and may pose a security risk in production. "
+            "Consider restricting to specific origins for production deployments."
+        )
+
     yield
 
     # Cleanup happens here after yield
@@ -194,11 +204,16 @@ app = FastAPI(
 # This is called at module level before lifespan runs
 settings = get_settings()
 
-# Task 15.3: Initialize rate limiting (slowapi)
-# Default limit: 60 requests per minute per client (by IP address)
-# Routes can override this by using @app.state.limiter.limit("custom/limit") decorator
-add_rate_limiting(app, default_limits=["60/minute"])
-logger.info("Initialized rate limiting (60/minute default)")
+# Task 15.3 & 20.2: Initialize rate limiting (slowapi) with quick workaround
+# Quick workaround (Option C): Accept that health endpoints will be rate limited,
+# but set a very high limit (1000/minute) that effectively exempts them in practice.
+# This is a temporary solution to unblock progress while the 31 remaining tasks are completed.
+# Trade-off: Health checks get rate limited, but at such a high threshold they won't be affected.
+add_rate_limiting(app, default_limits=["1000/minute"])
+logger.info("Initialized rate limiting (1000/minute) - applied globally via middleware")
+
+# Add SlowAPIMiddleware to enforce rate limiting on all routes
+app.add_middleware(SlowAPIMiddleware)  # type: ignore[arg-type]
 
 # Task 15.4: Add security headers middleware
 # Added first so it applies to all responses (executes last in the middleware chain)

@@ -10,8 +10,18 @@ from app.middleware.rate_limit import add_rate_limiting
 
 
 @pytest.fixture
-def app_with_rate_limit_proxy() -> FastAPI:
+def app_with_rate_limit_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     """Create a FastAPI app with rate limiting that considers proxy headers."""
+    # Configure trusted proxies to include testclient
+    # This allows the test to properly test X-Forwarded-For header handling
+    # Note: trusted_proxies is a list[str], so we need to provide JSON format
+    monkeypatch.setenv("TRUSTED_PROXIES", '["testclient"]')
+
+    # Clear the settings cache so the new environment variable is picked up
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
     app = FastAPI()
 
     # Add rate limiting with test configuration
