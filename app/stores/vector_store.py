@@ -75,7 +75,18 @@ class InMemoryVectorStore:
         - Default limit is 100,000 characters per chunk
     """
 
-    def __init__(self, max_documents: int = 1000, max_chunk_size: int = 100_000) -> None:
+    # Task 16.14: Extract magic numbers to class constants for maintainability
+    DEFAULT_MAX_DOCUMENTS: int = 1000
+    DEFAULT_MAX_CHUNK_SIZE: int = 100_000
+    MAX_TOP_K: int = 1000
+    MAX_QUERY_LENGTH: int = 10000
+    MAX_QUERY_TOKENS: int = 10000
+
+    def __init__(
+        self,
+        max_documents: int = DEFAULT_MAX_DOCUMENTS,
+        max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+    ) -> None:
         """Initialize an empty in-memory vector store.
 
         Args:
@@ -143,12 +154,12 @@ class InMemoryVectorStore:
         # Validate top_k parameter
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
-        if top_k > 1000:
-            raise ValueError("top_k cannot exceed 1000")
+        if top_k > self.MAX_TOP_K:
+            raise ValueError(f"top_k cannot exceed {self.MAX_TOP_K}")
 
         # Validate query length to prevent DoS attacks
-        if len(query) > 10000:
-            raise ValueError("Query string too long (max 10000 chars)")
+        if len(query) > self.MAX_QUERY_LENGTH:
+            raise ValueError(f"Query string too long (max {self.MAX_QUERY_LENGTH} chars)")
 
         if not self._documents or not query.strip():
             return []
@@ -158,10 +169,10 @@ class InMemoryVectorStore:
 
         # Task 3.13: Validate token count to prevent DoS via excessive tokens
         # This is defense-in-depth: with whitespace tokenization, the character
-        # limit (10000 chars) is more restrictive than the token limit (10000 tokens),
+        # limit is more restrictive than the token limit,
         # but this validation guards against future tokenization changes or edge cases.
-        if len(query_tokens) > 10000:
-            raise ValueError("Query has too many tokens (max 10000 tokens)")
+        if len(query_tokens) > self.MAX_QUERY_TOKENS:
+            raise ValueError(f"Query has too many tokens (max {self.MAX_QUERY_TOKENS} tokens)")
 
         if not query_tokens:
             return []

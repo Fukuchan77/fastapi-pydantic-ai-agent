@@ -11,13 +11,6 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
-class ChatOutput(BaseModel):
-    """Output model for agent execution."""
-
-    reply: str
-    tool_calls_made: int = 0
-
-
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 

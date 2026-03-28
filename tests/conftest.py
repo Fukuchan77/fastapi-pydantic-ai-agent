@@ -22,7 +22,7 @@ if "API_KEY" not in os.environ:
 if "LLM_MODEL" not in os.environ:
     os.environ["LLM_MODEL"] = "openai:gpt-4"
 if "LLM_API_KEY" not in os.environ:
-    os.environ["LLM_API_KEY"] = "test-llm-key"
+    os.environ["LLM_API_KEY"] = "test-llm-key-12345"
 
 from app.main import app
 
@@ -31,7 +31,7 @@ from app.main import app
 def clear_settings_cache():
     """Clear get_settings cache after each test to prevent pollution.
 
-    The get_settings() function uses @lru_cache(maxsize=1), so settings are
+    The get_settings() function uses @cache, so settings are
     cached globally. Tests use monkeypatch to set different environment variables,
     but without clearing the cache, one test's settings could leak into another.
 
@@ -54,13 +54,15 @@ def test_env(monkeypatch):
     This fixture runs automatically (autouse=True) and provides minimal
     valid configuration to prevent startup failures.
 
-    Note: LLM_API_KEY is intentionally NOT set here to allow tests to
-    verify cloud provider validation. Individual tests should set it
-    when testing valid configurations.
+    Note: LLM_API_KEY is set by default to support most tests. Individual tests
+    that need to verify cloud provider validation should explicitly unset it
+    using monkeypatch.delenv("LLM_API_KEY").
+
+    Task 16.34: Fixed misleading comment - the fixture DOES set LLM_API_KEY.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")  # Set for most tests
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")  # Set for most tests
     # Disable Logfire in tests
     monkeypatch.delenv("LOGFIRE_TOKEN", raising=False)
 

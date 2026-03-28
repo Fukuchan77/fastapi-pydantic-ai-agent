@@ -10,7 +10,7 @@ class TestTask8ComponentWiring:
     async def test_lifespan_initializes_vector_store(self, monkeypatch) -> None:
         """Lifespan must initialize vector_store in app.state (Task 8.0)."""
         # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
 
@@ -39,7 +39,7 @@ class TestTask8ComponentWiring:
     async def test_lifespan_initializes_chat_agent(self, monkeypatch) -> None:
         """Lifespan must initialize chat_agent in app.state (Task 8.0)."""
         # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
 
@@ -67,7 +67,7 @@ class TestTask8ComponentWiring:
     def test_v1_router_is_registered(self, monkeypatch) -> None:
         """Test that v1 router is included in the app (Task 8.0)."""
         # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
 

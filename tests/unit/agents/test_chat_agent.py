@@ -9,9 +9,9 @@ from pydantic_ai import RunContext
 from pydantic_ai.models.test import TestModel
 
 from app.agents.chat_agent import _LOCAL_PROVIDER_DUMMY_KEY
-from app.agents.chat_agent import _build_model
 from app.agents.chat_agent import _build_system_prompt
 from app.agents.chat_agent import build_chat_agent
+from app.agents.chat_agent import build_model
 from app.agents.deps import AgentDeps
 from app.config import Settings
 
@@ -30,7 +30,7 @@ class TestBuildModel:
         monkeypatch.delenv("LLM_API_KEY", raising=False)  # Remove to test without it
 
         settings = Settings(
-            api_key="test-key",
+            api_key="test-api-key-12345",
             llm_model="ollama:llama3.2",
             llm_base_url=HttpUrl("http://localhost:11434/v1"),
         )
@@ -39,7 +39,7 @@ class TestBuildModel:
             patch("pydantic_ai.models.openai.OpenAIChatModel") as mock_model,
             patch("pydantic_ai.providers.openai.OpenAIProvider") as mock_provider,
         ):
-            _model = _build_model(settings)
+            _model = build_model(settings)
 
             # Verify provider was created with custom base_url
             mock_provider.assert_called_once_with(
@@ -57,9 +57,9 @@ class TestBuildModel:
         from pydantic import HttpUrl
 
         settings = Settings(
-            api_key="test-key",
+            api_key="test-api-key-12345",
             llm_model="openai:gpt-4o",
-            llm_api_key="test-openai-key",
+            llm_api_key="test-openai-key-16",
             llm_base_url=HttpUrl("https://custom.openai.com/v1"),
         )
 
@@ -67,12 +67,12 @@ class TestBuildModel:
             patch("pydantic_ai.models.openai.OpenAIChatModel") as mock_model,
             patch("pydantic_ai.providers.openai.OpenAIProvider") as mock_provider,
         ):
-            _model = _build_model(settings)
+            _model = build_model(settings)
 
             # Verify provider was created with custom base_url and API key
             mock_provider.assert_called_once_with(
                 base_url="https://custom.openai.com/v1",
-                api_key="test-openai-key",
+                api_key="test-openai-key-16",
             )
 
             # Verify model was created
@@ -81,19 +81,19 @@ class TestBuildModel:
     def test_build_model_openai_with_api_key_only(self) -> None:
         """_build_model should create OpenAIChatModel with API key when no base_url."""
         settings = Settings(
-            api_key="test-key",
+            api_key="test-api-key-12345",
             llm_model="openai:gpt-4o",
-            llm_api_key="test-openai-key",
+            llm_api_key="test-openai-key-16",
         )
 
         with (
             patch("pydantic_ai.models.openai.OpenAIChatModel") as mock_model,
             patch("pydantic_ai.providers.openai.OpenAIProvider") as mock_provider,
         ):
-            _model = _build_model(settings)
+            _model = build_model(settings)
 
             # Verify provider was created with just API key
-            mock_provider.assert_called_once_with(api_key="test-openai-key")
+            mock_provider.assert_called_once_with(api_key="test-openai-key-16")
 
             # Verify model was created
             mock_model.assert_called_once()
@@ -105,7 +105,7 @@ class TestBuildModel:
         # Cloud OpenAI requires API key
         with pytest.raises(ValueError, match="llm_api_key is required"):
             Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
                 # Missing llm_api_key
             )
@@ -116,9 +116,9 @@ class TestBuildModel:
         # so models without prefix are rejected at Settings construction
         with pytest.raises(ValueError, match="must follow 'provider:model' format"):
             Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="gpt-4o",  # Missing provider prefix
-                llm_api_key="test-openai-key",
+                llm_api_key="test-openai-key-16",
             )
 
     def test_build_model_validator_rejects_unsupported_provider(self) -> None:
@@ -126,9 +126,9 @@ class TestBuildModel:
         # Settings validator catches unsupported providers
         with pytest.raises(ValueError, match="provider must be one of"):
             Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="unsupported:model-name",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
     def test_build_model_validator_requires_lowercase_provider(self) -> None:
@@ -136,9 +136,9 @@ class TestBuildModel:
         # Settings validator enforces lowercase providers
         with pytest.raises(ValueError, match="provider must be one of"):
             Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="OPENAI:gpt-4o",  # Uppercase not allowed
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
 
@@ -183,9 +183,9 @@ class TestBuildChatAgent:
         """build_chat_agent should return an Agent instance."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
             model = TestModel()
@@ -197,9 +197,9 @@ class TestBuildChatAgent:
         """build_chat_agent should use the provided model when specified."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
             test_model = TestModel()
@@ -213,12 +213,12 @@ class TestBuildChatAgent:
         """build_chat_agent should build model from settings when model=None."""
         with (
             patch("app.agents.chat_agent.get_settings") as mock_settings,
-            patch("app.agents.chat_agent._build_model") as mock_build,
+            patch("app.agents.chat_agent.build_model") as mock_build,
         ):
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
             mock_build.return_value = TestModel()
 
@@ -232,9 +232,9 @@ class TestBuildChatAgent:
         """build_chat_agent should configure Agent with correct type parameters."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
                 max_output_retries=5,
             )
 
@@ -251,9 +251,9 @@ class TestBuildChatAgent:
         """build_chat_agent should have tools available."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
             test_model = TestModel()
@@ -274,9 +274,9 @@ class TestAgentIntegration:
         """Agent should be runnable with TestModel for testing."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
             mock_settings.return_value = Settings(
-                api_key="test-key",
+                api_key="test-api-key-12345",
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-key",
+                llm_api_key="test-api-key-12345",
             )
 
             # Create agent with TestModel

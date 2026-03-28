@@ -9,8 +9,12 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 
 
-def test_main_app_import_fails() -> None:
-    """Test that main app can be imported (RED: should fail initially)."""
+def test_main_app_can_be_imported() -> None:
+    """Test that main app can be imported successfully.
+
+    Task 16.3: Fixed misleading test name from 'test_main_app_import_fails'.
+    The test verifies successful import, not failure.
+    """
     from app.main import app
 
     assert isinstance(app, FastAPI)
@@ -44,7 +48,11 @@ def test_exception_handler_returns_500_with_error_response() -> None:
 
     assert response.status_code == 500
     # Should return generic message, not the actual exception message
-    assert response.json() == {"message": "Internal server error occurred", "code": None}
+    # Task 16.9: Error code is now consistently used
+    assert response.json() == {
+        "message": "Internal server error occurred",
+        "code": "INTERNAL_ERROR",
+    }
 
 
 def test_exception_handler_structure() -> None:
@@ -129,7 +137,7 @@ def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> 
     # Set required environment variables
     monkeypatch.setenv("API_KEY", "test-cleanup-interval-key-1234567890")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
     # Import dependencies
     import asyncio

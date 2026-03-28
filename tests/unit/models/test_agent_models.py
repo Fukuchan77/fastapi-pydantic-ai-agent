@@ -3,7 +3,6 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models.agent import ChatOutput
 from app.models.agent import ChatRequest
 from app.models.agent import ChatResponse
 
@@ -76,40 +75,6 @@ class TestChatRequest:
         assert request.message == " "
 
 
-class TestChatOutput:
-    """Test suite for ChatOutput model."""
-
-    def test_chat_output_with_reply_only(self) -> None:
-        """ChatOutput should work with reply field only."""
-        output = ChatOutput(reply="Test response")
-        assert output.reply == "Test response"
-        assert output.tool_calls_made == 0
-
-    def test_chat_output_with_tool_calls(self) -> None:
-        """ChatOutput should accept tool_calls_made count."""
-        output = ChatOutput(reply="Result", tool_calls_made=2)
-        assert output.reply == "Result"
-        assert output.tool_calls_made == 2
-
-    def test_chat_output_reply_is_required(self) -> None:
-        """ChatOutput should require reply field."""
-        with pytest.raises(ValidationError) as exc_info:
-            ChatOutput()  # type: ignore
-
-        errors = exc_info.value.errors()
-        assert any(e["loc"] == ("reply",) and e["type"] == "missing" for e in errors)
-
-    def test_chat_output_tool_calls_defaults_to_zero(self) -> None:
-        """ChatOutput should default tool_calls_made to 0."""
-        output = ChatOutput(reply="Test")
-        assert output.tool_calls_made == 0
-
-    def test_chat_output_tool_calls_can_be_zero(self) -> None:
-        """ChatOutput should accept 0 tool calls."""
-        output = ChatOutput(reply="Test", tool_calls_made=0)
-        assert output.tool_calls_made == 0
-
-
 class TestChatResponse:
     """Test suite for ChatResponse model."""
 
@@ -177,14 +142,6 @@ class TestAgentModelFieldTypes:
         # Invalid: number
         with pytest.raises(ValidationError):
             ChatRequest(message="Test", session_id=123)  # type: ignore
-
-    def test_chat_output_tool_calls_must_be_int(self) -> None:
-        """ChatOutput tool_calls_made must be integer."""
-        with pytest.raises(ValidationError) as exc_info:
-            ChatOutput(reply="Test", tool_calls_made="not-an-int")  # type: ignore
-
-        errors = exc_info.value.errors()
-        assert any(e["loc"] == ("tool_calls_made",) for e in errors)
 
     def test_chat_response_tool_calls_must_be_int(self) -> None:
         """ChatResponse tool_calls_made must be integer."""

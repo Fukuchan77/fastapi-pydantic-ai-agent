@@ -14,7 +14,7 @@ class TestLifespanManagement:
     async def test_lifespan_initializes_session_store(self, monkeypatch) -> None:
         """Lifespan must initialize session_store in app.state."""
         # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
 
@@ -32,7 +32,7 @@ class TestLifespanManagement:
     async def test_session_cleanup_task_is_running(self, monkeypatch) -> None:
         """Lifespan must start a background cleanup task for expired sessions."""
         # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
 
@@ -81,7 +81,7 @@ class TestLifespanManagement:
     async def test_lifespan_cleanup_cancels_background_task(self, monkeypatch) -> None:
         """Lifespan shutdown must cancel the cleanup background task."""
         # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
 
@@ -120,7 +120,7 @@ class TestLifespanManagement:
     ) -> None:
         """Lifespan must configure Logfire observability during startup."""
         # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
         monkeypatch.setenv("LOGFIRE_TOKEN", "test-logfire-token")

@@ -2,7 +2,7 @@
 
 from fastapi import Request
 
-from app.agents.chat_agent import _build_model
+from app.agents.chat_agent import build_model
 from app.config import get_settings
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 
@@ -22,7 +22,7 @@ def get_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
         vector store and LLM settings.
     """
     settings = get_settings()
-    model = _build_model(settings)
+    model = build_model(settings)
 
     return CorrectiveRAGWorkflow(
         vector_store=req.app.state.vector_store,

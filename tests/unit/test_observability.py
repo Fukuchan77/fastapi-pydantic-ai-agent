@@ -3,6 +3,9 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 from app.observability import configure_logfire
 
@@ -20,9 +23,9 @@ class TestConfigureLogfire:
         """Test configure_logfire() calls logfire.configure() when token is provided."""
         # Arrange
         settings = Settings(
-            api_key="test-key",
+            api_key="test-api-key-12345",
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key",
+            llm_api_key="test-llm-key-12345",
             logfire_token="test-logfire-token",  # noqa: S106
             logfire_service_name="test-service",
         )
@@ -47,9 +50,9 @@ class TestConfigureLogfire:
         """Test configure_logfire() skips logfire.configure() when token is None."""
         # Arrange
         settings = Settings(
-            api_key="test-key",
+            api_key="test-api-key-12345",
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key",
+            llm_api_key="test-llm-key-12345",
             logfire_token=None,
             logfire_service_name="test-service",
         )
@@ -61,26 +64,24 @@ class TestConfigureLogfire:
         mock_configure.assert_not_called()
         mock_instrument_pydantic.assert_called_once()
 
-    @patch("app.observability.logfire.configure")
-    @patch("app.observability.logfire.instrument_pydantic_ai")
-    def test_configure_logfire_empty_token(
+    def test_configure_logfire_empty_token_raises_validation_error(
         self,
-        mock_instrument_pydantic: MagicMock,
-        mock_configure: MagicMock,
     ) -> None:
-        """Test configure_logfire() skips logfire.configure() when token is empty string."""
-        # Arrange
-        settings = Settings(
-            api_key="test-key",
-            llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key",
-            logfire_token="",
-            logfire_service_name="test-service",
-        )
+        """Test that empty logfire_token raises ValidationError during Settings construction."""
+        # Arrange & Act & Assert
+        # Task 16.13 added validation that rejects empty or whitespace-only tokens
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                api_key="test-api-key-12345",
+                llm_model="openai:gpt-4o",
+                llm_api_key="test-llm-key-12345",
+                logfire_token="",  # Empty string should be rejected
+                logfire_service_name="test-service",
+            )
 
-        # Act
-        configure_logfire(settings)
-
-        # Assert
-        mock_configure.assert_not_called()
-        mock_instrument_pydantic.assert_called_once()
+        # Verify the error is about logfire_token field
+        errors = exc_info.value.errors()
+        assert any(error["loc"] == ("logfire_token",) for error in errors)
+        # Check that the error message mentions "cannot be empty"
+        error_messages = [str(error.get("ctx", {}).get("error", "")) for error in errors]
+        assert any("cannot be empty" in msg for msg in error_messages)

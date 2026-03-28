@@ -18,9 +18,9 @@ def test_enable_mock_tools_blocked_in_production(monkeypatch: pytest.MonkeyPatch
     """
     # Arrange: Set production environment
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
     monkeypatch.setenv("ENABLE_MOCK_TOOLS", "true")
 
     # Act & Assert: Should raise ValidationError
@@ -37,9 +37,9 @@ def test_enable_mock_tools_allowed_in_development(monkeypatch: pytest.MonkeyPatc
     """Test that enable_mock_tools=True is allowed when APP_ENV=development."""
     # Arrange: Set development environment
     monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
     monkeypatch.setenv("ENABLE_MOCK_TOOLS", "true")
 
     # Act: Should succeed
@@ -55,9 +55,9 @@ def test_enable_mock_tools_allowed_when_false_in_production(
     """Test that enable_mock_tools=False is allowed in production."""
     # Arrange: Set production environment with mock tools disabled
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
     monkeypatch.setenv("ENABLE_MOCK_TOOLS", "false")
 
     # Act: Should succeed
@@ -70,9 +70,9 @@ def test_enable_mock_tools_allowed_when_false_in_production(
 def test_enable_mock_tools_defaults_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that enable_mock_tools defaults to False when not set."""
     # Arrange: Don't set ENABLE_MOCK_TOOLS
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
 
     # Act: Should succeed
     settings = Settings()
@@ -84,9 +84,9 @@ def test_enable_mock_tools_defaults_to_false(monkeypatch: pytest.MonkeyPatch) ->
 def test_app_env_defaults_to_development_when_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that APP_ENV defaults to 'development' when not set, allowing mock tools."""
     # Arrange: Don't set APP_ENV, but enable mock tools
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
     monkeypatch.setenv("ENABLE_MOCK_TOOLS", "true")
 
     # Act: Should succeed (defaults to development)

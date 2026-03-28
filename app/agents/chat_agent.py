@@ -21,20 +21,36 @@ if TYPE_CHECKING:
     pass
 
 
-def _build_model(settings: Settings) -> Model:
+def build_model(settings: Settings) -> Model:
     """Build a Model instance from settings based on the provider.
 
     Supports multiple providers: openai, anthropic, ollama, groq.
     The provider is determined from the llm_model format "provider:model".
 
+    Provider-specific behavior:
+        - openai: Uses OpenAI API or Azure OpenAI (if llm_base_url provided)
+        - anthropic: Uses Anthropic Claude API
+        - groq: Uses Groq's fast inference API
+        - ollama: Uses local Ollama server (defaults to http://localhost:11434/v1)
+
+    API key handling:
+        - Cloud providers (openai, anthropic, groq): llm_api_key is required
+        - Local providers (ollama): llm_api_key is optional (uses dummy key)
+
     Args:
-        settings: Settings instance with LLM configuration.
+        settings: Settings instance with LLM configuration (llm_model, llm_api_key, llm_base_url).
 
     Returns:
         Configured Model instance for the specified provider.
 
     Raises:
-        ValueError: If the provider is not supported.
+        ValueError: If the provider is not supported or configuration is invalid.
+
+    Example:
+        >>> from app.config import get_settings
+        >>> settings = get_settings()
+        >>> model = build_model(settings)
+        >>> # Model is now ready for use with Pydantic AI Agent
     """
     # Extract provider and model from llm_model format "provider:model"
     llm_model = settings.llm_model
@@ -55,8 +71,9 @@ def _build_model(settings: Settings) -> Model:
 
         # AnthropicModel uses AnthropicProvider to configure API key
         # Similar pattern to OpenAI provider
+        # Task 16.7: Extract secret value from SecretStr
         if settings.llm_api_key:
-            provider = AnthropicProvider(api_key=settings.llm_api_key)
+            provider = AnthropicProvider(api_key=settings.llm_api_key.get_secret_value())
             return AnthropicModel(model_name, provider=provider)
         else:
             # Use default provider (reads from ANTHROPIC_API_KEY environment variable)
@@ -69,8 +86,9 @@ def _build_model(settings: Settings) -> Model:
 
         # GroqModel uses GroqProvider to configure API key
         # Similar pattern to OpenAI provider
+        # Task 16.7: Extract secret value from SecretStr
         if settings.llm_api_key:
-            provider = GroqProvider(api_key=settings.llm_api_key)
+            provider = GroqProvider(api_key=settings.llm_api_key.get_secret_value())
             return GroqModel(model_name, provider=provider)
         else:
             # Use default provider (reads from GROQ_API_KEY environment variable)
@@ -82,9 +100,15 @@ def _build_model(settings: Settings) -> Model:
         from pydantic_ai.providers.openai import OpenAIProvider
 
         base_url = settings.llm_base_url or "http://localhost:11434/v1"
+        # Task 16.7: Extract secret value from SecretStr or use dummy key for local provider
+        api_key = (
+            settings.llm_api_key.get_secret_value()
+            if settings.llm_api_key
+            else _LOCAL_PROVIDER_DUMMY_KEY
+        )
         provider = OpenAIProvider(
             base_url=str(base_url),
-            api_key=settings.llm_api_key or _LOCAL_PROVIDER_DUMMY_KEY,
+            api_key=api_key,
         )
         return OpenAIChatModel(model_name, provider=provider)
 
@@ -95,13 +119,20 @@ def _build_model(settings: Settings) -> Model:
 
         if settings.llm_base_url:
             # Custom base URL (e.g., Azure OpenAI)
+            # Task 16.7: Extract secret value from SecretStr or use dummy key
+            api_key = (
+                settings.llm_api_key.get_secret_value()
+                if settings.llm_api_key
+                else _LOCAL_PROVIDER_DUMMY_KEY
+            )
             provider = OpenAIProvider(
                 base_url=str(settings.llm_base_url),
-                api_key=settings.llm_api_key or _LOCAL_PROVIDER_DUMMY_KEY,
+                api_key=api_key,
             )
             return OpenAIChatModel(model_name, provider=provider)
         elif settings.llm_api_key:
-            provider = OpenAIProvider(api_key=settings.llm_api_key)
+            # Task 16.7: Extract secret value from SecretStr
+            provider = OpenAIProvider(api_key=settings.llm_api_key.get_secret_value())
             return OpenAIChatModel(model_name, provider=provider)
         else:
             # Use default provider (reads from environment)
@@ -135,20 +166,33 @@ def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
 
     This factory creates an Agent instance configured with:
     - AgentDeps for dependency injection into tools
-    - ChatOutput as the structured response type
+    - str as the output type (simple text responses)
     - Configurable output retries for validation failures
     - Dynamic system prompt builder
-    - Registered tools (example_web_search)
+    - Registered mock tools (when enabled in non-production environments)
+
+    The agent is instrumented with Logfire for observability, automatically
+    tracking all agent runs, tool calls, and token usage.
 
     Args:
         model: Optional model to use. If None, builds from Settings.
             Accepts Model instance or string identifier.
 
     Returns:
-        Configured Agent[AgentDeps, ChatOutput] instance.
+        Configured Agent[AgentDeps, str] instance ready for use.
+
+    Example:
+        >>> # Build with default settings
+        >>> agent = build_chat_agent()
+        >>> # Run the agent
+        >>> from app.agents.deps import AgentDeps
+        >>> deps = AgentDeps(...)
+        >>> result = await agent.run("Hello!", deps=deps)
+        >>> print(result.output)
+        "Hello! How can I help you today?"
     """
     settings = get_settings()
-    resolved_model = model if model is not None else _build_model(settings)
+    resolved_model = model if model is not None else build_model(settings)
 
     agent: Agent[AgentDeps, str] = Agent(
         model=resolved_model,

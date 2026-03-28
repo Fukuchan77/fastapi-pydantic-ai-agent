@@ -16,8 +16,15 @@ from app.models.errors import ErrorResponse
 logger = logging.getLogger(__name__)
 
 
-# Define APIKeyHeader security scheme
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+# Task 16.5: Define APIKeyHeader security scheme with description for OpenAPI documentation
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+    description=(
+        "API key for authentication. Include this key in the X-API-Key header "
+        "for all requests to protected endpoints. Contact your administrator to obtain an API key."
+    ),
+)
 
 
 async def verify_api_key(
@@ -43,7 +50,8 @@ async def verify_api_key(
     """
     # Task 16.28: Use constant-time comparison to prevent timing attacks
     # secrets.compare_digest() requires both arguments to be strings
-    if api_key is None or not secrets.compare_digest(api_key, settings.api_key):
+    # Task 16.7: Extract secret value from SecretStr for comparison
+    if api_key is None or not secrets.compare_digest(api_key, settings.api_key.get_secret_value()):
         # Log authentication failure for security monitoring
         # Do NOT log the actual API key values (security risk)
         request_id = request_id_var.get()
@@ -58,7 +66,8 @@ async def verify_api_key(
                 request_id,
             )
 
+        # Task 16.9: Add error code for programmatic error handling
         raise HTTPException(
             status_code=401,
-            detail=ErrorResponse(message="Unauthorized").model_dump(),
+            detail=ErrorResponse(message="Unauthorized", code="UNAUTHORIZED").model_dump(),
         )

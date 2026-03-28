@@ -62,9 +62,9 @@ class TestChatEndpoint:
         RED PHASE: Test basic chat request without session management.
         """
         # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         # Mock the agent result
         mock_result = MagicMock()
@@ -102,7 +102,7 @@ class TestChatEndpoint:
                 response = client.post(
                     "/v1/agent/chat",
                     json={"message": "Hi"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -120,9 +120,9 @@ class TestChatEndpoint:
 
         RED PHASE: Test chat request with session management.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         # Mock existing history
         existing_history = [
@@ -167,7 +167,7 @@ class TestChatEndpoint:
                         "message": "Current message",
                         "session_id": "test-session-123",
                     },
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -185,9 +185,9 @@ class TestChatEndpoint:
 
         RED PHASE: Test tool_calls_made counting logic.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         # Mock result with tool calls
         # Note: Pydantic AI messages with ToolCallPart have kind="response"
@@ -232,7 +232,7 @@ class TestChatEndpoint:
                 response = client.post(
                     "/v1/agent/chat",
                     json={"message": "Use tools"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -250,9 +250,9 @@ class TestStreamEndpoint:
 
         RED PHASE: Test basic streaming without session management.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         mock_result = MagicMock()
 
@@ -293,7 +293,7 @@ class TestStreamEndpoint:
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "Hi"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -320,9 +320,9 @@ class TestStreamEndpoint:
 
         RED PHASE: Test streaming with session management.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         existing_history = [
             ModelRequest(parts=[UserPromptPart(content="Previous")]),
@@ -367,7 +367,7 @@ class TestStreamEndpoint:
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "Current", "session_id": "test-session-456"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -387,9 +387,9 @@ class TestStreamEndpoint:
 
         RED PHASE: Test that CancelledError is logged and re-raised correctly.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         mock_result = MagicMock()
 
@@ -425,7 +425,7 @@ class TestStreamEndpoint:
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "Test message"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 # Stream should start successfully
@@ -449,9 +449,9 @@ class TestStreamEndpoint:
 
         RED PHASE: Test that ValueError results in a user-friendly error event.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         mock_result = MagicMock()
 
@@ -486,7 +486,7 @@ class TestStreamEndpoint:
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "Test"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -508,9 +508,9 @@ class TestStreamEndpoint:
 
         RED PHASE: Test that unexpected errors are logged and return generic message.
         """
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
         mock_result = MagicMock()
 
@@ -545,7 +545,7 @@ class TestStreamEndpoint:
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "Test"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200

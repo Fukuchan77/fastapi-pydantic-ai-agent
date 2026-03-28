@@ -17,9 +17,9 @@ from app.middleware.request_id import request_id_var
 def mock_settings() -> Settings:
     """Create mock Settings instance with a test API key."""
     return Settings(
-        api_key="test-secret-key",
+        api_key="test-secret-key-1234567",
         llm_model="openai:gpt-4o",
-        llm_api_key="sk-test",
+        llm_api_key="sk-test-123456789",
     )
 
 
@@ -78,7 +78,7 @@ async def test_valid_api_key_does_not_log(
 
     # Act: Call verify_api_key with correct key
     with caplog.at_level(logging.WARNING):
-        await verify_api_key(api_key="test-secret-key", settings=mock_settings)
+        await verify_api_key(api_key="test-secret-key-1234567", settings=mock_settings)
 
     # Assert: No warning was logged
     assert len(caplog.records) == 0
@@ -100,8 +100,8 @@ async def test_auth_failure_does_not_log_api_key(
     # Assert: The actual API key value is not in the log message
     log_message = caplog.records[0].message
     assert "wrong-key" not in log_message
-    assert "test-secret-key" not in log_message
-    assert "sk-test" not in log_message
+    assert "test-secret-key-1234567" not in log_message
+    assert "sk-test-123456789" not in log_message
 
 
 @pytest.mark.asyncio

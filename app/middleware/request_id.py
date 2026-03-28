@@ -1,5 +1,6 @@
 """Request ID middleware for distributed tracing."""
 
+import re
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -13,6 +14,11 @@ from starlette.types import ASGIApp
 
 # Context variable to store request ID for the current request
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+
+# Regex pattern for valid request ID format (alphanumeric, hyphens, underscores, 1-64 chars)
+# Prevents CRLF injection (CWE-113) by rejecting any characters that could be used for
+# HTTP header injection attacks (newlines, carriage returns, etc.)
+REQUEST_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -52,8 +58,13 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response with X-Request-ID header
         """
-        # Use existing X-Request-ID header if provided, otherwise generate new UUID
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        # Use existing X-Request-ID header if valid, otherwise generate new UUID
+        # Validation prevents HTTP header injection attacks (CWE-113)
+        client_request_id = request.headers.get("X-Request-ID", "")
+        if client_request_id and REQUEST_ID_PATTERN.match(client_request_id):
+            request_id = client_request_id
+        else:
+            request_id = str(uuid.uuid4())
 
         # Store request ID in context variable for access during request processing
         request_id_var.set(request_id)

@@ -28,9 +28,9 @@ async def test_stream_logs_session_save_failure(monkeypatch: pytest.MonkeyPatch)
     specific logging about the save failure.
     """
     # Set required environment variables for Settings
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")  # Must follow 'provider:model' format
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")  # Required for cloud providers
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")  # Required for cloud providers
 
     # Mock the streaming result
     mock_result = MagicMock()
@@ -84,7 +84,7 @@ async def test_stream_logs_session_save_failure(monkeypatch: pytest.MonkeyPatch)
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "test", "session_id": "test-session"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 # Response should be 200 (streaming starts successfully)
@@ -121,9 +121,9 @@ async def test_stream_handles_session_save_validation_error(
     with enough context to debug the issue.
     """
     # Set required environment variables for Settings
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")  # Must follow 'provider:model' format
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")  # Required for cloud providers
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")  # Required for cloud providers
 
     mock_result = MagicMock()
 
@@ -171,7 +171,7 @@ async def test_stream_handles_session_save_validation_error(
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "test", "session_id": "test-session"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200
@@ -204,9 +204,9 @@ async def test_stream_handles_unexpected_session_save_error(
     for unexpected errors during session save (not ValueError).
     """
     # Set required environment variables for Settings
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
     mock_result = MagicMock()
 
@@ -252,7 +252,7 @@ async def test_stream_handles_unexpected_session_save_error(
                 response = client.post(
                     "/v1/agent/stream",
                     json={"message": "test", "session_id": "test-session"},
-                    headers={"X-API-Key": "test-key"},
+                    headers={"X-API-Key": "test-api-key-12345"},
                 )
 
                 assert response.status_code == 200

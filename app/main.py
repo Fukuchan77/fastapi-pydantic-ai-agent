@@ -17,6 +17,7 @@ from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import get_settings
+from app.logging_config import configure_logging
 from app.middleware.cors import CORSMiddleware
 from app.middleware.rate_limit import add_rate_limiting
 from app.middleware.request_id import RequestIDMiddleware
@@ -58,20 +59,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         # Task 2.6: Initialize settings from environment variables
         app.state.settings = get_settings()
+
+        # Task 16.8: Configure Python logging at startup
+        # This must be done early, before any logging occurs
+        configure_logging(app.state.settings)
+        logger.info("Configured Python logging")
+
         logger.info("Initialized application settings")
 
         # Task 2.6: Initialize HTTP client for agent tool usage
         # Task 16.26: Configure timeout to prevent indefinite hangs
-        # HIGH FIX: Use configurable timeout values from settings
+        # Task 16.6: Configure connection pooling limits
         app.state.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 app.state.settings.http_timeout, connect=app.state.settings.http_connect_timeout
-            )
+            ),
+            limits=httpx.Limits(
+                max_connections=app.state.settings.http_max_connections,
+                max_keepalive_connections=app.state.settings.http_max_keepalive_connections,
+            ),
         )
         logger.info(
-            "Initialized HTTP client with %ss timeout (%ss connect)",
+            "Initialized HTTP client with %ss timeout (%ss connect), "
+            "max_connections=%d, max_keepalive=%d",
             app.state.settings.http_timeout,
             app.state.settings.http_connect_timeout,
+            app.state.settings.http_max_connections,
+            app.state.settings.http_max_keepalive_connections,
         )
     except Exception as e:
         logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
@@ -149,10 +163,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="fastapi-pydantic-ai-agent",
-    description="Agentic AI framework with FastAPI, Pydantic AI, and LlamaIndex Workflows",
+    title="FastAPI Pydantic AI Agent",
+    description=(
+        "Production-ready agentic AI framework combining FastAPI, "
+        "Pydantic AI, and LlamaIndex Workflows. "
+        "Features include:\n\n"
+        "- **Chat Agent**: Conversational AI with tool-calling capabilities "
+        "and session management\n"
+        "- **RAG System**: Corrective RAG workflow with TF-IDF vector store "
+        "for document retrieval\n"
+        "- **Streaming**: Server-Sent Events (SSE) streaming for real-time responses\n"
+        "- **Observability**: Integrated Logfire instrumentation for AI-native monitoring\n"
+        "- **Security**: API key authentication, CORS, rate limiting, and security headers\n\n"
+        "Built with enterprise features: connection pooling, request size limits, "
+        "comprehensive error handling, and production-ready configuration management."
+    ),
     version="0.1.0",
     lifespan=lifespan,
+    contact={
+        "name": "API Support",
+        "url": "https://github.com/yourusername/fastapi-pydantic-ai-agent",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 # Get settings for middleware configuration
@@ -250,7 +285,11 @@ async def unhandled_exception_handler(
     background_tasks.add_task(log_exception)
 
     # Return generic error message to client immediately (never expose internal details)
-    error_response = ErrorResponse(message="Internal server error occurred")
+    # Task 16.9: Add error code for programmatic error handling
+    error_response = ErrorResponse(
+        message="Internal server error occurred",
+        code="INTERNAL_ERROR",
+    )
     return JSONResponse(
         status_code=500,
         content=error_response.model_dump(),

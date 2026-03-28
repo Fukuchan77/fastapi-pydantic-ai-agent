@@ -15,6 +15,8 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Request
 from fastapi.responses import StreamingResponse
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import ToolCallPart
 
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
@@ -167,7 +169,14 @@ async def chat(
 
     # Return response
     # Count tool calls from message history
-    tool_calls_made = sum(1 for m in result.all_messages() if m.kind == "tool-call")
+    # Task 16.31: Count ToolCallPart instances in ModelResponse messages
+    tool_calls_made = sum(
+        1
+        for m in result.all_messages()
+        if isinstance(m, ModelResponse)
+        for p in m.parts
+        if isinstance(p, ToolCallPart)
+    )
 
     # Extract reply from result - handle both str output and Pydantic model output
     # When output_type is a Pydantic model with 'reply' field, use result.data.reply
@@ -176,7 +185,8 @@ async def chat(
         reply = result.data.reply
     else:
         # FunctionModel and simple str outputs use result.output
-        reply = str(result.output) if hasattr(result.output, "__str__") else result.output
+        # Task 16.32: Simplified - all Python objects have __str__, so no need for conditional
+        reply = str(result.output)
 
     return ChatResponse(
         reply=reply,

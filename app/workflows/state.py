@@ -6,6 +6,7 @@ isolated Context instance.
 """
 
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class WorkflowState(BaseModel):
@@ -25,6 +26,6 @@ class WorkflowState(BaseModel):
 
     query: str
     search_count: int = 0
-    max_retries: int = 3
+    max_retries: int = Field(default=3, ge=0, le=10)
     final_answer: str | None = None
     context_found: bool = False

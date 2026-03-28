@@ -21,9 +21,9 @@ from app.stores.session_store import InMemorySessionStore
 def settings() -> Settings:
     """Provide test settings with valid LLM configuration."""
     return Settings(
-        api_key="test-key",
+        api_key="test-api-key-12345",
         llm_model="openai:gpt-4",
-        llm_api_key="test-llm-key",
+        llm_api_key="test-llm-key-12345",
     )
 
 
@@ -69,9 +69,14 @@ class TestAgentSessionPersistence:
     ) -> None:
         """Session history should persist across multiple chat turns."""
         # Arrange: Set environment variables for Settings
-        monkeypatch.setenv("API_KEY", settings.api_key)
+        monkeypatch.setenv("API_KEY", settings.api_key.get_secret_value())
         monkeypatch.setenv("LLM_MODEL", settings.llm_model)
-        monkeypatch.setenv("LLM_API_KEY", settings.llm_api_key or "test-key")
+        llm_api_key_value = (
+            settings.llm_api_key.get_secret_value()
+            if settings.llm_api_key
+            else "test-api-key-12345"
+        )
+        monkeypatch.setenv("LLM_API_KEY", llm_api_key_value)
 
         # Build agent with mock LLM
         agent = build_chat_agent(model=mock_llm)
@@ -134,9 +139,14 @@ class TestAgentSessionPersistence:
     ) -> None:
         """Different session IDs should have isolated conversation history."""
         # Arrange: Set environment variables
-        monkeypatch.setenv("API_KEY", settings.api_key)
+        monkeypatch.setenv("API_KEY", settings.api_key.get_secret_value())
         monkeypatch.setenv("LLM_MODEL", settings.llm_model)
-        monkeypatch.setenv("LLM_API_KEY", settings.llm_api_key or "test-key")
+        llm_api_key_value = (
+            settings.llm_api_key.get_secret_value()
+            if settings.llm_api_key
+            else "test-api-key-12345"
+        )
+        monkeypatch.setenv("LLM_API_KEY", llm_api_key_value)
 
         # Build agent
         agent = build_chat_agent(model=mock_llm)
@@ -204,9 +214,14 @@ class TestAgentSessionPersistence:
     ) -> None:
         """Session history should preserve message ordering."""
         # Arrange: Set environment variables
-        monkeypatch.setenv("API_KEY", settings.api_key)
+        monkeypatch.setenv("API_KEY", settings.api_key.get_secret_value())
         monkeypatch.setenv("LLM_MODEL", settings.llm_model)
-        monkeypatch.setenv("LLM_API_KEY", settings.llm_api_key or "test-key")
+        llm_api_key_value = (
+            settings.llm_api_key.get_secret_value()
+            if settings.llm_api_key
+            else "test-api-key-12345"
+        )
+        monkeypatch.setenv("LLM_API_KEY", llm_api_key_value)
 
         # Build agent
         agent = build_chat_agent(model=mock_llm)
@@ -261,9 +276,14 @@ class TestAgentSessionPersistence:
     ) -> None:
         """Clearing a session should remove all history."""
         # Arrange: Set environment variables
-        monkeypatch.setenv("API_KEY", settings.api_key)
+        monkeypatch.setenv("API_KEY", settings.api_key.get_secret_value())
         monkeypatch.setenv("LLM_MODEL", settings.llm_model)
-        monkeypatch.setenv("LLM_API_KEY", settings.llm_api_key or "test-key")
+        llm_api_key_value = (
+            settings.llm_api_key.get_secret_value()
+            if settings.llm_api_key
+            else "test-api-key-12345"
+        )
+        monkeypatch.setenv("LLM_API_KEY", llm_api_key_value)
 
         # Create session with history
         agent = build_chat_agent(model=mock_llm)

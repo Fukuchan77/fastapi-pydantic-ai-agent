@@ -1,9 +1,10 @@
 """Application configuration using Pydantic Settings."""
 
-from functools import lru_cache
+from functools import cache
 
 from pydantic import Field
 from pydantic import HttpUrl
+from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -13,24 +14,104 @@ from pydantic_settings import SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings loaded from environment variables.
 
+    All settings are loaded from environment variables or a .env file.
+    The Settings class uses Pydantic Settings for validation and type safety,
+    ensuring configuration errors are caught at startup rather than runtime.
+
+    Security features:
+        - API key strength validation (minimum 16 characters, no placeholders)
+        - HTTPS enforcement for non-localhost URLs
+        - SecretStr for sensitive fields (prevents accidental logging)
+        - Extra field prohibition (catches typos in configuration)
+
     Required fields:
-        api_key: API key for X-API-Key authentication
-        llm_model: LLM model identifier (e.g., "openai:gpt-4o")
+        api_key: API key for X-API-Key authentication (16+ characters)
+        llm_model: LLM model identifier in "provider:model" format
+            (e.g., "openai:gpt-4o", "anthropic:claude-3-5-sonnet-20241022")
 
     Optional fields:
-        llm_api_key: API key for LLM provider (optional for local providers like Ollama)
-        llm_base_url: Custom base URL for LLM provider
-        max_output_retries: Number of retries for Pydantic AI output validation
-        logfire_token: Pydantic Logfire token for observability
-        logfire_service_name: Service name for Logfire traces
+        llm_api_key: API key for LLM provider (required for cloud providers,
+            optional for local providers like Ollama)
+        llm_base_url: Custom base URL for LLM provider (e.g., Azure OpenAI endpoint)
+        max_output_retries: Number of retries for Pydantic AI output validation (0-10)
+        logfire_token: Pydantic Logfire token for observability (16+ characters)
+        logfire_service_name: Service name for Logfire traces (default: "fastapi-pydantic-ai-agent")
+        app_env: Application environment (development, staging, production)
+        cors_origins: Allowed CORS origins (comma-separated or JSON array)
+        http_timeout: HTTP client timeout in seconds (1-120)
+        http_max_connections: Maximum HTTP connections in pool (1-500)
+        enable_mock_tools: Enable mock tools for development (forbidden in production)
+
+    Example:
+        >>> # Load from environment variables
+        >>> settings = get_settings()
+        >>> print(settings.llm_model)
+        "openai:gpt-4o"
+
+        >>> # Access with validation
+        >>> settings.api_key.get_secret_value()  # Extract secret value
+        "your-secure-api-key"
     """
 
     # Required fields
-    api_key: str = Field(
+    api_key: SecretStr = Field(
         ...,
         description="API key for X-API-Key authentication",
-        repr=False,
     )
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key_strength(cls, v: SecretStr) -> SecretStr:
+        """Validate api_key is not a placeholder and meets minimum strength.
+
+        Args:
+            v: The api_key value to validate
+
+        Returns:
+            SecretStr: The validated api_key value
+
+        Raises:
+            ValueError: If api_key is a placeholder or too weak
+        """
+        # Extract the secret value for validation
+        v_str = v.get_secret_value()
+        # Strip whitespace for validation
+        v_stripped = v_str.strip()
+
+        # Reject empty or whitespace-only keys
+        if not v_stripped:
+            raise ValueError("api_key cannot be empty or whitespace only")
+
+        # Define common placeholder values (case-insensitive)
+        placeholders = {
+            "your-api-key-here",
+            "changeme",
+            "change-me",
+            "test-key",
+            "example",
+            "replace-me",
+            "insert-key-here",
+            "api-key-here",
+        }
+
+        # Check if the key (lowercased) is a known placeholder
+        # This check must come BEFORE length check so placeholders are detected
+        # even if they happen to be 16+ characters (e.g., "your-api-key-here" is 19 chars)
+        if v_stripped.lower() in placeholders:
+            raise ValueError(
+                "api_key appears to be a placeholder value. "
+                "Please set a strong API key with at least 16 characters."
+            )
+
+        # Minimum length check (16 characters minimum for security)
+        if len(v_stripped) < 16:
+            raise ValueError(
+                f"api_key must be at least 16 characters long for security. "
+                f"Current length: {len(v_stripped)}"
+            )
+
+        return v
+
     llm_model: str = Field(..., description="LLM model identifier")
 
     @field_validator("llm_model")
@@ -77,11 +158,68 @@ class Settings(BaseSettings):
         return v
 
     # Optional fields
-    llm_api_key: str | None = Field(
+    llm_api_key: SecretStr | None = Field(
         default=None,
         description="API key for LLM provider (optional for local providers)",
-        repr=False,
     )
+
+    @field_validator("llm_api_key")
+    @classmethod
+    def validate_llm_api_key_strength(cls, v: SecretStr | None) -> SecretStr | None:
+        """Validate llm_api_key meets minimum strength requirements when provided.
+
+        Args:
+            v: The llm_api_key value to validate (can be None for local providers)
+
+        Returns:
+            SecretStr | None: The validated llm_api_key value
+
+        Raises:
+            ValueError: If llm_api_key is a placeholder or too weak
+        """
+        # None is allowed for local providers like Ollama
+        if v is None:
+            return v
+
+        # Extract the secret value for validation
+        v_str = v.get_secret_value()
+        # Strip whitespace for validation
+        v_stripped = v_str.strip()
+
+        # Reject empty or whitespace-only keys
+        if not v_stripped:
+            raise ValueError("llm_api_key cannot be empty or whitespace only")
+
+        # Define common placeholder values (case-insensitive)
+        placeholders = {
+            "your-api-key-here",
+            "changeme",
+            "change-me",
+            "test-key",
+            "example",
+            "replace-me",
+            "insert-key-here",
+            "api-key-here",
+        }
+
+        # Check if the key (lowercased) is a known placeholder
+        # This check must come BEFORE length check so placeholders are detected
+        # even if they happen to be 16+ characters (e.g., "your-api-key-here" is 19 chars)
+        if v_stripped.lower() in placeholders:
+            raise ValueError(
+                "llm_api_key appears to be a placeholder value. "
+                "Please set a strong LLM API key with at least 16 characters."
+            )
+
+        # Minimum length check (16 characters minimum for security)
+        if len(v_stripped) < 16:
+            raise ValueError(
+                f"llm_api_key must be at least 16 characters long for security. "
+                f"Current length: {len(v_stripped)}"
+            )
+
+        return v
+
     llm_base_url: HttpUrl | None = Field(
         default=None,
         description="Custom base URL for LLM provider (e.g., Ollama)",
@@ -142,6 +280,18 @@ class Settings(BaseSettings):
         le=60.0,
         description="HTTP client connection timeout in seconds",
     )
+    http_max_connections: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Maximum number of HTTP connections in the pool",
+    )
+    http_max_keepalive_connections: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum number of keep-alive HTTP connections in the pool",
+    )
     llm_retry_max_attempts: int = Field(
         default=3,
         ge=1,
@@ -197,11 +347,67 @@ class Settings(BaseSettings):
             return [v.strip()]
         return v
 
-    logfire_token: str | None = Field(
+    logfire_token: SecretStr | None = Field(
         default=None,
         description="Pydantic Logfire token for observability",
-        repr=False,
     )
+
+    @field_validator("logfire_token")
+    @classmethod
+    def validate_logfire_token_strength(cls, v: SecretStr | None) -> SecretStr | None:
+        """Validate logfire_token meets minimum strength requirements when provided.
+
+        Args:
+            v: The logfire_token value to validate (can be None)
+
+        Returns:
+            SecretStr | None: The validated logfire_token value
+
+        Raises:
+            ValueError: If logfire_token is a placeholder or too weak
+        """
+        # None is allowed for optional Logfire integration
+        if v is None:
+            return v
+
+        # Extract the secret value for validation
+        v_str = v.get_secret_value()
+        # Strip whitespace for validation
+        v_stripped = v_str.strip()
+
+        # Reject empty or whitespace-only tokens
+        if not v_stripped:
+            raise ValueError("logfire_token cannot be empty or whitespace only")
+
+        # Define common placeholder values (case-insensitive)
+        placeholders = {
+            "your-token-here",
+            "your-logfire-token-here",
+            "changeme",
+            "change-me",
+            "test-token",
+            "example",
+            "replace-me",
+            "insert-token-here",
+            "token-here",
+        }
+
+        # Check if the token (lowercased) is a known placeholder
+        if v_stripped.lower() in placeholders:
+            raise ValueError(
+                "logfire_token appears to be a placeholder value. "
+                "Please set a valid Logfire token with at least 16 characters."
+            )
+
+        # Minimum length check (16 characters minimum for security)
+        if len(v_stripped) < 16:
+            raise ValueError(
+                f"logfire_token must be at least 16 characters long for security. "
+                f"Current length: {len(v_stripped)}"
+            )
+
+        return v
+
     logfire_service_name: str = Field(
         default="fastapi-pydantic-ai-agent",
         description="Service name for Logfire traces",
@@ -257,13 +463,36 @@ class Settings(BaseSettings):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_keepalive_connections_limit(self) -> "Settings":
+        """Validate that keepalive connections do not exceed total connections.
+
+        Task 16.6: Connection pool configuration validation.
+        The number of keepalive connections in the pool cannot exceed the
+        maximum total connections, as this would be a logical contradiction.
+
+        Returns:
+            Settings: The validated settings instance
+
+        Raises:
+            ValueError: If http_max_keepalive_connections > http_max_connections
+        """
+        if self.http_max_keepalive_connections > self.http_max_connections:
+            raise ValueError(
+                f"http_max_keepalive_connections ({self.http_max_keepalive_connections}) "
+                f"cannot exceed http_max_connections ({self.http_max_connections}). "
+                "Keepalive connections are a subset of total connections."
+            )
+
+        return self
+
     model_config = SettingsConfigDict(
         env_file=".env",
-        extra="ignore",
+        extra="forbid",
     )
 
 
-@lru_cache(maxsize=1)
+@cache
 def get_settings() -> Settings:
     """Get cached Settings instance.
 

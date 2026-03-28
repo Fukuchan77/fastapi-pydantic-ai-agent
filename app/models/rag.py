@@ -7,7 +7,7 @@ from pydantic import Field
 class IngestRequest(BaseModel):
     """Request model for document ingestion."""
 
-    chunks: list[str] = Field(..., min_length=1)
+    chunks: list[str] = Field(..., min_length=1, max_length=1000)
 
 
 class IngestResponse(BaseModel):

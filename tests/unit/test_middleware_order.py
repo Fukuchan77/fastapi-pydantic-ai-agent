@@ -28,7 +28,7 @@ def test_request_id_in_413_response() -> None:
     response = client.post(
         "/v1/agent/chat",
         json=large_payload,
-        headers={"X-API-Key": "test-api-key"},
+        headers={"X-API-Key": "test-api-key-12345"},
     )
 
     # Should return 413
@@ -62,9 +62,9 @@ def test_request_id_propagates_to_error_responses(monkeypatch: pytest.MonkeyPatc
     This ensures middleware order is correct for all response types.
     """
     # Set required environment variables for Settings
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
     # Use context manager to run lifespan and initialize app.state
     with TestClient(app) as client:

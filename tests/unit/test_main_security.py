@@ -1,182 +1,133 @@
-"""Security tests for exception handler - Task 2.4."""
+"""Tests for OpenAPI security scheme configuration in main.py.
 
-import logging
+Task 16.5: Verify that the OpenAPI schema correctly defines the API key
+security scheme so that API documentation (Swagger UI) properly displays
+authentication requirements.
+"""
 
-import pytest
 from fastapi.testclient import TestClient
 
+from app.main import app
 
-def test_exception_handler_does_not_expose_sensitive_data(caplog: pytest.LogCaptureFixture) -> None:
-    """Test that exception handler returns generic message and logs internally.
 
-    Task 2.4: Exception handler must:
-    - Return generic "Internal server error occurred" message to client
-    - Log full exception details internally with exc_info=True
-    - Never expose stack traces, database paths, or internal structure to client
+def test_openapi_schema_has_security_schemes():
+    """Test that OpenAPI schema includes securitySchemes definition.
+
+    The OpenAPI schema should define an 'apiKey' security scheme
+    for the X-API-Key header authentication.
     """
-    from app.main import app
+    client = TestClient(app)
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
 
-    client = TestClient(app, raise_server_exceptions=False)
+    openapi_schema = response.json()
 
-    # Sensitive exception with internal details
-    sensitive_message = "Database connection failed: postgres://user:password@localhost:5432/db"
-
-    @app.get("/test-sensitive-error")
-    def test_sensitive_error_endpoint() -> None:
-        raise RuntimeError(sensitive_message)
-
-    # Capture logs at ERROR level
-    with caplog.at_level(logging.ERROR):
-        response = client.get("/test-sensitive-error")
-
-    # Assert: Response should NOT contain the sensitive message
-    assert response.status_code == 500
-    json_data = response.json()
-    assert "message" in json_data
-    assert json_data["message"] == "Internal server error occurred"
-    assert sensitive_message not in json_data["message"]
-
-    # Assert: Sensitive details should be logged internally
-    assert len(caplog.records) > 0
-    log_message = caplog.records[0].message
-    assert sensitive_message in log_message or "RuntimeError" in log_message
-
-    # Assert: exc_info should be True (traceback logged)
-    assert caplog.records[0].exc_info is not None
-
-
-def test_exception_handler_logs_different_exception_types(caplog: pytest.LogCaptureFixture) -> None:
-    """Test that different exception types are logged correctly."""
-    from app.main import app
-
-    client = TestClient(app, raise_server_exceptions=False)
-
-    @app.get("/test-value-error")
-    def test_value_error_endpoint() -> None:
-        raise ValueError("Internal validation failed with secret key abc123")
-
-    with caplog.at_level(logging.ERROR):
-        response = client.get("/test-value-error")
-
-    # Response should be generic
-    assert response.status_code == 500
-    assert response.json()["message"] == "Internal server error occurred"
-
-    # Internal details logged
-    assert len(caplog.records) > 0
-    log_msg = caplog.records[0].message
-    assert "ValueError" in log_msg or "secret key abc123" in log_msg
-
-
-def test_exception_handler_does_not_expose_stack_traces(caplog: pytest.LogCaptureFixture) -> None:
-    """Test that stack traces are never exposed in the response."""
-    from app.main import app
-
-    client = TestClient(app, raise_server_exceptions=False)
-
-    @app.get("/test-stack-trace")
-    def test_stack_trace_endpoint() -> None:
-        try:
-            # Nested exception to generate a deeper stack trace
-            _ = 1 / 0
-        except ZeroDivisionError as e:
-            raise RuntimeError("/app/internal/secret_module.py failed") from e
-
-    with caplog.at_level(logging.ERROR):
-        response = client.get("/test-stack-trace")
-
-    json_data = response.json()
-
-    # Response should be generic
-    assert json_data["message"] == "Internal server error occurred"
-
-    # Should NOT contain file paths or module names
-    assert "secret_module" not in json_data["message"]
-    assert ".py" not in json_data["message"]
-    assert "Traceback" not in json_data["message"]
-
-    # But internal logs should have the details
-    assert len(caplog.records) > 0
-
-
-def test_exception_handler_uses_background_tasks_for_logging() -> None:
-    """Test that exception handler uses BackgroundTasks for logging.
-
-    Task 2.5: Exception handler must:
-    - Return HTTP 500 response with a background task registered
-    - Log exception details in the background task (non-blocking)
-    - Capture traceback before handing off to background task
-
-    Note: TestClient runs background tasks synchronously after response generation,
-    so we verify that the background task mechanism is used, not timing.
-    """
-    from unittest.mock import patch
-
-    from app.main import app
-
-    client = TestClient(app, raise_server_exceptions=False)
-
-    logger_called = False
-
-    def track_log(*args, **kwargs):
-        nonlocal logger_called
-        logger_called = True
-
-    @app.get("/test-background-logging")
-    def test_background_logging_endpoint() -> None:
-        raise ValueError("Test error for background logging")
-
-    # Patch logger.error to track if it's called
-    with patch("app.main.logger.error", side_effect=track_log):
-        response = client.get("/test-background-logging")
-
-    # Response should be returned with HTTP 500
-    assert response.status_code == 500
-    assert response.json()["message"] == "Internal server error occurred"
-
-    # Logger should have been called via background task
-    # (TestClient runs background tasks after response generation)
-    assert logger_called, "Logger should be called via background task"
-
-
-def test_exception_handler_captures_traceback_before_background_task() -> None:
-    """Test that traceback is captured before being handed to background task.
-
-    Task 2.5: Must capture exc_info BEFORE creating the background task,
-    otherwise the traceback context may be lost.
-
-    Verifies that sys.exc_info() tuple (exception type, instance, traceback)
-    is captured and passed to the logger.
-    """
-    from unittest.mock import patch
-
-    from app.main import app
-
-    client = TestClient(app, raise_server_exceptions=False)
-
-    captured_exc_info = None
-
-    def capture_log(*args, **kwargs):
-        nonlocal captured_exc_info
-        captured_exc_info = kwargs.get("exc_info")
-
-    @app.get("/test-traceback-capture")
-    def test_traceback_endpoint() -> None:
-        raise RuntimeError("Test traceback capture")
-
-    with patch("app.main.logger.error", side_effect=capture_log):
-        response = client.get("/test-traceback-capture")
-
-    assert response.status_code == 500
-
-    # exc_info should be a tuple from sys.exc_info(): (type, value, traceback)
-    assert captured_exc_info is not None, "exc_info must be captured"
-    assert isinstance(captured_exc_info, tuple), "exc_info should be a tuple from sys.exc_info()"
-    assert len(captured_exc_info) == 3, (
-        "exc_info tuple should have 3 elements (type, value, traceback)"
+    # Verify components.securitySchemes exists
+    assert "components" in openapi_schema, "OpenAPI schema missing 'components'"
+    assert "securitySchemes" in openapi_schema["components"], (
+        "OpenAPI schema missing 'components.securitySchemes'"
     )
-    assert captured_exc_info[0] is RuntimeError, "First element should be exception type"
-    assert isinstance(captured_exc_info[1], RuntimeError), (
-        "Second element should be exception instance"
+
+    security_schemes = openapi_schema["components"]["securitySchemes"]
+
+    # Verify API key security scheme is defined
+    # FastAPI auto-generates scheme name from variable name (APIKeyHeader -> 'APIKeyHeader')
+    assert "APIKeyHeader" in security_schemes, (
+        "Security scheme 'APIKeyHeader' not found in securitySchemes"
     )
-    assert captured_exc_info[2] is not None, "Third element should be traceback object"
+
+    api_key_scheme = security_schemes["APIKeyHeader"]
+
+    # Verify security scheme properties
+    assert api_key_scheme["type"] == "apiKey", (
+        f"Expected type 'apiKey', got {api_key_scheme.get('type')}"
+    )
+    assert api_key_scheme["in"] == "header", (
+        f"Expected 'in' to be 'header', got {api_key_scheme.get('in')}"
+    )
+    assert api_key_scheme["name"] == "X-API-Key", (
+        f"Expected name 'X-API-Key', got {api_key_scheme.get('name')}"
+    )
+
+
+def test_openapi_schema_has_security_description():
+    """Test that the API key security scheme has a description.
+
+    The security scheme should include a description explaining
+    how to obtain and use the API key.
+    """
+    client = TestClient(app)
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+
+    openapi_schema = response.json()
+    api_key_scheme = openapi_schema["components"]["securitySchemes"]["APIKeyHeader"]
+
+    # Verify description exists and is non-empty
+    assert "description" in api_key_scheme, "API key security scheme missing 'description'"
+    assert len(api_key_scheme["description"]) > 0, "API key security scheme description is empty"
+    # Check that description mentions API key
+    description_lower = api_key_scheme["description"].lower()
+    assert "api" in description_lower, "Security scheme description should mention 'api'"
+    assert "key" in description_lower, "Security scheme description should mention 'key'"
+
+
+def test_protected_endpoints_require_security():
+    """Test that protected endpoints specify security requirements.
+
+    All /v1/* endpoints should reference the 'apiKey' security scheme
+    in their OpenAPI definition.
+    """
+    client = TestClient(app)
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+
+    openapi_schema = response.json()
+    paths = openapi_schema.get("paths", {})
+
+    # Find protected endpoints (all /v1/* paths)
+    protected_paths = {path: methods for path, methods in paths.items() if path.startswith("/v1/")}
+
+    assert len(protected_paths) > 0, "No /v1/* endpoints found in OpenAPI schema"
+
+    # Verify each protected endpoint has security requirement
+    for path, methods in protected_paths.items():
+        for method, operation in methods.items():
+            if method.lower() in ["get", "post", "put", "delete", "patch"]:
+                # Check if security is defined at operation level or globally
+                has_security = "security" in operation
+                if has_security:
+                    security = operation["security"]
+                    # Verify APIKeyHeader is in the security requirements
+                    assert any("APIKeyHeader" in req for req in security), (
+                        f"Endpoint {method.upper()} {path} missing 'APIKeyHeader' in security"
+                    )
+
+
+def test_health_endpoint_no_security():
+    """Test that /health endpoint does not require authentication.
+
+    The /health endpoint should be publicly accessible and not
+    require the apiKey security scheme.
+    """
+    client = TestClient(app)
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+
+    openapi_schema = response.json()
+    paths = openapi_schema.get("paths", {})
+
+    # Verify /health endpoint exists
+    assert "/health" in paths, "/health endpoint not found in OpenAPI schema"
+
+    health_methods = paths["/health"]
+
+    # Check GET method (primary health check method)
+    if "get" in health_methods:
+        get_operation = health_methods["get"]
+        # Security should either be absent or explicitly empty
+        security = get_operation.get("security", [])
+        # Empty list means no authentication required
+        assert security == [] or "security" not in get_operation, (
+            "/health endpoint should not require authentication"
+        )

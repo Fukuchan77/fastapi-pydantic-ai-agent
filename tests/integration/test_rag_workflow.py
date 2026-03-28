@@ -25,9 +25,9 @@ def vector_store() -> InMemoryVectorStore:
 def settings() -> Settings:
     """Provide test settings with valid LLM configuration."""
     return Settings(
-        api_key="test-key",
+        api_key="test-api-key-12345",
         llm_model="openai:gpt-4",
-        llm_api_key="test-llm-key",
+        llm_api_key="test-llm-key-12345",
     )
 
 

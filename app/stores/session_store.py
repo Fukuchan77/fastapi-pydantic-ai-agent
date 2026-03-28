@@ -7,6 +7,7 @@ maintaining conversation state across agent interactions.
 import asyncio
 import re
 import time
+import uuid
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -65,6 +66,19 @@ class SessionStore(Protocol):
         """
         ...
 
+    def generate_session_id(self) -> str:
+        """Generate a new UUID v4 session identifier.
+
+        Task 16.20: Server-side session ID generation for security.
+        UUIDs are cryptographically strong and prevent session hijacking
+        via guessable or enumerable session IDs.
+
+        Returns:
+            A string containing a UUID v4 in standard hyphenated format
+            (e.g., "550e8400-e29b-41d4-a716-446655440000").
+        """
+        ...
+
 
 class InMemorySessionStore:
     """In-memory session history store with per-session locking.
@@ -79,13 +93,16 @@ class InMemorySessionStore:
     has its own lock to allow concurrent access to different sessions.
     """
 
-    # Task 3.16: Maximum number of sessions to prevent memory exhaustion
+    # Task 16.14: Extract magic numbers to class constants for maintainability
+    DEFAULT_MAX_MESSAGES: int = 1000
+    DEFAULT_SESSION_TTL: int = 3600
     DEFAULT_MAX_SESSIONS: int = 10_000
+    MAX_SESSION_ID_LENGTH: int = 256
 
     def __init__(
         self,
-        max_messages: int = 1000,
-        session_ttl: int = 3600,
+        max_messages: int = DEFAULT_MAX_MESSAGES,
+        session_ttl: int = DEFAULT_SESSION_TTL,
         max_sessions: int = DEFAULT_MAX_SESSIONS,
     ) -> None:
         """Initialize an empty in-memory session store with per-session locks and TTL.
@@ -184,8 +201,10 @@ class InMemorySessionStore:
             # (session lock should be acquired before store lock in the locking hierarchy)
             if lru_lock is not None and lru_session_id is not None:
                 async with lru_lock, self._store_lock:
-                    # Final check: verify session still exists before eviction
-                    if lru_session_id in self._store:
+                    # Task 16.37: Re-check capacity inside critical section to prevent
+                    # over-eviction when concurrent clear() or TTL cleanup reduced store size
+                    # between the initial capacity check and final eviction
+                    if len(self._store) > self.max_sessions and lru_session_id in self._store:
                         # Cleanup all session data atomically
                         self._store.pop(lru_session_id, None)
                         self._last_access.pop(lru_session_id, None)
@@ -233,8 +252,8 @@ class InMemorySessionStore:
         """
         if not session_id:
             raise ValueError("session_id cannot be empty")
-        if len(session_id) > 256:
-            raise ValueError("session_id too long (max 256 chars)")
+        if len(session_id) > self.MAX_SESSION_ID_LENGTH:
+            raise ValueError(f"session_id too long (max {self.MAX_SESSION_ID_LENGTH} chars)")
         if not self._session_id_pattern.match(session_id):
             raise ValueError("session_id contains invalid characters")
 
@@ -284,3 +303,16 @@ class InMemorySessionStore:
             await self.clear(session_id)
 
         return len(expired_sessions)
+
+    def generate_session_id(self) -> str:
+        """Generate a new UUID v4 session identifier.
+
+        Task 16.20: Server-side session ID generation for security.
+        UUIDs are cryptographically strong and prevent session hijacking
+        via guessable or enumerable session IDs.
+
+        Returns:
+            A string containing a UUID v4 in standard hyphenated format
+            (e.g., "550e8400-e29b-41d4-a716-446655440000").
+        """
+        return str(uuid.uuid4())

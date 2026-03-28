@@ -15,9 +15,9 @@ class TestVerifyApiKey:
     async def test_missing_api_key_raises_401(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that missing X-API-Key header raises HTTPException with 401."""
         # Arrange
-        monkeypatch.setenv("API_KEY", "test-secret-key")
+        monkeypatch.setenv("API_KEY", "test-secret-key-1234567")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act & Assert
@@ -42,7 +42,7 @@ class TestVerifyApiKey:
         # Arrange
         monkeypatch.setenv("API_KEY", "correct-secret-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act & Assert
@@ -62,7 +62,7 @@ class TestVerifyApiKey:
         # Arrange
         monkeypatch.setenv("API_KEY", "correct-secret-key")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act
@@ -75,9 +75,9 @@ class TestVerifyApiKey:
     async def test_empty_string_api_key_raises_401(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that empty string X-API-Key raises HTTPException with 401."""
         # Arrange
-        monkeypatch.setenv("API_KEY", "test-secret-key")
+        monkeypatch.setenv("API_KEY", "test-secret-key-1234567")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act & Assert
@@ -90,9 +90,9 @@ class TestVerifyApiKey:
     async def test_case_sensitive_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that API key comparison is case-sensitive."""
         # Arrange
-        monkeypatch.setenv("API_KEY", "TestKey123")
+        monkeypatch.setenv("API_KEY", "TestKey123456789")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act & Assert - wrong case should fail
@@ -102,7 +102,7 @@ class TestVerifyApiKey:
         assert exc_info.value.status_code == 401
 
         # Correct case should succeed
-        result = await verify_api_key(api_key="TestKey123", settings=settings)
+        result = await verify_api_key(api_key="TestKey123456789", settings=settings)
         assert result is None
 
     @pytest.mark.asyncio
@@ -111,9 +111,9 @@ class TestVerifyApiKey:
     ) -> None:
         """Test that error response follows ErrorResponse model structure."""
         # Arrange
-        monkeypatch.setenv("API_KEY", "test-key")
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test123")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
         settings = Settings()
 
         # Act & Assert
