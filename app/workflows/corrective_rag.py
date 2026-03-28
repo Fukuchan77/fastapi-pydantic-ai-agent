@@ -10,6 +10,7 @@ Each workflow.run() call gets its own isolated Context for state management.
 
 import asyncio
 import logging
+import random
 
 import logfire
 from llama_index.core.workflow import Context
@@ -326,8 +327,12 @@ Response:"""
 
         for attempt in range(max_retries):
             try:
-                # Run evaluation using pre-initialized agent
-                result = await self._eval_agent.run(prompt)
+                # Run evaluation using pre-initialized agent with timeout
+                # Task 19.3: Wrap agent execution with timeout to prevent indefinite hangs
+                result = await asyncio.wait_for(
+                    self._eval_agent.run(prompt),
+                    timeout=self.llm_settings.llm_agent_timeout,
+                )
                 response = result.output.strip().lower()
 
                 # Normalize response
@@ -335,13 +340,26 @@ Response:"""
                     return "relevant"
                 return "insufficient"
 
+            except TimeoutError:
+                # Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+                # not a transient failure. Return graceful fallback immediately (no retries).
+                logger.error(
+                    "LLM evaluation timed out after %ds (attempt %d/%d): "
+                    "LLM is too slow, not retrying",
+                    self.llm_settings.llm_agent_timeout,
+                    attempt + 1,
+                    max_retries,
+                )
+                return "insufficient"
+
             except Exception as e:
                 # Use explicit error classification from RAGWorkflowError
                 is_transient = RAGWorkflowError.is_error_transient(e)
 
                 if attempt < max_retries - 1 and is_transient:
-                    # Exponential backoff for transient errors
-                    delay = base_delay * (2**attempt)
+                    # Exponential backoff with jitter for transient errors
+                    # Task 17.7: Add jitter to prevent thundering herd
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                     logger.warning(
                         "Transient error in LLM evaluation (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1,
@@ -407,17 +425,37 @@ Answer:"""
 
         for attempt in range(max_retries):
             try:
-                # Generate answer using pre-initialized agent
-                result = await self._synth_agent.run(prompt)
+                # Generate answer using pre-initialized agent with timeout
+                # Task 19.3: Wrap agent execution with timeout to prevent indefinite hangs
+                result = await asyncio.wait_for(
+                    self._synth_agent.run(prompt),
+                    timeout=self.llm_settings.llm_agent_timeout,
+                )
                 return result.output.strip()
+
+            except TimeoutError:
+                # Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+                # not a transient failure. Return graceful error message immediately (no retries).
+                logger.error(
+                    "LLM synthesis timed out after %ds (attempt %d/%d): "
+                    "LLM is too slow, not retrying",
+                    self.llm_settings.llm_agent_timeout,
+                    attempt + 1,
+                    max_retries,
+                )
+                return (
+                    "I encountered an error while processing your question. "
+                    "Please try again or rephrase your question."
+                )
 
             except Exception as e:
                 # Use explicit error classification from RAGWorkflowError
                 is_transient = RAGWorkflowError.is_error_transient(e)
 
                 if attempt < max_retries - 1 and is_transient:
-                    # Exponential backoff for transient errors
-                    delay = base_delay * (2**attempt)
+                    # Exponential backoff with jitter for transient errors
+                    # Task 17.7: Add jitter to prevent thundering herd
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                     logger.warning(
                         "Transient error in LLM synthesis (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1,

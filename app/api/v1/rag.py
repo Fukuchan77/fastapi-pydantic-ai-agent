@@ -1,7 +1,10 @@
 """RAG API routes for document ingestion and query."""
 
+import asyncio
+
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
 
 from app.deps.auth import verify_api_key
@@ -68,10 +71,19 @@ async def query(
         RAGQueryResponse with answer, context_found flag, and search_count.
     """
     # Run the workflow with query and max_retries
-    result = await workflow.run(
-        query=request.query,
-        max_retries=request.max_retries,
-    )
+    # Task 17.6: Wrap workflow execution with timeout to prevent indefinite hangs
+    try:
+        async with asyncio.timeout(workflow.llm_settings.rag_workflow_timeout):
+            result = await workflow.run(
+                query=request.query,
+                max_retries=request.max_retries,
+            )
+    except TimeoutError as e:
+        # Task 20.7: Convert workflow timeout to HTTP 504 Gateway Timeout
+        raise HTTPException(
+            status_code=504,
+            detail="RAG workflow timed out. Please try again with a simpler query.",
+        ) from e
 
     # Extract result data from StopEvent
     result_data = result

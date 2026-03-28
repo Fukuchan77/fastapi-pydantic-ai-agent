@@ -296,6 +296,18 @@ class Settings(BaseSettings):
         default=[],
         description="List of trusted proxy IP addresses for X-Forwarded-For validation",
     )
+    http_retry_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retry attempts for HTTP client requests on transient failures",
+    )
+    http_retry_base_delay: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=10.0,
+        description="Base delay in seconds for exponential backoff retries in HTTP client",
+    )
     llm_retry_max_attempts: int = Field(
         default=3,
         ge=1,
@@ -307,6 +319,18 @@ class Settings(BaseSettings):
         ge=0.1,
         le=10.0,
         description="Base delay in seconds for exponential backoff retries",
+    )
+    llm_agent_timeout: int = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Timeout in seconds for individual LLM agent execution (evaluation/synthesis)",
+    )
+    rag_workflow_timeout: int = Field(
+        default=60,
+        ge=5,
+        le=600,
+        description="Timeout in seconds for entire RAG workflow execution (all steps combined)",
     )
     cors_origins: str | list[str] = Field(
         default=["http://localhost:3000"],
