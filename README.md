@@ -289,6 +289,8 @@ mise run format
 
 ## 🐳 Docker Deployment
 
+> **For production deployments**, see the [Production Deployment Guide](docs/production_deployment.md) for critical reverse proxy configuration, security hardening, and scalability patterns.
+
 ### Build and Run
 
 ```bash

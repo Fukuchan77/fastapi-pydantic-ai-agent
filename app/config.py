@@ -332,6 +332,28 @@ class Settings(BaseSettings):
         le=600,
         description="Timeout in seconds for entire RAG workflow execution (all steps combined)",
     )
+    rag_cache_ttl: int = Field(
+        default=300,
+        ge=0,
+        le=3600,
+        description="Time-to-live in seconds for RAG query result cache (0 disables cache)",
+    )
+    rag_cache_size: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description="Maximum number of entries in RAG query result cache (LRU eviction)",
+    )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis connection URL for session store (e.g., redis://localhost:6379/0). "
+        "If not set, uses in-memory session store (suitable for development only)",
+    )
+    redis_session_store_enabled: bool = Field(
+        default=False,
+        description="Enable Redis-backed session store for multi-instance deployments. "
+        "Requires redis_url to be set. If False, uses in-memory store",
+    )
     cors_origins: str | list[str] = Field(
         default=["http://localhost:3000"],
         description="Allowed CORS origins (comma-separated or JSON array)",

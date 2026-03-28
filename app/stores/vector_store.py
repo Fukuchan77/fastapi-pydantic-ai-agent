@@ -382,3 +382,155 @@ class InMemoryVectorStore:
             return 0.0
 
         return dot_product / (magnitude1 * magnitude2)
+
+
+class ChromaVectorStore:
+    """Chroma-backed vector store using embedding-based semantic search.
+
+    This implementation provides semantic search capabilities using Chroma's
+    vector database with embedding-based similarity. Unlike TF-IDF which uses
+    token-level matching, embeddings capture semantic meaning and can match
+    synonyms, paraphrases, and conceptually similar content.
+
+    Features:
+        - Semantic search using sentence embeddings
+        - Built-in embedding generation via sentence-transformers
+        - Persistent or in-memory storage
+        - Support for multiple embedding models
+
+    Args:
+        collection_name: Name of the Chroma collection. Defaults to "documents".
+        embedding_model: Name of the sentence-transformers model to use for embeddings.
+            Defaults to "all-MiniLM-L6-v2" (fast, 384-dimensional embeddings).
+        persist_directory: Directory to persist the Chroma database. If None,
+            uses in-memory storage (data is lost on restart). Defaults to None.
+
+    Example:
+        >>> store = ChromaVectorStore()
+        >>> await store.add_documents(["Python is a programming language"])
+        >>> results = await store.query("coding in Python", top_k=1)
+        >>> print(results[0])
+        "Python is a programming language"
+    """
+
+    DEFAULT_COLLECTION_NAME: str = "documents"
+    DEFAULT_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+
+    def __init__(
+        self,
+        collection_name: str = DEFAULT_COLLECTION_NAME,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        persist_directory: str | None = None,
+    ) -> None:
+        """Initialize Chroma vector store with embedding function.
+
+        Args:
+            collection_name: Name of the Chroma collection. Defaults to "documents".
+            embedding_model: Sentence-transformers model name. Defaults to "all-MiniLM-L6-v2".
+            persist_directory: Directory for persistence. None for in-memory. Defaults to None.
+        """
+        import chromadb
+        from chromadb.utils import embedding_functions
+
+        self.collection_name = collection_name
+        self.embedding_model = embedding_model
+        self.persist_directory = persist_directory
+
+        # Initialize Chroma client (in-memory or persistent)
+        if persist_directory:
+            self._client = chromadb.PersistentClient(path=persist_directory)
+        else:
+            self._client = chromadb.Client()
+
+        # Initialize embedding function using sentence-transformers
+        self._embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(  # type: ignore[attr-defined]
+            model_name=embedding_model
+        )
+
+        # Get or create collection with embedding function
+        self._collection = self._client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=self._embedding_function,
+        )
+
+        # Track document count for ID generation
+        self._doc_count = self._collection.count()
+
+    async def add_documents(self, chunks: list[str]) -> None:
+        """Add document chunks to the store with automatic embedding generation.
+
+        Chroma automatically generates embeddings using the configured embedding
+        function. Each document is assigned a unique ID based on insertion order.
+
+        Args:
+            chunks: List of text chunks to add. Empty list is allowed.
+        """
+        if not chunks:
+            return
+
+        # Generate unique IDs for each document
+        ids = [f"doc_{self._doc_count + i}" for i in range(len(chunks))]
+        self._doc_count += len(chunks)
+
+        # Add documents to collection (embeddings generated automatically)
+        self._collection.add(
+            documents=chunks,
+            ids=ids,
+        )
+
+    async def query(self, query: str, top_k: int = 5) -> list[str]:
+        """Retrieve top-k most relevant chunks using embedding-based similarity.
+
+        Uses cosine similarity between query embedding and document embeddings
+        to find semantically similar content. Unlike TF-IDF, this can match
+        synonyms, paraphrases, and conceptually related content.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+
+        Returns:
+            List of up to top_k document chunks, ranked by embedding cosine
+            similarity (highest first). Returns empty list if corpus is empty
+            or query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1.
+        """
+        # Validate top_k parameter
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+        # Return empty list for empty query or empty corpus
+        if not query.strip() or self._collection.count() == 0:
+            return []
+
+        # Query collection (embeddings generated automatically)
+        results = self._collection.query(
+            query_texts=[query],
+            n_results=min(top_k, self._collection.count()),
+        )
+
+        # Extract documents from results
+        # results["documents"] is a list of lists: [[doc1, doc2, ...]]
+        if results["documents"] and len(results["documents"]) > 0:
+            return results["documents"][0]
+        return []
+
+    async def clear(self) -> None:
+        """Remove all documents from the store.
+
+        Deletes the entire collection and recreates it with the same
+        configuration (name and embedding function).
+        """
+        # Delete the collection
+        self._client.delete_collection(name=self.collection_name)
+
+        # Recreate collection with same configuration
+        self._collection = self._client.get_or_create_collection(
+            name=self.collection_name,
+            embedding_function=self._embedding_function,
+        )
+
+        # Reset document count
+        self._doc_count = 0

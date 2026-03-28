@@ -9,8 +9,11 @@ Each workflow.run() call gets its own isolated Context for state management.
 """
 
 import asyncio
+import hashlib
 import logging
 import random
+import time
+from collections import OrderedDict
 
 import logfire
 from llama_index.core.workflow import Context
@@ -34,16 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 class CorrectiveRAGWorkflow(Workflow):
-    """Corrective RAG workflow with retry logic.
+    """Corrective RAG workflow with retry logic and result caching.
 
     This workflow implements Corrective RAG: after retrieval, an evaluation
     step assesses relevance. If results are insufficient and retries remain,
     a refined SearchEvent is emitted to trigger a new retrieval cycle.
 
+    Task 17.1: Implements TTL-based LRU cache for query results to reduce
+    redundant LLM calls and vector store queries for identical requests.
+
     Attributes:
         vector_store: Pluggable vector store for document retrieval.
         llm_settings: Configuration for LLM calls (model, API key, etc.).
         llm_model: Optional custom model for testing (e.g., FunctionModel).
+        cache_stats: Dictionary containing cache hit/miss statistics.
     """
 
     def __init__(
@@ -52,7 +59,7 @@ class CorrectiveRAGWorkflow(Workflow):
         llm_settings: Settings,
         llm_model: Model | str | None = None,
     ) -> None:
-        """Initialize the Corrective RAG workflow.
+        """Initialize the Corrective RAG workflow with caching.
 
         Args:
             vector_store: Vector store implementation for retrieval.
@@ -76,6 +83,125 @@ class CorrectiveRAGWorkflow(Workflow):
             model=resolved_model,
             output_type=str,
         )
+
+        # Task 17.1: Initialize cache data structures
+        # OrderedDict provides O(1) access and maintains insertion order for LRU
+        self._cache: OrderedDict[str, tuple[dict, float]] = OrderedDict()
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+
+    def _generate_cache_key(self, query: str, max_retries: int) -> str:
+        """Generate cache key from query and max_retries parameter.
+
+        Task 17.1: Cache key includes both query and max_retries because
+        the same query with different max_retries may produce different results.
+
+        Args:
+            query: User query string.
+            max_retries: Maximum retry attempts.
+
+        Returns:
+            str: SHA256 hash of query + max_retries for cache key.
+        """
+        # Combine query and max_retries into a single string
+        key_material = f"{query}|{max_retries}"
+        # Generate SHA256 hash for consistent key length
+        return hashlib.sha256(key_material.encode()).hexdigest()
+
+    def _evict_expired_entries(self) -> None:
+        """Remove expired cache entries based on TTL.
+
+        Task 17.1: Removes entries where current_time - cached_time > ttl.
+        """
+        if self.llm_settings.rag_cache_ttl == 0:
+            return  # Cache disabled
+
+        current_time = time.time()
+        ttl = self.llm_settings.rag_cache_ttl
+        expired_keys = [
+            key for key, (_, cached_time) in self._cache.items() if current_time - cached_time > ttl
+        ]
+        for key in expired_keys:
+            del self._cache[key]
+
+    def _evict_lru_entry(self) -> None:
+        """Remove least recently used entry to maintain size limit.
+
+        Task 17.1: OrderedDict maintains insertion order, so the first item
+        is the least recently used (after move_to_end on cache hits).
+        """
+        if self._cache:
+            self._cache.popitem(last=False)  # Remove first (oldest) item
+
+    @property
+    def cache_stats(self) -> dict[str, int]:
+        """Get cache statistics for monitoring.
+
+        Task 17.1: Exposes cache hit/miss/size metrics for observability.
+
+        Returns:
+            dict: Dictionary with 'hits', 'misses', and 'size' keys.
+        """
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+        }
+
+    async def run(self, query: str, max_retries: int = 3) -> dict:  # type: ignore[override]
+        """Run the workflow with caching support.
+
+        Task 17.1: Overrides parent run() to check cache before executing workflow.
+        If cache hit, returns cached result immediately. Otherwise, executes workflow
+        and caches the result.
+
+        Args:
+            query: User query string.
+            max_retries: Maximum retry attempts for relevance evaluation.
+
+        Returns:
+            dict: Workflow result with answer, context_found, and search_count.
+        """
+        # Task 17.1: Check if caching is disabled (ttl=0)
+        if self.llm_settings.rag_cache_ttl == 0:
+            # Cache disabled, execute workflow directly
+            result = await super().run(query=query, max_retries=max_retries)
+            return result
+
+        # Task 17.1: Generate cache key
+        cache_key = self._generate_cache_key(query, max_retries)
+
+        # Task 17.1: Evict expired entries before checking cache
+        self._evict_expired_entries()
+
+        # Task 17.1: Check cache for existing result
+        if cache_key in self._cache:
+            # Cache hit - move to end (mark as recently used) and return cached result
+            cached_result, _ = self._cache[cache_key]
+            self._cache.move_to_end(cache_key)
+            self._cache_hits += 1
+            logfire.info("RAG cache hit", query=query[:50], cache_key=cache_key[:16])
+            return cached_result
+
+        # Task 17.1: Cache miss - execute workflow
+        self._cache_misses += 1
+        logfire.info("RAG cache miss", query=query[:50], cache_key=cache_key[:16])
+        result = await super().run(query=query, max_retries=max_retries)
+
+        # Task 17.1: Store result in cache with current timestamp
+        current_time = time.time()
+        self._cache[cache_key] = (result, current_time)
+
+        # Task 17.1: Enforce cache size limit with LRU eviction
+        if len(self._cache) > self.llm_settings.rag_cache_size:
+            self._evict_lru_entry()
+            logfire.info(
+                "RAG cache eviction",
+                cache_size=len(self._cache),
+                max_size=self.llm_settings.rag_cache_size,
+            )
+
+        return result
 
     @step
     async def search(

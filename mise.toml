@@ -21,6 +21,10 @@ run = "uv run pytest tests/integration/ -v"
 description = "Run E2E tests (full HTTP stack)"
 run = "uv run pytest tests/e2e/ -v"
 
+[tasks."test:benchmark"]
+description = "Run performance benchmark tests (latency, throughput, cache hit rate)"
+run = "uv run pytest tests/benchmarks/ -v -s"
+
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
 run = ["uv run ruff check app/ tests/", "uv run ty check app/"]
