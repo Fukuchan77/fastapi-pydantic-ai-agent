@@ -90,6 +90,14 @@ class CorrectiveRAGWorkflow(Workflow):
         self._cache_hits: int = 0
         self._cache_misses: int = 0
 
+        # Task 21.1: Initialize cache lock to protect concurrent access
+        # Prevents race conditions when multiple coroutines access cache simultaneously
+        self._cache_lock: asyncio.Lock = asyncio.Lock()
+
+        # Task 25.2: Track in-flight requests to prevent thundering herd
+        # Maps cache_key -> Future for requests currently executing
+        self._pending_futures: dict[str, asyncio.Future[dict]] = {}
+
     def _generate_cache_key(self, query: str, max_retries: int) -> str:
         """Generate cache key from query and max_retries parameter.
 
@@ -171,37 +179,92 @@ class CorrectiveRAGWorkflow(Workflow):
         # Task 17.1: Generate cache key
         cache_key = self._generate_cache_key(query, max_retries)
 
-        # Task 17.1: Evict expired entries before checking cache
-        self._evict_expired_entries()
+        # Task 21.1 & 25.2: Use double-check locking to prevent thundering herd
+        async with self._cache_lock:
+            # Task 17.1: Evict expired entries before checking cache
+            self._evict_expired_entries()
 
-        # Task 17.1: Check cache for existing result
-        if cache_key in self._cache:
-            # Cache hit - move to end (mark as recently used) and return cached result
-            cached_result, _ = self._cache[cache_key]
-            self._cache.move_to_end(cache_key)
-            self._cache_hits += 1
-            logfire.info("RAG cache hit", query=query[:50], cache_key=cache_key[:16])
-            return cached_result
+            # Task 17.1: Check cache for existing result
+            if cache_key in self._cache:
+                # Cache hit - move to end (mark as recently used) and return cached result
+                cached_result, _ = self._cache[cache_key]
+                self._cache.move_to_end(cache_key)
+                self._cache_hits += 1
+                logfire.info("RAG cache hit", query=query[:50], cache_key=cache_key[:16])
+                # Task 25.4: Verify cached result is a dict before copying
+                if not isinstance(cached_result, dict):
+                    raise TypeError(f"Expected dict from cache, got {type(cached_result).__name__}")
+                # Task 21.5: Return a copy to prevent callers from mutating the cached dict
+                return dict(cached_result)
 
-        # Task 17.1: Cache miss - execute workflow
-        self._cache_misses += 1
-        logfire.info("RAG cache miss", query=query[:50], cache_key=cache_key[:16])
-        result = await super().run(query=query, max_retries=max_retries)
+            # Task 25.2: Check if there's a pending future for this query (thundering herd fix)
+            if cache_key in self._pending_futures:
+                # Another request is already executing this workflow - wait for it
+                pending_future = self._pending_futures[cache_key]
+                self._cache_hits += 1
+                logfire.info(
+                    "RAG pending request found, awaiting",
+                    query=query[:50],
+                    cache_key=cache_key[:16],
+                )
+                # Await OUTSIDE the lock to allow other operations
+                # Note: We must release lock before awaiting
+            else:
+                # No cache hit and no pending future - this request will execute the workflow
+                # Create future BEFORE releasing lock to prevent other requests
+                # from also creating one
+                self._cache_misses += 1
+                logfire.info("RAG cache miss", query=query[:50], cache_key=cache_key[:16])
+                future: asyncio.Future[dict] = asyncio.Future()
+                self._pending_futures[cache_key] = future
+                pending_future = None
 
-        # Task 17.1: Store result in cache with current timestamp
-        current_time = time.time()
-        self._cache[cache_key] = (result, current_time)
+        # Task 25.2: If we found a pending future, await it OUTSIDE the lock
+        if pending_future is not None:
+            result = await pending_future
+            # Task 25.4: Verify result from pending future is a dict before copying
+            if not isinstance(result, dict):
+                raise TypeError(f"Expected dict from workflow, got {type(result).__name__}")
+            return dict(result)
 
-        # Task 17.1: Enforce cache size limit with LRU eviction
-        if len(self._cache) > self.llm_settings.rag_cache_size:
-            self._evict_lru_entry()
-            logfire.info(
-                "RAG cache eviction",
-                cache_size=len(self._cache),
-                max_size=self.llm_settings.rag_cache_size,
-            )
+        # Task 21.1: Execute workflow OUTSIDE the lock to allow concurrent workflow execution
+        # Only cache operations need to be protected, not the actual LLM calls
+        try:
+            result = await super().run(query=query, max_retries=max_retries)
 
-        return result
+            # Task 25.4: Verify result from workflow is a dict before caching
+            if not isinstance(result, dict):
+                raise TypeError(f"Expected dict from workflow, got {type(result).__name__}")
+
+            # Task 21.1: Re-acquire lock to store result
+            async with self._cache_lock:
+                # Task 17.1: Store result in cache with current timestamp
+                # Task 21.5: Store a copy to prevent the returned result from mutating the cache
+                current_time = time.time()
+                self._cache[cache_key] = (dict(result), current_time)
+
+                # Task 17.1: Enforce cache size limit with LRU eviction
+                if len(self._cache) > self.llm_settings.rag_cache_size:
+                    self._evict_lru_entry()
+                    logfire.info(
+                        "RAG cache eviction",
+                        cache_size=len(self._cache),
+                        max_size=self.llm_settings.rag_cache_size,
+                    )
+
+                # Task 25.2: Resolve future and remove from pending
+                future.set_result(result)
+                del self._pending_futures[cache_key]
+
+            return result
+
+        except Exception as e:
+            # Task 25.2: If workflow fails, reject future and remove from pending
+            async with self._cache_lock:
+                if cache_key in self._pending_futures:
+                    future.set_exception(e)
+                    del self._pending_futures[cache_key]
+            raise
 
     @step
     async def search(

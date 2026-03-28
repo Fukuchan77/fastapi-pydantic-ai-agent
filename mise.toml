@@ -25,6 +25,10 @@ run = "uv run pytest tests/e2e/ -v"
 description = "Run performance benchmark tests (latency, throughput, cache hit rate)"
 run = "uv run pytest tests/benchmarks/ -v -s"
 
+[tasks."test:local"]
+description = "Run local tests (requires running Ollama instance)"
+run = "uv run pytest tests/local/ -v -m ollama"
+
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
 run = ["uv run ruff check app/ tests/", "uv run ty check app/"]

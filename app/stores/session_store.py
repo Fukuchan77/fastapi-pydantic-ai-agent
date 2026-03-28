@@ -5,15 +5,22 @@ maintaining conversation state across agent interactions.
 """
 
 import asyncio
+import logging
 import re
 import time
 import uuid
 from collections.abc import Sequence
 from typing import Protocol
 
+from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
+
+
+# Task 23.2: Logger for exception logging in RedisSessionStore
+logger = logging.getLogger(__name__)
 
 
 class SessionStore(Protocol):
@@ -143,9 +150,12 @@ class InMemorySessionStore:
                 invalid characters).
         """
         self._validate_session_id(session_id)
-        # Update last access time
-        self._last_access[session_id] = time.time()
         async with self._locks.setdefault(session_id, asyncio.Lock()):
+            # Task 24.2: Update last access time inside lock to prevent race condition
+            # Moving this inside the lock prevents cleanup_expired_sessions() from
+            # deleting the session between _last_access update and lock acquisition,
+            # which would leave an orphaned timestamp entry (memory leak)
+            self._last_access[session_id] = time.time()
             return self._store.get(session_id, [])
 
     async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
@@ -388,20 +398,26 @@ class RedisSessionStore:
         if data is None:
             return []
 
-        # Deserialize pickle bytes to ModelMessage objects
-        import pickle
-
+        # Task 21.2: Deserialize JSON bytes to ModelMessage objects using Pydantic TypeAdapter
+        # Security: Replaced pickle.loads() with type-safe JSON deserialization
+        # to eliminate RCE vector if Redis is compromised
         try:
-            # Task 17.2: Using pickle for ModelMessage serialization
-            # Security note: pickle.loads() can be unsafe with untrusted data.
-            # This is acceptable here because:
-            # 1. Data comes from Redis (internal trusted store, not user input)
-            # 2. Redis connection requires authentication
-            # 3. Used only for session storage in authenticated API
-            messages: list[ModelMessage] = pickle.loads(data)  # noqa: S301
+            messages: list[ModelMessage] = ModelMessagesTypeAdapter.validate_json(data)
             return messages
-        except (pickle.UnpicklingError, TypeError, AttributeError):
-            # If data is corrupted, return empty list
+        except (ValidationError, ValueError, TypeError):
+            # Task 25.3: Narrow exception handler to only catch expected deserialization errors
+            # ValidationError: Pydantic validation fails (invalid schema)
+            # ValueError: JSON parsing fails (malformed JSON)
+            # TypeError: Data is wrong type (e.g., not bytes/str)
+            # Task 23.2: Log exception details for production debugging
+            # exc_info=True includes full traceback, critical for diagnosing
+            # deserialization errors in production
+            logger.warning(
+                "Failed to deserialize session %s",
+                session_id,
+                exc_info=True,
+            )
+            # If data is corrupted or invalid JSON, return empty list
             return []
 
     async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
@@ -416,10 +432,9 @@ class RedisSessionStore:
         """
         self._validate_session_id(session_id)
 
-        # Serialize messages to pickle bytes
-        import pickle
-
-        serialized = pickle.dumps(list(messages))
+        # Task 21.2: Serialize messages to JSON bytes using Pydantic TypeAdapter
+        # Security: Replaced pickle.dumps() with type-safe JSON serialization
+        serialized = ModelMessagesTypeAdapter.dump_json(list(messages))
 
         key = f"{self.key_prefix}{session_id}"
         # Store with TTL - Redis will automatically expire the key

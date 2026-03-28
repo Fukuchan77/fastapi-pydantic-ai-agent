@@ -4,6 +4,8 @@ Task 16.11: Verify Settings rejects unknown environment variables.
 """
 
 import pytest
+from pydantic import HttpUrl
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -21,9 +23,9 @@ class TestSettingsExtraForbid:
             match=r"Extra inputs are not permitted|extra fields not permitted",
         ):
             Settings(
-                api_key="secure-test-key-1234567890",
+                api_key=SecretStr("secure-test-key-1234567890"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="sk-test-key-1234567890",
+                llm_api_key=SecretStr("sk-test-key-1234567890"),
                 unknown_field="some-value",  # Extra field not defined in Settings
             )
 
@@ -35,9 +37,9 @@ class TestSettingsExtraForbid:
             match=r"Extra inputs are not permitted|extra fields not permitted",
         ):
             Settings(
-                api_key="secure-test-key-1234567890",
+                api_key=SecretStr("secure-test-key-1234567890"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="sk-test-key-1234567890",
+                llm_api_key=SecretStr("sk-test-key-1234567890"),
                 llm_base_ulr="http://localhost:11434",  # Typo: ULR instead of URL
             )
 
@@ -45,10 +47,10 @@ class TestSettingsExtraForbid:
         """Settings should accept all properly named fields via constructor."""
         # Should not raise - all fields are defined in Settings
         settings = Settings(
-            api_key="secure-test-key-1234567890",
+            api_key=SecretStr("secure-test-key-1234567890"),
             llm_model="openai:gpt-4o",
-            llm_api_key="sk-test-key-1234567890",
-            llm_base_url="http://localhost:11434",
+            llm_api_key=SecretStr("sk-test-key-1234567890"),
+            llm_base_url=HttpUrl("http://localhost:11434"),
             max_output_retries=5,
             app_env="development",
             enable_mock_tools=True,
@@ -57,7 +59,7 @@ class TestSettingsExtraForbid:
             llm_retry_max_attempts=5,
             llm_retry_base_delay=2.0,
             cors_origins=["http://localhost:3000"],
-            logfire_token="lf_test_token_1234567890",  # noqa: S106
+            logfire_token=SecretStr("lf_test_token_1234567890"),
             logfire_service_name="test-service",
         )
         assert settings.api_key.get_secret_value() == "secure-test-key-1234567890"
@@ -71,9 +73,9 @@ class TestSettingsExtraForbid:
             match=r"Extra inputs are not permitted|extra fields not permitted",
         ):
             Settings(
-                api_key="secure-test-key-1234567890",
+                api_key=SecretStr("secure-test-key-1234567890"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="sk-test-key-1234567890",
+                llm_api_key=SecretStr("sk-test-key-1234567890"),
                 random_field_1="value1",  # Unknown field
                 random_field_2="value2",  # Unknown field
                 another_unknown="value3",  # Unknown field

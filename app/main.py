@@ -281,6 +281,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except asyncio.CancelledError:
             logger.info("Session cleanup task successfully cancelled")
 
+    # Task 22.1: Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
+    if hasattr(app.state, "vector_store") and hasattr(app.state.vector_store, "close"):
+        await app.state.vector_store.close()
+        logger.info("Closed vector store")
+
     # Task 2.6: Close HTTP client during shutdown
     if hasattr(app.state, "http_client"):
         await app.state.http_client.aclose()

@@ -6,6 +6,7 @@ and FunctionModel LLM. No HTTP server involved.
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
@@ -21,9 +22,9 @@ from app.stores.session_store import InMemorySessionStore
 def settings() -> Settings:
     """Provide test settings with valid LLM configuration."""
     return Settings(
-        api_key="test-api-key-12345",
+        api_key=SecretStr("test-api-key-12345"),
         llm_model="openai:gpt-4",
-        llm_api_key="test-llm-key-12345",
+        llm_api_key=SecretStr("test-llm-key-12345"),
     )
 
 

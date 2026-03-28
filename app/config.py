@@ -33,6 +33,10 @@ class Settings(BaseSettings):
         llm_api_key: API key for LLM provider (required for cloud providers,
             optional for local providers like Ollama)
         llm_base_url: Custom base URL for LLM provider (e.g., Azure OpenAI endpoint)
+        embedding_model: Embedding model identifier for semantic search
+            (e.g., "all-MiniLM-L6-v2")
+        embedding_base_url: Custom base URL for embedding provider
+            (e.g., Ollama embeddings endpoint)
         max_output_retries: Number of retries for Pydantic AI output validation (0-10)
         logfire_token: Pydantic Logfire token for observability (16+ characters)
         logfire_service_name: Service name for Logfire traces (default: "fastapi-pydantic-ai-agent")
@@ -136,7 +140,7 @@ class Settings(BaseSettings):
 
         # Split into provider and model
         parts = v.split(":", 1)
-        provider = parts[0]
+        provider = parts[0].lower()  # Normalize to lowercase for case-insensitive matching
         model = parts[1] if len(parts) > 1 else ""
 
         # Check provider is not empty
@@ -155,7 +159,8 @@ class Settings(BaseSettings):
                 f"llm_model provider must be one of {allowed_providers}, got: {provider}"
             )
 
-        return v
+        # Return normalized llm_model with lowercase provider (Task 22.3)
+        return f"{provider}:{model}"
 
     # Optional fields
     llm_api_key: SecretStr | None = Field(
@@ -250,6 +255,46 @@ class Settings(BaseSettings):
         if scheme == "http" and host not in ["localhost", "127.0.0.1"]:
             raise ValueError(
                 "llm_base_url must use HTTPS in production. HTTP is only allowed for localhost."
+            )
+
+        return v
+
+    embedding_model: str | None = Field(
+        default=None,
+        description="Embedding model identifier for semantic search (e.g., 'all-MiniLM-L6-v2')",
+    )
+
+    embedding_base_url: HttpUrl | None = Field(
+        default=None,
+        description="Custom base URL for embedding provider (e.g., Ollama embeddings endpoint)",
+    )
+
+    @field_validator("embedding_base_url")
+    @classmethod
+    def validate_embedding_base_url_https(cls, v: HttpUrl | None) -> HttpUrl | None:
+        """Validate embedding_base_url uses HTTPS for non-localhost URLs.
+
+        Args:
+            v: The embedding_base_url value to validate
+
+        Returns:
+            HttpUrl | None: The validated embedding_base_url value
+
+        Raises:
+            ValueError: If HTTP is used for non-localhost URLs
+        """
+        if v is None:
+            return v
+
+        # Parse URL components
+        scheme = v.scheme
+        host = v.host
+
+        # Allow HTTP only for localhost or 127.0.0.1
+        if scheme == "http" and host not in ["localhost", "127.0.0.1"]:
+            raise ValueError(
+                "embedding_base_url must use HTTPS in production. "
+                "HTTP is only allowed for localhost."
             )
 
         return v

@@ -52,6 +52,10 @@ async def benchmark_client(client: AsyncClient) -> AsyncIterator[AsyncClient]:
 
     yield client
 
+    # Task 21.6: Cleanup vector store to prevent test contamination
+    # This ensures benchmark tests don't affect other tests sharing the same app instance
+    await app.state.vector_store.clear()
+
 
 @pytest.mark.asyncio
 @pytest.mark.benchmark

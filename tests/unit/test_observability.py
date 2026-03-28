@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -23,10 +24,10 @@ class TestConfigureLogfire:
         """Test configure_logfire() calls logfire.configure() when token is provided."""
         # Arrange
         settings = Settings(
-            api_key="test-api-key-12345",
+            api_key=SecretStr("test-api-key-12345"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-12345",
-            logfire_token="test-logfire-token",  # noqa: S106
+            llm_api_key=SecretStr("test-llm-key-12345"),
+            logfire_token=SecretStr("test-logfire-token"),
             logfire_service_name="test-service",
         )
 
@@ -50,9 +51,9 @@ class TestConfigureLogfire:
         """Test configure_logfire() skips logfire.configure() when token is None."""
         # Arrange
         settings = Settings(
-            api_key="test-api-key-12345",
+            api_key=SecretStr("test-api-key-12345"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-12345",
+            llm_api_key=SecretStr("test-llm-key-12345"),
             logfire_token=None,
             logfire_service_name="test-service",
         )
@@ -72,10 +73,10 @@ class TestConfigureLogfire:
         # Task 16.13 added validation that rejects empty or whitespace-only tokens
         with pytest.raises(ValidationError) as exc_info:
             Settings(
-                api_key="test-api-key-12345",
+                api_key=SecretStr("test-api-key-12345"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="test-llm-key-12345",
-                logfire_token="",  # Empty string should be rejected
+                llm_api_key=SecretStr("test-llm-key-12345"),
+                logfire_token=SecretStr(""),  # Empty string should be rejected
                 logfire_service_name="test-service",
             )
 

@@ -60,10 +60,10 @@ async def test_redis_store_save_and_get_history(redis_store, mock_redis):
         ModelResponse(parts=[TextPart(content="Hi there!")]),
     ]
 
-    # Mock serialized data using pickle (matching implementation)
-    import pickle
+    # Task 21.2: Mock serialized data using JSON (matching new implementation)
+    from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    serialized = pickle.dumps(messages)
+    serialized = ModelMessagesTypeAdapter.dump_json(messages)
     mock_redis.get.return_value = serialized
 
     # Save history

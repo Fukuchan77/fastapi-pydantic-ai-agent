@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from app.config import Settings
 from app.middleware.rate_limit import get_client_identifier
@@ -24,9 +25,9 @@ def mock_settings_with_trusted_proxies(monkeypatch):
 
     def mock_get_settings():
         return Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
             trusted_proxies=["10.0.0.1", "10.0.0.2", "192.168.1.1"],
         )
 
@@ -44,9 +45,9 @@ def mock_settings_testclient_is_trusted(monkeypatch):
 
     def mock_get_settings():
         return Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
             trusted_proxies=["10.0.0.1", "10.0.0.2", "192.168.1.1", "testclient"],
         )
 
@@ -60,9 +61,9 @@ def mock_settings_no_trusted_proxies(monkeypatch):
 
     def mock_get_settings():
         return Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
             trusted_proxies=[],
         )
 
@@ -210,9 +211,9 @@ class TestTrustedProxiesConfigValidation:
         """Should accept list of IP addresses for trusted_proxies."""
         # Act & Assert: Should not raise validation error
         settings = Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
             trusted_proxies=["10.0.0.1", "192.168.1.1", "172.16.0.1"],
         )
         assert settings.trusted_proxies == ["10.0.0.1", "192.168.1.1", "172.16.0.1"]
@@ -221,9 +222,9 @@ class TestTrustedProxiesConfigValidation:
         """Should accept empty list for trusted_proxies (no proxies trusted)."""
         # Act & Assert
         settings = Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
             trusted_proxies=[],
         )
         assert settings.trusted_proxies == []
@@ -232,9 +233,9 @@ class TestTrustedProxiesConfigValidation:
         """Should default to empty list when not provided."""
         # Act & Assert
         settings = Settings(
-            api_key="test-api-key-12345678",
+            api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
-            llm_api_key="test-llm-key-1234567890",
+            llm_api_key=SecretStr("test-llm-key-1234567890"),
         )
         assert settings.trusted_proxies == []
         assert isinstance(settings.trusted_proxies, list)

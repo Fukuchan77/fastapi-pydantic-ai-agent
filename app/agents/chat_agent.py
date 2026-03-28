@@ -1,148 +1,66 @@
 """Chat agent factory and tool registration."""
 
-from typing import TYPE_CHECKING
-
 from pydantic_ai import Agent
 from pydantic_ai import RunContext
 from pydantic_ai.models import Model
+from pydantic_ai_litellm import LiteLLMModel
 
 from app.agents.deps import AgentDeps
 from app.config import Settings
 from app.config import get_settings
 
 
-# Placeholder API key for local providers (e.g., Ollama) that don't require authentication.
-# This constant is passed to satisfy the SDK's non-optional api_key parameter.
-# Never use this for cloud providers - those must have a real API key configured.
-_LOCAL_PROVIDER_DUMMY_KEY = "LOCAL-PROVIDER-DOES-NOT-USE-API-KEY"
-
-
-if TYPE_CHECKING:
-    pass
-
-
 def build_model(settings: Settings) -> Model:
-    """Build a Model instance from settings based on the provider.
+    """Build a LiteLLMModel instance from settings.
 
-    Supports multiple providers: openai, anthropic, ollama, groq.
-    The provider is determined from the llm_model format "provider:model".
-
-    Provider-specific behavior:
-        - openai: Uses OpenAI API or Azure OpenAI (if llm_base_url provided)
-        - anthropic: Uses Anthropic Claude API
-        - groq: Uses Groq's fast inference API
-        - ollama: Uses local Ollama server (defaults to http://localhost:11434/v1)
+    Converts the internal "provider:model" format to LiteLLM's "provider/model"
+    format (e.g. "openai:gpt-4o" → "openai/gpt-4o", "ollama:granite3.3:latest" →
+    "ollama/granite3.3:latest") and delegates all provider routing to LiteLLM.
 
     API key handling:
         - Cloud providers (openai, anthropic, groq): llm_api_key is required
-        - Local providers (ollama): llm_api_key is optional (uses dummy key)
+        - Local providers (ollama): llm_api_key is optional; LiteLLM omits it
+          automatically
 
     Args:
-        settings: Settings instance with LLM configuration (llm_model, llm_api_key, llm_base_url).
+        settings: Settings instance with LLM configuration.
 
     Returns:
-        Configured Model instance for the specified provider.
-
-    Raises:
-        ValueError: If the provider is not supported or configuration is invalid.
+        Configured LiteLLMModel instance ready for use with Pydantic AI Agent.
 
     Example:
         >>> from app.config import get_settings
-        >>> settings = get_settings()
-        >>> model = build_model(settings)
-        >>> # Model is now ready for use with Pydantic AI Agent
+        >>> model = build_model(get_settings())
     """
-    # Extract provider and model from llm_model format "provider:model"
     llm_model = settings.llm_model
     if ":" in llm_model:
         provider_name, model_name = llm_model.split(":", 1)
+        provider_name = provider_name.lower()  # Normalize to lowercase (Task 22.3)
     else:
-        # Default to openai if no provider specified
-        provider_name = "openai"
-        model_name = llm_model
+        provider_name, model_name = "openai", llm_model
 
-    provider_name = provider_name.lower()
+    # LiteLLM uses "provider/model" format
+    litellm_model_name = f"{provider_name}/{model_name}"
 
-    # Provider-specific initialization
-    if provider_name == "anthropic":
-        # Lazy import to avoid requiring anthropic package when not needed
-        from pydantic_ai.models.anthropic import AnthropicModel
-        from pydantic_ai.providers.anthropic import AnthropicProvider
+    api_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else None
 
-        # AnthropicModel uses AnthropicProvider to configure API key
-        # Similar pattern to OpenAI provider
-        # Task 16.7: Extract secret value from SecretStr
-        if settings.llm_api_key:
-            provider = AnthropicProvider(api_key=settings.llm_api_key.get_secret_value())
-            return AnthropicModel(model_name, provider=provider)
-        else:
-            # Use default provider (reads from ANTHROPIC_API_KEY environment variable)
-            return AnthropicModel(model_name)
-
-    elif provider_name == "groq":
-        # Lazy import to avoid requiring groq package when not needed
-        from pydantic_ai.models.groq import GroqModel
-        from pydantic_ai.providers.groq import GroqProvider
-
-        # GroqModel uses GroqProvider to configure API key
-        # Similar pattern to OpenAI provider
-        # Task 16.7: Extract secret value from SecretStr
-        if settings.llm_api_key:
-            provider = GroqProvider(api_key=settings.llm_api_key.get_secret_value())
-            return GroqModel(model_name, provider=provider)
-        else:
-            # Use default provider (reads from GROQ_API_KEY environment variable)
-            return GroqModel(model_name)
-
+    # Build optional settings dict (litellm_api_base for custom / Ollama endpoints)
+    model_settings = {}
+    if settings.llm_base_url:
+        model_settings["litellm_api_base"] = str(settings.llm_base_url)
     elif provider_name == "ollama":
-        # Ollama uses OpenAI-compatible API with custom base_url
-        from pydantic_ai.models.openai import OpenAIChatModel
-        from pydantic_ai.providers.openai import OpenAIProvider
+        # Task 25.1: Ollama base URL does NOT include /v1 suffix because LiteLLM
+        # automatically appends /v1 when making requests to Ollama endpoints.
+        # This differs from OllamaEmbeddingVectorStore which calls the Ollama API
+        # directly (not through LiteLLM) and therefore needs the full URL with /v1.
+        # See: https://docs.litellm.ai/docs/providers/ollama
+        model_settings["litellm_api_base"] = "http://localhost:11434"
 
-        base_url = settings.llm_base_url or "http://localhost:11434/v1"
-        # Task 16.7: Extract secret value from SecretStr or use dummy key for local provider
-        api_key = (
-            settings.llm_api_key.get_secret_value()
-            if settings.llm_api_key
-            else _LOCAL_PROVIDER_DUMMY_KEY
-        )
-        provider = OpenAIProvider(
-            base_url=str(base_url),
-            api_key=api_key,
-        )
-        return OpenAIChatModel(model_name, provider=provider)
-
-    elif provider_name == "openai":
-        # Lazy import to avoid requiring openai package when not needed
-        from pydantic_ai.models.openai import OpenAIChatModel
-        from pydantic_ai.providers.openai import OpenAIProvider
-
-        if settings.llm_base_url:
-            # Custom base URL (e.g., Azure OpenAI)
-            # Task 16.7: Extract secret value from SecretStr or use dummy key
-            api_key = (
-                settings.llm_api_key.get_secret_value()
-                if settings.llm_api_key
-                else _LOCAL_PROVIDER_DUMMY_KEY
-            )
-            provider = OpenAIProvider(
-                base_url=str(settings.llm_base_url),
-                api_key=api_key,
-            )
-            return OpenAIChatModel(model_name, provider=provider)
-        elif settings.llm_api_key:
-            # Task 16.7: Extract secret value from SecretStr
-            provider = OpenAIProvider(api_key=settings.llm_api_key.get_secret_value())
-            return OpenAIChatModel(model_name, provider=provider)
-        else:
-            # Use default provider (reads from environment)
-            return OpenAIChatModel(model_name)
-
-    else:
-        raise ValueError(
-            f"Unsupported provider: {provider_name}. "
-            f"Supported providers are: openai, anthropic, groq, ollama"
-        )
+    return LiteLLMModel(
+        model_name=litellm_model_name,
+        api_key=api_key,
+        settings=model_settings if model_settings else None,  # type: ignore[arg-type]
+    )
 
 
 async def _build_system_prompt(ctx: RunContext[AgentDeps]) -> str:
@@ -161,7 +79,10 @@ async def _build_system_prompt(ctx: RunContext[AgentDeps]) -> str:
     )
 
 
-def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
+def build_chat_agent(
+    model: Model | str | None = None,
+    settings: Settings | None = None,
+) -> Agent[AgentDeps, str]:
     """Build a Pydantic AI chat agent with tool-calling capabilities.
 
     This factory creates an Agent instance configured with:
@@ -177,6 +98,7 @@ def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
     Args:
         model: Optional model to use. If None, builds from Settings.
             Accepts Model instance or string identifier.
+        settings: Optional settings to use. If None, loads from environment.
 
     Returns:
         Configured Agent[AgentDeps, str] instance ready for use.
@@ -191,7 +113,7 @@ def build_chat_agent(model: Model | str | None = None) -> Agent[AgentDeps, str]:
         >>> print(result.output)
         "Hello! How can I help you today?"
     """
-    settings = get_settings()
+    settings = settings or get_settings()
     resolved_model = model if model is not None else build_model(settings)
 
     agent: Agent[AgentDeps, str] = Agent(

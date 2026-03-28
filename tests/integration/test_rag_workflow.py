@@ -5,6 +5,7 @@ No HTTP server involved - tests workflow logic directly.
 """
 
 import pytest
+from pydantic import SecretStr
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
@@ -25,9 +26,9 @@ def vector_store() -> InMemoryVectorStore:
 def settings() -> Settings:
     """Provide test settings with valid LLM configuration."""
     return Settings(
-        api_key="test-api-key-12345",
+        api_key=SecretStr("test-api-key-12345"),
         llm_model="openai:gpt-4",
-        llm_api_key="test-llm-key-12345",
+        llm_api_key=SecretStr("test-llm-key-12345"),
     )
 
 

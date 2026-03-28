@@ -4,9 +4,13 @@ This module provides a pluggable vector store interface for the RAG pattern.
 The default in-memory implementation uses TF-IDF cosine similarity for retrieval.
 """
 
+import asyncio
 import math
+import uuid
 from collections import Counter
 from typing import Protocol
+
+import httpx
 
 
 class VectorStore(Protocol):
@@ -39,6 +43,15 @@ class VectorStore(Protocol):
 
     async def clear(self) -> None:
         """Remove all documents from the vector store."""
+        ...
+
+    async def close(self) -> None:
+        """Close the vector store and release any resources.
+
+        This method is called during application shutdown to properly clean up
+        resources like HTTP clients, database connections, etc. Implementations
+        that don't hold external resources can implement this as a no-op.
+        """
         ...
 
 
@@ -226,6 +239,14 @@ class InMemoryVectorStore:
         self._doc_tokens.clear()
         self._idf_cache = None
         self._memory_usage = 0
+
+    async def close(self) -> None:
+        """Close the vector store and release any resources.
+
+        InMemoryVectorStore doesn't hold external resources, so this is a no-op.
+        Implements the VectorStore Protocol interface for consistency.
+        """
+        pass
 
     def get_memory_usage(self) -> int:
         """Get the current estimated memory usage in bytes.
@@ -453,9 +474,6 @@ class ChromaVectorStore:
             embedding_function=self._embedding_function,
         )
 
-        # Track document count for ID generation
-        self._doc_count = self._collection.count()
-
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the store with automatic embedding generation.
 
@@ -468,14 +486,17 @@ class ChromaVectorStore:
         if not chunks:
             return
 
-        # Generate unique IDs for each document
-        ids = [f"doc_{self._doc_count + i}" for i in range(len(chunks))]
-        self._doc_count += len(chunks)
+        # Task 21.4: Generate unique IDs using UUID4 to prevent race conditions
+        # in multi-process deployments with shared persistent Chroma DB.
+        # UUID-based IDs eliminate collisions that occur with counter-based IDs.
+        ids = [str(uuid.uuid4()) for _ in chunks]
 
-        # Add documents to collection (embeddings generated automatically)
-        self._collection.add(
-            documents=chunks,
-            ids=ids,
+        # Task 21.3: Wrap synchronous Chroma operation in executor to prevent blocking event loop
+        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self._collection.add(documents=chunks, ids=ids),
         )
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
@@ -501,14 +522,24 @@ class ChromaVectorStore:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
 
+        # Task 21.3: Wrap synchronous Chroma operations in executor to prevent blocking event loop
+        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        loop = asyncio.get_running_loop()
+
+        # Check collection count (synchronous operation)
+        count = await loop.run_in_executor(None, self._collection.count)
+
         # Return empty list for empty query or empty corpus
-        if not query.strip() or self._collection.count() == 0:
+        if not query.strip() or count == 0:
             return []
 
         # Query collection (embeddings generated automatically)
-        results = self._collection.query(
-            query_texts=[query],
-            n_results=min(top_k, self._collection.count()),
+        results = await loop.run_in_executor(
+            None,
+            lambda: self._collection.query(
+                query_texts=[query],
+                n_results=min(top_k, count),
+            ),
         )
 
         # Extract documents from results
@@ -523,14 +554,209 @@ class ChromaVectorStore:
         Deletes the entire collection and recreates it with the same
         configuration (name and embedding function).
         """
-        # Delete the collection
-        self._client.delete_collection(name=self.collection_name)
+        # Task 21.3: Wrap synchronous Chroma operations in executor to prevent blocking event loop
+        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        loop = asyncio.get_running_loop()
 
-        # Recreate collection with same configuration
-        self._collection = self._client.get_or_create_collection(
-            name=self.collection_name,
-            embedding_function=self._embedding_function,
+        # Delete the collection
+        await loop.run_in_executor(
+            None,
+            lambda: self._client.delete_collection(name=self.collection_name),
         )
 
-        # Reset document count
-        self._doc_count = 0
+        # Recreate collection with same configuration
+        new_collection = await loop.run_in_executor(
+            None,
+            lambda: self._client.get_or_create_collection(
+                name=self.collection_name,
+                embedding_function=self._embedding_function,
+            ),
+        )
+        self._collection = new_collection
+
+    async def close(self) -> None:
+        """Close the vector store and release any resources.
+
+        ChromaVectorStore doesn't require explicit cleanup as it manages
+        its own resources. This is a no-op implementation for Protocol compliance.
+        """
+        pass
+
+
+class OllamaEmbeddingVectorStore:
+    """Ollama-backed vector store using embedding-based semantic search.
+
+    This implementation provides semantic search capabilities using Ollama's
+    /v1/embeddings API endpoint. Uses cosine similarity for document ranking.
+    Suitable for local development and testing with Ollama.
+
+    Task 25.1: This class calls the Ollama API directly (POST /v1/embeddings)
+    without going through LiteLLM, so the base URL MUST include the /v1 suffix.
+    This differs from build_model() in chat_agent.py which uses LiteLLM (which
+    auto-appends /v1 for Ollama), so build_model() uses base URL without /v1.
+
+    Requires:
+        - Running Ollama instance at base_url
+        - Embedding model pulled: ollama pull <embedding_model>
+
+    Args:
+        embedding_model: Embedding model name (e.g., "nomic-embed-text:latest").
+        base_url: Base URL for Ollama API. Defaults to "http://localhost:11434/v1".
+        http_client: Optional HTTP client for requests. If None, creates a new client.
+
+    Example:
+        >>> store = OllamaEmbeddingVectorStore(embedding_model="nomic-embed-text:latest")
+        >>> await store.add_documents(["Python is a programming language"])
+        >>> results = await store.query("coding in Python", top_k=1)
+        >>> print(results[0])
+        "Python is a programming language"
+    """
+
+    DEFAULT_BASE_URL: str = "http://localhost:11434/v1"
+    DEFAULT_TIMEOUT: float = 30.0
+
+    def __init__(
+        self,
+        embedding_model: str,
+        base_url: str = DEFAULT_BASE_URL,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        """Initialize Ollama embedding vector store.
+
+        Args:
+            embedding_model: Embedding model name (e.g., "nomic-embed-text:latest").
+            base_url: Base URL for Ollama API. Defaults to "http://localhost:11434/v1".
+            http_client: Optional HTTP client. If None, creates a new client with timeout.
+        """
+        self._embedding_model = embedding_model
+        self._base_url = base_url.rstrip("/")
+        # Task 22.1: Track whether we own the http_client for proper cleanup
+        self._owns_http_client = http_client is None
+        self._http_client = http_client or httpx.AsyncClient(timeout=self.DEFAULT_TIMEOUT)
+        self._documents: list[str] = []
+        self._embeddings: list[list[float]] = []
+
+    async def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Call POST /v1/embeddings and return embedding vectors.
+
+        Args:
+            texts: List of text strings to embed.
+
+        Returns:
+            List of embedding vectors, one per input text.
+
+        Raises:
+            httpx.HTTPStatusError: If the API request fails.
+        """
+        response = await self._http_client.post(
+            f"{self._base_url}/embeddings",
+            json={"model": self._embedding_model, "input": texts},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Validate response structure (Task 22.2)
+        if "data" not in data:
+            raise ValueError(f"Unexpected Ollama embeddings response: {data}")
+
+        # Sort by index to ensure correct order
+        sorted_data = sorted(data["data"], key=lambda x: x["index"])
+
+        # Validate each item has 'embedding' key (Task 23.3)
+        for item in sorted_data:
+            if "embedding" not in item:
+                raise ValueError(f"Missing 'embedding' in response item: {item}")
+
+        return [item["embedding"] for item in sorted_data]
+
+    async def add_documents(self, chunks: list[str]) -> None:
+        """Add document chunks to the store with automatic embedding generation.
+
+        Args:
+            chunks: List of text chunks to add. Empty list is allowed.
+        """
+        if not chunks:
+            return
+
+        # Generate embeddings for all chunks
+        embeddings = await self._embed(chunks)
+
+        # Store documents and embeddings
+        self._documents.extend(chunks)
+        self._embeddings.extend(embeddings)
+
+    async def query(self, query: str, top_k: int = 5) -> list[str]:
+        """Retrieve top-k most relevant chunks using cosine similarity.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+
+        Returns:
+            List of up to top_k document chunks, ranked by embedding cosine
+            similarity (highest first). Returns empty list if corpus is empty
+            or query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1.
+        """
+        # Validate top_k parameter
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+        # Return empty list for empty query or empty corpus
+        if not query.strip() or not self._documents:
+            return []
+
+        # Generate query embedding
+        query_embedding = (await self._embed([query]))[0]
+
+        # Calculate cosine similarity scores
+        scores = [_cosine_similarity(query_embedding, emb) for emb in self._embeddings]
+
+        # Get top_k indices sorted by score (descending)
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+
+        return [self._documents[i] for i in top_indices]
+
+    async def clear(self) -> None:
+        """Remove all documents and embeddings from the store."""
+        self._documents.clear()
+        self._embeddings.clear()
+
+    async def close(self) -> None:
+        """Close the HTTP client if it was created internally.
+
+        Task 22.1: Prevents resource leaks by properly closing the AsyncClient
+        when the store is no longer needed. Only closes the client if it was
+        created by the store itself (not externally provided).
+
+        This method should be called during application shutdown, typically
+        in the FastAPI lifespan teardown.
+        """
+        if self._owns_http_client and self._http_client is not None:
+            await self._http_client.aclose()
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors.
+
+    Args:
+        a: First vector.
+        b: Second vector.
+
+    Returns:
+        Cosine similarity score in range [-1, 1]. Returns 0 if either
+        vector is zero or lengths don't match.
+    """
+    if len(a) != len(b):
+        return 0.0
+
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+
+    return dot / (norm_a * norm_b)

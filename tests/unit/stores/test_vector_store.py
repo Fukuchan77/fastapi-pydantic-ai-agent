@@ -34,12 +34,17 @@ class TestVectorStoreProtocol:
         """VectorStore Protocol defines clear method."""
         assert hasattr(VectorStore, "clear")
 
+    def test_protocol_has_close_method(self) -> None:
+        """VectorStore Protocol defines close method."""
+        assert hasattr(VectorStore, "close")
+
     def test_in_memory_vector_store_implements_protocol(self) -> None:
         """InMemoryVectorStore implements all VectorStore Protocol methods."""
         store = InMemoryVectorStore()
         assert hasattr(store, "add_documents")
         assert hasattr(store, "query")
         assert hasattr(store, "clear")
+        assert hasattr(store, "close")
 
 
 class TestInMemoryVectorStoreConstruction:
@@ -621,3 +626,38 @@ class TestEdgeCases:
         results = await store.query("a", top_k=1)
         assert len(results) == 1
         assert results[0] == "a b c"
+
+
+class TestClose:
+    """Test close() operation for resource cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_in_memory_vector_store_has_close_method(self) -> None:
+        """InMemoryVectorStore has close() method."""
+        store = InMemoryVectorStore()
+        assert hasattr(store, "close")
+        assert callable(store.close)
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_raise_error(self) -> None:
+        """close() completes without raising error."""
+        store = InMemoryVectorStore()
+        await store.add_documents(["test doc"])
+        # Should not raise any exception
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_close_on_empty_store(self) -> None:
+        """close() on empty store does not raise error."""
+        store = InMemoryVectorStore()
+        # Should not raise any exception
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_close_is_idempotent(self) -> None:
+        """close() can be called multiple times safely."""
+        store = InMemoryVectorStore()
+        await store.add_documents(["test doc"])
+        await store.close()
+        # Calling close() again should not raise error
+        await store.close()

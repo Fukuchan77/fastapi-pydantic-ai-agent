@@ -1,6 +1,7 @@
 """Unit tests for llm_api_key minimum length validation (Task 16.12)."""
 
 import pytest
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -12,7 +13,7 @@ class TestLLMAPIKeyMinimumLength:
     def test_llm_api_key_none_is_allowed(self):
         """llm_api_key=None should be allowed (optional for Ollama)."""
         settings = Settings(
-            api_key="test-api-key-12345",
+            api_key=SecretStr("test-api-key-12345"),
             llm_model="ollama:llama2",
             llm_api_key=None,
         )
@@ -22,9 +23,9 @@ class TestLLMAPIKeyMinimumLength:
         """Empty string llm_api_key should be rejected."""
         with pytest.raises(ValidationError) as exc_info:
             Settings(
-                api_key="test-api-key-12345",
+                api_key=SecretStr("test-api-key-12345"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="",
+                llm_api_key=SecretStr(""),
             )
 
         errors = exc_info.value.errors()
@@ -36,9 +37,9 @@ class TestLLMAPIKeyMinimumLength:
         """Whitespace-only llm_api_key should be rejected."""
         with pytest.raises(ValidationError) as exc_info:
             Settings(
-                api_key="test-api-key-12345",
+                api_key=SecretStr("test-api-key-12345"),
                 llm_model="openai:gpt-4o",
-                llm_api_key="   ",
+                llm_api_key=SecretStr("   "),
             )
 
         errors = exc_info.value.errors()
@@ -58,9 +59,9 @@ class TestLLMAPIKeyMinimumLength:
         for short_key in short_keys:
             with pytest.raises(ValidationError) as exc_info:
                 Settings(
-                    api_key="test-api-key-12345",
+                    api_key=SecretStr("test-api-key-12345"),
                     llm_model="openai:gpt-4o",
-                    llm_api_key=short_key,
+                    llm_api_key=SecretStr(short_key),
                 )
 
             errors = exc_info.value.errors()
@@ -74,9 +75,9 @@ class TestLLMAPIKeyMinimumLength:
     def test_llm_api_key_minimum_16_chars_accepted(self):
         """llm_api_key with exactly 16 characters should be accepted."""
         settings = Settings(
-            api_key="test-api-key-12345",
+            api_key=SecretStr("test-api-key-12345"),
             llm_model="openai:gpt-4o",
-            llm_api_key="a" * 16,  # Exactly 16 chars
+            llm_api_key=SecretStr("a" * 16),  # Exactly 16 chars
         )
         assert settings.llm_api_key.get_secret_value() == "a" * 16
 
@@ -90,9 +91,9 @@ class TestLLMAPIKeyMinimumLength:
 
         for long_key in long_keys:
             settings = Settings(
-                api_key="test-api-key-12345",
+                api_key=SecretStr("test-api-key-12345"),
                 llm_model="openai:gpt-4o",
-                llm_api_key=long_key,
+                llm_api_key=SecretStr(long_key),
             )
             assert settings.llm_api_key.get_secret_value() == long_key
 
@@ -100,9 +101,9 @@ class TestLLMAPIKeyMinimumLength:
         """llm_api_key with surrounding whitespace should be stripped and validated."""
         # Valid key with whitespace should be stripped and accepted
         settings = Settings(
-            api_key="test-api-key-12345",
+            api_key=SecretStr("test-api-key-12345"),
             llm_model="openai:gpt-4o",
-            llm_api_key="  valid-key-123456  ",  # 18 chars after strip
+            llm_api_key=SecretStr("  valid-key-123456  "),  # 18 chars after strip
         )
         assert (
             settings.llm_api_key.get_secret_value() == "  valid-key-123456  "
@@ -119,9 +120,9 @@ class TestLLMAPIKeyMinimumLength:
         for placeholder in actual_placeholders:
             with pytest.raises(ValidationError) as exc_info:
                 Settings(
-                    api_key="test-api-key-12345",
+                    api_key=SecretStr("test-api-key-12345"),
                     llm_model="openai:gpt-4o",
-                    llm_api_key=placeholder,
+                    llm_api_key=SecretStr(placeholder),
                 )
 
             errors = exc_info.value.errors()
