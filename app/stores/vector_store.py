@@ -86,6 +86,7 @@ class InMemoryVectorStore:
         self,
         max_documents: int = DEFAULT_MAX_DOCUMENTS,
         max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+        max_memory_bytes: int | None = None,
     ) -> None:
         """Initialize an empty in-memory vector store.
 
@@ -94,17 +95,24 @@ class InMemoryVectorStore:
                 oldest documents are evicted (FIFO). Defaults to 1000.
             max_chunk_size: Maximum size (in characters) for each document chunk.
                 Chunks exceeding this limit will be rejected. Defaults to 100_000.
+            max_memory_bytes: Maximum memory usage in bytes. When exceeded,
+                oldest documents are evicted (FIFO). None means unlimited. Defaults to None.
         """
         self._documents: list[str] = []
         self._doc_tokens: list[list[str]] = []
         self._idf_cache: dict[str, float] | None = None
+        self._memory_usage: int = 0  # Track approximate memory usage in bytes
         self.max_documents = max_documents
         self.max_chunk_size = max_chunk_size
+        self.max_memory_bytes = max_memory_bytes
 
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the store.
 
         When the total document count exceeds max_documents after adding,
+        the oldest documents are automatically evicted (FIFO).
+
+        When memory usage exceeds max_memory_bytes after adding,
         the oldest documents are automatically evicted (FIFO).
 
         Documents are tokenized at index time and cached in _doc_tokens.
@@ -121,16 +129,24 @@ class InMemoryVectorStore:
             if len(chunk) > self.max_chunk_size:
                 raise ValueError(f"Document chunk too large (max {self.max_chunk_size} chars)")
 
-        # Tokenize new documents at index time
+        # Tokenize new documents at index time and update memory usage
         for chunk in chunks:
             self._documents.append(chunk)
-            self._doc_tokens.append(self._tokenize(chunk))
+            tokens = self._tokenize(chunk)
+            self._doc_tokens.append(tokens)
+            # Estimate memory: document string + tokenized list
+            self._memory_usage += self._estimate_memory(chunk, tokens)
 
         # Apply FIFO eviction if document count exceeds max_documents
         # Must keep _documents and _doc_tokens synchronized
         if len(self._documents) > self.max_documents:
-            self._documents = self._documents[-self.max_documents :]
-            self._doc_tokens = self._doc_tokens[-self.max_documents :]
+            num_to_evict = len(self._documents) - self.max_documents
+            self._evict_oldest(num_to_evict)
+
+        # Apply FIFO eviction if memory usage exceeds max_memory_bytes
+        if self.max_memory_bytes is not None:
+            while self._memory_usage > self.max_memory_bytes and len(self._documents) > 0:
+                self._evict_oldest(1)
 
         # Invalidate IDF cache since corpus changed
         self._idf_cache = None
@@ -204,11 +220,65 @@ class InMemoryVectorStore:
     async def clear(self) -> None:
         """Remove all documents from the store.
 
-        Also clears the tokenization cache and invalidates IDF cache.
+        Also clears the tokenization cache, invalidates IDF cache, and resets memory usage.
         """
         self._documents.clear()
         self._doc_tokens.clear()
         self._idf_cache = None
+        self._memory_usage = 0
+
+    def get_memory_usage(self) -> int:
+        """Get the current estimated memory usage in bytes.
+
+        Returns:
+            Approximate memory usage in bytes, including document strings
+            and tokenized representations.
+        """
+        return self._memory_usage
+
+    def _estimate_memory(self, chunk: str, tokens: list[str]) -> int:
+        """Estimate memory usage for a document chunk and its tokens.
+
+        Uses a simple heuristic: document size + token list overhead.
+        This is an approximation; actual Python object overhead may vary.
+
+        Args:
+            chunk: The document chunk string.
+            tokens: The tokenized representation.
+
+        Returns:
+            Estimated memory usage in bytes.
+        """
+        # Document string: 2 bytes per character (Python 3 uses compact representation)
+        doc_size = len(chunk) * 2
+
+        # Token list: each token string + list overhead
+        token_size = sum(len(token) * 2 for token in tokens) + len(tokens) * 8
+
+        # Total: document + tokens + Python object overhead
+        return doc_size + token_size + 100  # 100 bytes overhead per document
+
+    def _evict_oldest(self, num_to_evict: int) -> None:
+        """Evict the oldest N documents (FIFO eviction).
+
+        Updates memory usage tracking and maintains synchronization between
+        _documents and _doc_tokens.
+
+        Args:
+            num_to_evict: Number of oldest documents to remove.
+        """
+        for i in range(min(num_to_evict, len(self._documents))):
+            # Subtract memory of evicted document
+            evicted_chunk = self._documents[i]
+            evicted_tokens = self._doc_tokens[i]
+            self._memory_usage -= self._estimate_memory(evicted_chunk, evicted_tokens)
+
+        # Remove from front of lists (oldest documents)
+        self._documents = self._documents[num_to_evict:]
+        self._doc_tokens = self._doc_tokens[num_to_evict:]
+
+        # Ensure memory usage doesn't go negative due to estimation errors
+        self._memory_usage = max(0, self._memory_usage)
 
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text by splitting on whitespace and converting to lowercase.

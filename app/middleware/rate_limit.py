@@ -1,5 +1,6 @@
 """Rate limiting middleware using slowapi."""
 
+import time
 from collections.abc import Callable
 from collections.abc import Sequence
 
@@ -106,12 +107,15 @@ def add_rate_limiting(
     ) -> JSONResponse:
         """Handle rate limit exceeded exception with structured error response.
 
+        Task 20.11: Adds Retry-After header to improve client UX and reduce retry storms.
+
         Args:
             request: The request that exceeded rate limit
             exc: The rate limit exceeded exception
 
         Returns:
-            JSONResponse: 429 response with ErrorResponse body and rate limit headers
+            JSONResponse: 429 response with ErrorResponse body, rate limit headers,
+                         and Retry-After header indicating seconds until reset
         """
         error_response = ErrorResponse(
             message="Rate limit exceeded. Please try again later.",
@@ -122,6 +126,21 @@ def add_rate_limiting(
         headers: dict[str, str] = {}
         if hasattr(exc, "headers") and exc.headers:
             headers = dict(exc.headers)
+
+        # Task 20.11: Add Retry-After header (RFC 6585, RFC 7231)
+        # Calculate seconds until rate limit resets based on X-RateLimit-Reset header
+        if "X-RateLimit-Reset" in headers:
+            try:
+                reset_timestamp = int(headers["X-RateLimit-Reset"])
+                current_timestamp = int(time.time())
+                retry_after_seconds = max(1, reset_timestamp - current_timestamp)
+                headers["Retry-After"] = str(retry_after_seconds)
+            except (ValueError, TypeError):
+                # If parsing fails, default to 60 seconds (reasonable for most rate limits)
+                headers["Retry-After"] = "60"
+        else:
+            # Fallback if X-RateLimit-Reset is not available
+            headers["Retry-After"] = "60"
 
         return JSONResponse(
             status_code=429,

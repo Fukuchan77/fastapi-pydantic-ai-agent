@@ -6,12 +6,12 @@ by introducing an explicit error hierarchy for better error handling.
 
 import pytest
 
-from app.models.errors import RAGEvaluationError
-from app.models.errors import RAGPermanentError
-from app.models.errors import RAGRetrievalError
-from app.models.errors import RAGSynthesisError
-from app.models.errors import RAGTransientError
-from app.models.errors import RAGWorkflowError
+from app.workflows.exceptions import RAGEvaluationError
+from app.workflows.exceptions import RAGPermanentError
+from app.workflows.exceptions import RAGRetrievalError
+from app.workflows.exceptions import RAGSynthesisError
+from app.workflows.exceptions import RAGTransientError
+from app.workflows.exceptions import RAGWorkflowError
 
 
 class TestRAGErrorHierarchy:

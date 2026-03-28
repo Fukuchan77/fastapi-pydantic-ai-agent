@@ -41,8 +41,9 @@ def test_security_headers_included_in_response(client: TestClient) -> None:
     assert "X-Frame-Options" in response.headers
     assert response.headers["X-Frame-Options"] == "DENY"
 
-    assert "X-XSS-Protection" in response.headers
-    assert response.headers["X-XSS-Protection"] == "1; mode=block"
+    # Task 20.5: X-XSS-Protection removed - deprecated in modern browsers
+    # CSP supersedes it (tested below)
+    assert "X-XSS-Protection" not in response.headers
 
     assert "Referrer-Policy" in response.headers
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
@@ -117,3 +118,27 @@ def test_custom_security_headers() -> None:
     assert response.status_code == 200
     assert response.headers["X-Custom-Header"] == "custom-value"
     assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
+
+
+def test_x_xss_protection_not_included() -> None:
+    """Test that X-XSS-Protection header is NOT included.
+
+    Task 20.5: X-XSS-Protection header was removed from modern browsers
+    (Chrome 2019) and can cause XSS vulnerabilities in older IE versions.
+    Content-Security-Policy supersedes it and provides better protection.
+    """
+    app = FastAPI()
+    app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
+
+    @app.get("/test")
+    async def test_endpoint() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app)
+    response = client.get("/test")
+
+    assert response.status_code == 200
+    # X-XSS-Protection should NOT be present (deprecated)
+    assert "X-XSS-Protection" not in response.headers
+    # CSP should be present instead (provides better XSS protection)
+    assert "Content-Security-Policy" in response.headers

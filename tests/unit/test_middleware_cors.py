@@ -115,3 +115,70 @@ def test_cors_wildcard_origin() -> None:
     assert response.status_code == 200
     assert response.headers["Access-Control-Allow-Origin"] == "*"
     assert "Access-Control-Allow-Credentials" not in response.headers
+
+
+def test_cors_vary_origin_header_with_specific_origin(client: TestClient) -> None:
+    """Test that Vary: Origin header is added when returning specific origin.
+
+    When CORS middleware returns a specific origin (not *), it must include
+    Vary: Origin header to prevent proxy caches from returning the wrong
+    CORS headers to different clients (Task 20.4).
+    """
+    response = client.get(
+        "/test",
+        headers={"Origin": "https://example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://example.com"
+    # When returning a specific origin, must include Vary: Origin
+    assert response.headers.get("Vary") == "Origin"
+
+
+def test_cors_vary_origin_header_not_added_for_wildcard() -> None:
+    """Test that Vary: Origin header is NOT added when returning wildcard (*).
+
+    Wildcard responses don't vary by origin, so Vary: Origin should not be added.
+    """
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+    )
+
+    @app.get("/test")
+    async def test_endpoint() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app)
+
+    response = client.get(
+        "/test",
+        headers={"Origin": "https://any-domain.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
+    # Wildcard response doesn't vary by origin
+    assert "Vary" not in response.headers
+
+
+def test_cors_vary_origin_header_in_preflight_response(client: TestClient) -> None:
+    """Test that Vary: Origin header is added in preflight (OPTIONS) responses.
+
+    Preflight responses that return a specific origin must also include
+    Vary: Origin to prevent cache pollution.
+    """
+    response = client.options(
+        "/test",
+        headers={
+            "Origin": "https://example.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://example.com"
+    # Preflight response with specific origin must include Vary: Origin
+    assert response.headers.get("Vary") == "Origin"

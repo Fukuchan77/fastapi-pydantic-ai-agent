@@ -13,7 +13,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Middleware to add security headers to all responses.
 
     This middleware adds common security headers to protect against:
-    - XSS attacks (X-XSS-Protection)
     - Clickjacking (X-Frame-Options)
     - MIME sniffing (X-Content-Type-Options)
     - Man-in-the-middle attacks (Strict-Transport-Security)
@@ -43,8 +42,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "X-Content-Type-Options": "nosniff",
             # Prevent clickjacking
             "X-Frame-Options": "DENY",
-            # Enable XSS protection
-            "X-XSS-Protection": "1; mode=block",
             # Force HTTPS (31536000 seconds = 1 year)
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
             # Content Security Policy - only allow resources from same origin

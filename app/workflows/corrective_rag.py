@@ -22,11 +22,11 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.config import Settings
-from app.models.errors import RAGWorkflowError
 from app.stores.vector_store import VectorStore
 from app.workflows.events import EvaluateEvent
 from app.workflows.events import SearchEvent
 from app.workflows.events import SynthesizeEvent
+from app.workflows.exceptions import RAGWorkflowError
 from app.workflows.state import WorkflowState
 
 
