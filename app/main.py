@@ -10,9 +10,7 @@ from typing import Any
 
 import httpx
 import logfire
-from fastapi import BackgroundTasks
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -23,15 +21,13 @@ from app.config import get_settings
 from app.logging_config import configure_logging
 from app.middleware.cors import CORSMiddleware
 from app.middleware.rate_limit import add_rate_limiting
-from app.middleware.request_id import RequestIDMiddleware
-from app.middleware.request_id import request_id_var
+from app.middleware.request_id import RequestIDMiddleware, request_id_var
 from app.middleware.request_size import RequestSizeLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.models.errors import ErrorResponse
 from app.observability import configure_logfire
 from app.stores.session_store import InMemorySessionStore
 from app.stores.vector_store import InMemoryVectorStore
-
 
 logger = logging.getLogger(__name__)
 
