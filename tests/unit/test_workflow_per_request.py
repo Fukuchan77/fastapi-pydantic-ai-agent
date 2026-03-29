@@ -1,7 +1,11 @@
-"""Tests for per-request workflow instance isolation.
+"""Tests for workflow instance caching and isolation.
 
-Task 16.21: Verify that get_rag_workflow() creates a new CorrectiveRAGWorkflow
-instance for each request to ensure proper isolation between concurrent requests.
+Task 26.3: Verify that get_rag_workflow() returns cached CorrectiveRAGWorkflow
+instances across requests. Workflows are stateless (per-run state lives in
+llama-index Context objects), so reusing them is safe and avoids rebuilding
+Agent instances on every request.
+
+Note: This supersedes the Task 16.21 per-request isolation requirement.
 """
 
 import pytest
@@ -35,23 +39,20 @@ def mock_request(mock_app: FastAPI) -> Request:
     return Request(scope=scope, receive=None)  # type: ignore
 
 
-def test_get_rag_workflow_returns_new_instance_per_call(
-    mock_request: Request, mock_app: FastAPI
-) -> None:
-    """Test that get_rag_workflow() returns a new instance on each call.
+def test_get_rag_workflow_returns_cached_instance(mock_request: Request, mock_app: FastAPI) -> None:
+    """Test that get_rag_workflow() returns the same cached instance on each call.
 
-    This verifies that workflow instances are not shared between requests,
-    ensuring proper isolation for concurrent request handling.
+    Task 26.3: Verifies that workflow instances are cached and reused across
+    requests. Workflows are stateless so sharing is safe and improves performance.
     """
     # Act: Call get_rag_workflow multiple times
     workflow1 = get_rag_workflow(mock_request)
     workflow2 = get_rag_workflow(mock_request)
     workflow3 = get_rag_workflow(mock_request)
 
-    # Assert: Each call should return a different instance
-    assert workflow1 is not workflow2, "First and second calls should return different instances"
-    assert workflow2 is not workflow3, "Second and third calls should return different instances"
-    assert workflow1 is not workflow3, "First and third calls should return different instances"
+    # Assert: Each call should return the same cached instance
+    assert workflow1 is workflow2, "First and second calls should return the same cached instance"
+    assert workflow2 is workflow3, "Second and third calls should return the same cached instance"
 
     # Assert: All instances should have the same vector_store reference (shared resource)
     assert workflow1.vector_store is workflow2.vector_store, (
@@ -62,26 +63,36 @@ def test_get_rag_workflow_returns_new_instance_per_call(
     )
 
 
-def test_workflow_instances_have_independent_state(
-    mock_request: Request, mock_app: FastAPI
+def test_different_vector_stores_get_different_workflows(
+    mock_app: FastAPI,
 ) -> None:
-    """Test that workflow instances maintain independent state.
+    """Test that different vector_store instances produce different workflows.
 
-    Verifies that modifying one workflow instance doesn't affect another,
-    even though they share immutable configuration (vector_store, llm_settings).
+    Task 26.3: Verifies that the cache key is the vector_store identity,
+    so apps with different vector stores each get their own workflow instance.
     """
-    # Act: Create two workflow instances
-    workflow1 = get_rag_workflow(mock_request)
-    workflow2 = get_rag_workflow(mock_request)
+    app1 = FastAPI()
+    app1.state.vector_store = InMemoryVectorStore()
 
-    # Assert: Workflows are different objects with their own identity
-    assert id(workflow1) != id(workflow2), "Workflows should have different object IDs"
+    app2 = FastAPI()
+    app2.state.vector_store = InMemoryVectorStore()
 
-    # Assert: Both workflows have their own agent instances
-    # (Even though they use the same model/settings, they're separate Agent objects)
-    assert workflow1._eval_agent is not workflow2._eval_agent, (
-        "Each workflow should have its own eval_agent instance"
+    def make_request(app: FastAPI) -> Request:
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [],
+            "app": app,
+        }
+        return Request(scope=scope, receive=None)  # type: ignore
+
+    workflow1 = get_rag_workflow(make_request(app1))
+    workflow2 = get_rag_workflow(make_request(app2))
+
+    assert workflow1 is not workflow2, (
+        "Different vector_store instances should produce different workflow instances"
     )
-    assert workflow1._synth_agent is not workflow2._synth_agent, (
-        "Each workflow should have its own synth_agent instance"
-    )
+    assert workflow1.vector_store is app1.state.vector_store
+    assert workflow2.vector_store is app2.state.vector_store

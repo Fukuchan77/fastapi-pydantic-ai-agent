@@ -10,6 +10,7 @@ Each workflow.run() call gets its own isolated Context for state management.
 
 import asyncio
 import hashlib
+import html
 import logging
 import random
 import time
@@ -457,7 +458,7 @@ class CorrectiveRAGWorkflow(Workflow):
             return []
 
         total = 0
-        result = []
+        result: list[str] = []
         for chunk in chunks:
             chunk_len = len(chunk)
             # If adding this chunk would exceed limit and we have at least one chunk, stop
@@ -469,6 +470,33 @@ class CorrectiveRAGWorkflow(Workflow):
         # Always return at least the first chunk (even if it exceeds the limit)
         # to ensure we have some context
         return result if result else chunks[:1]
+
+    def _build_prompt(
+        self,
+        query: str,
+        chunks: list[str],
+        instruction: str,
+        chunk_label: str = "Chunk",
+    ) -> str:
+        """Build prompt with HTML-escaped query and chunks.
+
+        DRY helper to avoid code duplication between _evaluate_relevance()
+        and _synthesize_answer(). Handles HTML escaping and XML tag formatting.
+
+        Args:
+            query: User query to escape and include.
+            chunks: Document chunks to escape and include.
+            instruction: Instruction text to prepend to prompt.
+            chunk_label: Label prefix for chunks (default: "Chunk").
+
+        Returns:
+            Formatted prompt string with instruction, XML-tagged query, and context.
+        """
+        sanitized_query = html.escape(query)
+        context = "\n\n".join(
+            f"{chunk_label} {i + 1}: {html.escape(chunk)}" for i, chunk in enumerate(chunks)
+        )
+        return f"{instruction}\n\n<query>{sanitized_query}</query>\n\n<context>{context}</context>"
 
     async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
         """Evaluate relevance of retrieved chunks using LLM.
@@ -493,15 +521,42 @@ class CorrectiveRAGWorkflow(Workflow):
                 len(chunks),
             )
 
-        # Build evaluation prompt
-        context = "\n\n".join(f"Chunk {i + 1}: {chunk}" for i, chunk in enumerate(chunks))
-        prompt = f"""Given the following chunks and query, assess if the chunks contain \
-relevant information to answer the query.
-
-Query: {query}
-
-Context:
-{context}
+        # Task 27.2 & 28.3: HTML escaping for XML tag safety
+        #
+        # SECURITY NOTE: html.escape() limitations
+        # -----------------------------------------
+        # We use html.escape() to sanitize user input before inserting it into
+        # XML tags (<query> and <context>). This prevents XML injection attacks
+        # where malicious input could break out of the tags.
+        #
+        # HOWEVER, this approach has limitations:
+        # 1. LLMs can decode HTML entities - they understand that &lt; means <
+        # 2. This means prompt injection is still possible despite HTML escaping
+        # 3. Example: A user could inject "&lt;query&gt;malicious&lt;/query&gt;"
+        #    which the LLM would interpret as actual XML tags
+        #
+        # Real defense strategy:
+        # ----------------------
+        # The fundamental protection against prompt injection comes from:
+        # - Using the LLM's messages API with proper system/user role separation
+        # - System messages define behavior; user messages are treated as data
+        # - Modern LLMs enforce this boundary to prevent prompt injection
+        #
+        # Current approach (defense-in-depth):
+        # - XML tags provide structure for the prompt
+        # - html.escape() prevents accidental XML parsing issues
+        # - But don't rely on it as primary security mechanism
+        #
+        # Future improvement (Task 28.3):
+        # - Migrate to LLM messages API with explicit role separation
+        # - Use system message for instructions, user message for query/context
+        # - This provides stronger isolation than text-based XML tags
+        #
+        # DRY refactoring: Use _build_prompt() helper to avoid code duplication
+        instruction = """Given the following chunks and query, assess if the chunks contain \
+relevant information to answer the query."""
+        prompt = self._build_prompt(query, chunks, instruction, chunk_label="Chunk")
+        prompt += """
 
 Respond with exactly one word:
 - "relevant" if the chunks contain sufficient information to answer the query
@@ -596,16 +651,43 @@ Response:"""
                 len(chunks),
             )
 
-        # Build synthesis prompt
-        context = "\n\n".join(f"Source {i + 1}: {chunk}" for i, chunk in enumerate(chunks))
-        prompt = f"""Using the following context, provide a clear and concise answer to the query.
-
-Query: {query}
-
-Context:
-{context}
-
-Answer:"""
+        # Task 27.2 & 28.3: HTML escaping for XML tag safety
+        #
+        # SECURITY NOTE: html.escape() limitations
+        # -----------------------------------------
+        # We use html.escape() to sanitize user input before inserting it into
+        # XML tags (<query> and <context>). This prevents XML injection attacks
+        # where malicious input could break out of the tags.
+        #
+        # HOWEVER, this approach has limitations:
+        # 1. LLMs can decode HTML entities - they understand that &lt; means <
+        # 2. This means prompt injection is still possible despite HTML escaping
+        # 3. Example: A user could inject "&lt;query&gt;malicious&lt;/query&gt;"
+        #    which the LLM would interpret as actual XML tags
+        #
+        # Real defense strategy:
+        # ----------------------
+        # The fundamental protection against prompt injection comes from:
+        # - Using the LLM's messages API with proper system/user role separation
+        # - System messages define behavior; user messages are treated as data
+        # - Modern LLMs enforce this boundary to prevent prompt injection
+        #
+        # Current approach (defense-in-depth):
+        # - XML tags provide structure for the prompt
+        # - html.escape() prevents accidental XML parsing issues
+        # - But don't rely on it as primary security mechanism
+        #
+        # Future improvement (Task 28.3):
+        # - Migrate to LLM messages API with explicit role separation
+        # - Use system message for instructions, user message for query/context
+        # - This provides stronger isolation than text-based XML tags
+        #
+        # DRY refactoring: Use _build_prompt() helper to avoid code duplication
+        instruction = (
+            "Using the following context, provide a clear and concise answer to the query."
+        )
+        prompt = self._build_prompt(query, chunks, instruction, chunk_label="Source")
+        prompt += "\n\nAnswer:"
 
         # Task 16.24: Retry logic with exponential backoff for transient errors
         # Use configurable retry parameters from settings

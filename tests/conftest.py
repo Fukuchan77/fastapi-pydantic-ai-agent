@@ -48,6 +48,33 @@ def clear_settings_cache():
 
 
 @pytest.fixture(autouse=True)
+def clear_workflow_cache():
+    """Clear workflow cache before and after each test to prevent pollution.
+
+    Task 27.1: The _workflow_cache dict in app/deps/workflow.py is a module-level
+    global that persists between tests. Without clearing it, tests can see stale
+    entries from previous tests, especially if Python reuses id() values after GC.
+
+    Task 28.2: Also clear the _get_cached_model LRU cache to prevent settings
+    pollution. When tests change LLM settings via monkeypatch, the @lru_cache
+    decorator on _get_cached_model() causes the old model to persist, leading
+    to tests inadvertently sharing configuration.
+
+    This fixture runs automatically (autouse=True) before and after every test
+    to ensure test isolation.
+    """
+    from app.deps import workflow as wf
+
+    # Clear before test runs
+    wf._workflow_cache.clear()
+    wf._get_cached_model.cache_clear()
+    yield
+    # Clear after test completes
+    wf._workflow_cache.clear()
+    wf._get_cached_model.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def test_env(monkeypatch):
     """Set up test environment variables for all tests.
 
@@ -122,15 +149,32 @@ def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
             or "provide a clear and concise answer" in last_message
         )
         if is_synthesis:
-            # Extract query from the prompt
-            if "query:" in last_message:
-                query_start = last_message.find("query:") + 6
-                query_end = last_message.find("\n", query_start)
-                if query_end == -1:
-                    query_end = last_message.find("context:", query_start)
-                query = last_message[query_start:query_end].strip()
-                content = f"Based on the provided context, {query}"
-                return ModelResponse(parts=[TextPart(content=content)])
+            # Extract query from XML tags
+            if "<query>" in last_message:
+                query_start = last_message.find("<query>") + 7
+                query_end = last_message.find("</query>", query_start)
+                if query_end != -1:
+                    query = last_message[query_start:query_end].strip()
+
+                    # Extract context to provide more realistic answers
+                    context = ""
+                    if "<context>" in last_message:
+                        context_start = last_message.find("<context>") + 9
+                        context_end = last_message.find("</context>", context_start)
+                        if context_end != -1:
+                            context = last_message[context_start:context_end].strip()
+
+                    # Generate contextual answer based on query content
+                    if "fastapi" in query.lower():
+                        content = (
+                            "FastAPI is a modern, fast web framework for building APIs with Python."
+                        )
+                    elif context:
+                        # Use context to generate relevant answer
+                        content = f"Based on the provided context, {query}"
+                    else:
+                        content = f"Based on the available information, {query}"
+                    return ModelResponse(parts=[TextPart(content=content)])
             content = "Based on the provided context, here is the answer."
             return ModelResponse(parts=[TextPart(content=content)])
 

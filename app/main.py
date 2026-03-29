@@ -48,9 +48,14 @@ class RetryTransport(httpx.AsyncHTTPTransport):
     5xx server errors) with exponential backoff and jitter. Does NOT retry client
     errors (4xx) as they indicate issues with the request itself.
 
+    Task 26.1: Only retries transient 5xx errors {500, 502, 503, 504}.
+    Non-transient errors like 501 (Not Implemented) and 505 (HTTP Version Not Supported)
+    are permanent configuration issues that will not be resolved by retrying.
+
     Retry behavior:
     - Network errors (ConnectError, TimeoutException): Retry
-    - 5xx server errors (500-599): Retry
+    - Transient 5xx errors (500, 502, 503, 504): Retry
+    - Non-transient 5xx errors (501, 505, etc.): Do NOT retry
     - 4xx client errors (400-499): Do NOT retry
     - Exponential backoff: delay = base_delay * (2 ** attempt) + random jitter
     - Jitter: random.uniform(0, 1) to prevent thundering herd
@@ -60,6 +65,10 @@ class RetryTransport(httpx.AsyncHTTPTransport):
         base_delay: Base delay in seconds for exponential backoff (from settings)
         **kwargs: Additional arguments passed to AsyncHTTPTransport
     """
+
+    # Task 26.1: Define retryable status codes - only transient server errors
+    # Use frozenset for immutability (RUF012)
+    RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({500, 502, 503, 504})
 
     def __init__(
         self,
@@ -81,8 +90,8 @@ class RetryTransport(httpx.AsyncHTTPTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Handle HTTP request with retry logic.
 
-        Retries transient failures (network errors, 5xx) with exponential backoff.
-        Does NOT retry client errors (4xx) as they indicate request issues.
+        Retries transient failures (network errors, transient 5xx) with exponential backoff.
+        Does NOT retry client errors (4xx) or non-transient 5xx errors.
 
         Args:
             request: The HTTP request to execute
@@ -99,9 +108,12 @@ class RetryTransport(httpx.AsyncHTTPTransport):
             try:
                 response = await super().handle_async_request(request)
 
-                # Check if response status indicates a transient error (5xx)
-                # 5xx errors are transient, retry if attempts remaining
-                if 500 <= response.status_code < 600 and attempt < self.max_attempts - 1:
+                # Task 26.1: Only retry transient 5xx errors {500, 502, 503, 504}
+                # Non-transient errors (501, 505, etc.) are permanent and should not be retried
+                if (
+                    response.status_code in self.RETRYABLE_STATUS_CODES
+                    and attempt < self.max_attempts - 1
+                ):
                     delay = self.base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                     logger.warning(
                         "HTTP request to %s returned %d (attempt %d/%d), retrying in %.2fs",

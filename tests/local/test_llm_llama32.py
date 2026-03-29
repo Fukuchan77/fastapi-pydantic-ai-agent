@@ -8,6 +8,10 @@ To set up:
     4. Run tests: mise run test:local
 
 Tests are automatically skipped if Ollama is not available (via require_ollama fixture).
+
+Note: llama3.2 (3B parameters) does not support reliable tool calling.
+Mock tools are disabled for these tests to prevent infinite loops.
+For tool calling tests, use larger models like llama3.1:70b or granite3.3:8b.
 """
 
 import pytest
@@ -34,7 +38,7 @@ def ollama_settings_llama32(monkeypatch: pytest.MonkeyPatch) -> Settings:
     return Settings(
         api_key=SecretStr("local-dev-api-key-12345"),
         llm_model="ollama:llama3.2:latest",
-        enable_mock_tools=True,  # Enable mock tools for testing
+        enable_mock_tools=False,  # llama3.2 does not support reliable tool calling
     )
 
 
