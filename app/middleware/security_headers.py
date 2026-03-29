@@ -44,8 +44,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "X-Frame-Options": "DENY",
             # Force HTTPS (31536000 seconds = 1 year)
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-            # Content Security Policy - only allow resources from same origin
-            "Content-Security-Policy": "default-src 'self'",
+            # Content Security Policy - allow Swagger UI inline scripts/styles and CDN resources
+            # 'unsafe-inline' is needed for Swagger UI's inline JavaScript and CSS
+            # cdn.jsdelivr.net is needed for Swagger UI's static assets
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+                "img-src 'self' "
+            ),
             # Control referrer information
             "Referrer-Policy": "strict-origin-when-cross-origin",
             # Restrict access to sensitive features

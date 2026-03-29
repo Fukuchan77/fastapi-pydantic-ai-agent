@@ -1,6 +1,6 @@
-"""Unit tests for Task 26.3: Workflow caching performance optimization.
+"""Unit tests for Workflow caching performance optimization.
 
-Task 26.3: The current implementation in app/deps/workflow.py creates a new
+The current implementation in app/deps/workflow.py creates a new
 CorrectiveRAGWorkflow + LiteLLMModel + 2 Agents for every request. This is inefficient
 because:
 - Workflow instances are stateless (state lives in per-run Context)
@@ -31,7 +31,7 @@ from app.deps.workflow import get_rag_workflow
 async def test_workflow_instances_should_be_reused_across_requests() -> None:
     """Test that workflow instances are reused across multiple requests.
 
-    Task 26.3: Currently creates new workflow per request - test will FAIL.
+    Currently creates new workflow per request - test will FAIL.
     After fix: Should return the same workflow instance - test will PASS.
     """
     # Create mock request with vector_store in app.state
@@ -59,7 +59,7 @@ async def test_workflow_instances_should_be_reused_across_requests() -> None:
 async def test_llm_model_should_be_reused_across_workflows() -> None:
     """Test that LiteLLMModel instances are reused across workflows.
 
-    Task 26.3: Currently creates new model per request via build_model().
+    Currently creates new model per request via build_model().
     Test will FAIL before fix, PASS after fix.
     """
     # Create mock request with vector_store
@@ -82,7 +82,7 @@ async def test_llm_model_should_be_reused_across_workflows() -> None:
 async def test_agent_instances_should_be_reused_across_workflows() -> None:
     """Test that Agent instances are reused across workflows.
 
-    Task 26.3: Currently creates new agents per workflow init.
+    Currently creates new agents per workflow init.
     Test will FAIL before fix, PASS after fix.
     """
     # Create mock request with vector_store
@@ -107,7 +107,7 @@ async def test_agent_instances_should_be_reused_across_workflows() -> None:
 async def test_workflow_caching_performance_improvement() -> None:
     """Test that workflow caching provides measurable performance improvement.
 
-    Task 26.3: Measures time to create workflow instances.
+    Measures time to create workflow instances.
     After caching, subsequent calls should be significantly faster.
     """
     # Create mock request with vector_store

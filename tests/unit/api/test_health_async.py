@@ -1,10 +1,10 @@
-"""Unit tests for async health_check endpoint - Task 16.16."""
+"""Unit tests for async health_check endpoint - ."""
 
 import inspect
 
 
 def test_health_check_is_async_function() -> None:
-    """Test that health_check is defined as async def (Task 16.16).
+    """Test that health_check is defined as async def ().
 
     FastAPI best practice: All route handlers should be async def to avoid
     blocking the event loop, even if they don't perform I/O operations.
@@ -14,5 +14,5 @@ def test_health_check_is_async_function() -> None:
 
     # Verify the function is a coroutine function (async def)
     assert inspect.iscoroutinefunction(health_check), (
-        "health_check() must be defined as 'async def' not 'def' (Task 16.16 requirement)"
+        "health_check() must be defined as 'async def' not 'def' (requirement)"
     )

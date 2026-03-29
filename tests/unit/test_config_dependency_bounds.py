@@ -12,7 +12,7 @@ from pathlib import Path
 def test_all_dependencies_have_upper_bounds() -> None:
     """Verify all production dependencies have version upper bounds.
 
-    Security & Stability Requirement (Task 16.4):
+    Security & Stability Requirement ():
     - All dependencies MUST specify upper bounds to prevent breaking changes
     - Format: "package>=X.Y.Z,<NEXT_MAJOR" or "package>=X.Y.Z,<NEXT_MINOR"
     - Example: "fastapi>=0.135.1,<1.0" or "pydantic-settings>=2.13.1,<3.0"

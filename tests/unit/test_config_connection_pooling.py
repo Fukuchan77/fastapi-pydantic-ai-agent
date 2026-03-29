@@ -1,6 +1,6 @@
 """Test connection pooling configuration for httpx.AsyncClient.
 
-Task 16.6: Configure request/connection timeouts and pooling.
+Configure request/connection timeouts and pooling.
 Timeouts are already configured. This test verifies connection pool limits.
 """
 

@@ -122,7 +122,7 @@ def test_cors_vary_origin_header_with_specific_origin(client: TestClient) -> Non
 
     When CORS middleware returns a specific origin (not *), it must include
     Vary: Origin header to prevent proxy caches from returning the wrong
-    CORS headers to different clients (Task 20.4).
+    CORS headers to different clients ().
     """
     response = client.get(
         "/test",

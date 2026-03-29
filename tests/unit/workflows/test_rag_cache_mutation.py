@@ -1,6 +1,6 @@
 """Unit tests for RAG workflow cache mutation protection.
 
-Task 21.5: Verifies that cached results cannot be mutated by callers.
+Verifies that cached results cannot be mutated by callers.
 """
 
 import pytest
@@ -16,7 +16,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 async def test_cache_returns_copy_not_reference():
     """Test that cached results are returned as copies, not references.
 
-    Task 21.5: Callers mutating the returned dict should not corrupt the cache.
+    Callers mutating the returned dict should not corrupt the cache.
     The workflow should return dict(cached_result) instead of cached_result.
     """
     # Create workflow with caching enabled
@@ -73,7 +73,7 @@ async def test_cache_returns_copy_not_reference():
 async def test_cache_isolation_between_calls():
     """Test that each cache hit returns an independent copy.
 
-    Task 21.5: Multiple callers should each get their own copy of the cached result,
+    Multiple callers should each get their own copy of the cached result,
     so mutations by one caller don't affect others.
     """
     # Create workflow with caching

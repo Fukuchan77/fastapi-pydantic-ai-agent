@@ -1,4 +1,4 @@
-"""Integration tests for Task 8.0: Wiring components in app/main.py lifespan."""
+"""Integration tests for Wiring components in app/main.py lifespan."""
 
 import pytest
 
@@ -8,7 +8,7 @@ class TestTask8ComponentWiring:
 
     @pytest.mark.asyncio
     async def test_lifespan_initializes_vector_store(self, monkeypatch) -> None:
-        """Lifespan must initialize vector_store in app.state (Task 8.0)."""
+        """Lifespan must initialize vector_store in app.state ()."""
         # Set required environment variables
         monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
@@ -37,7 +37,7 @@ class TestTask8ComponentWiring:
 
     @pytest.mark.asyncio
     async def test_lifespan_initializes_chat_agent(self, monkeypatch) -> None:
-        """Lifespan must initialize chat_agent in app.state (Task 8.0)."""
+        """Lifespan must initialize chat_agent in app.state ()."""
         # Set required environment variables
         monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
@@ -65,7 +65,7 @@ class TestTask8ComponentWiring:
             assert isinstance(app.state.chat_agent, Agent)
 
     def test_v1_router_is_registered(self, monkeypatch) -> None:
-        """Test that v1 router is included in the app (Task 8.0)."""
+        """Test that v1 router is included in the app ()."""
         # Set required environment variables
         monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")

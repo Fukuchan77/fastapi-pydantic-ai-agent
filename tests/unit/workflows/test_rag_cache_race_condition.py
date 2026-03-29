@@ -1,4 +1,4 @@
-"""Tests for Task 21.1: Add asyncio.Lock to protect LRU cache in CorrectiveRAGWorkflow.
+"""Tests for Add asyncio.Lock to protect LRU cache in CorrectiveRAGWorkflow.
 
 Race condition: Multiple coroutines accessing _cache concurrently without locking causes:
 1. Cache miss race: Two simultaneous requests for same query both miss cache and
@@ -35,7 +35,7 @@ def mock_settings():
 
 @patch("app.workflows.corrective_rag.Agent")
 def test_workflow_has_cache_lock_attribute(mock_agent_class, mock_settings):
-    """Task 21.1: Verify that CorrectiveRAGWorkflow has _cache_lock attribute.
+    """Verify that CorrectiveRAGWorkflow has _cache_lock attribute.
 
     This test will FAIL initially (no lock attribute), then PASS after fix.
     """
@@ -48,7 +48,7 @@ def test_workflow_has_cache_lock_attribute(mock_agent_class, mock_settings):
         llm_settings=mock_settings,
     )
 
-    # Task 21.1: Workflow should have _cache_lock attribute
+    # Workflow should have _cache_lock attribute
     assert hasattr(workflow, "_cache_lock"), "CorrectiveRAGWorkflow must have _cache_lock attribute"
     assert isinstance(workflow._cache_lock, asyncio.Lock), (
         "_cache_lock must be an asyncio.Lock instance"
@@ -57,7 +57,7 @@ def test_workflow_has_cache_lock_attribute(mock_agent_class, mock_settings):
 
 @patch("app.workflows.corrective_rag.Agent")
 def test_cache_lock_is_initialized_in_constructor(mock_agent_class, mock_settings):
-    """Task 21.1: Verify that _cache_lock is initialized in __init__().
+    """Verify that _cache_lock is initialized in __init__().
 
     This ensures the lock is created when the workflow is instantiated.
     """

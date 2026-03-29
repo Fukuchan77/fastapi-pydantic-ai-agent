@@ -1,4 +1,4 @@
-"""Unit tests for OllamaEmbeddingVectorStore response validation (Task 22.2)."""
+"""Unit tests for OllamaEmbeddingVectorStore response validation ()."""
 
 import pytest
 from httpx import Response
@@ -7,7 +7,7 @@ from app.stores.vector_store import OllamaEmbeddingVectorStore
 
 
 class TestOllamaEmbeddingResponseValidation:
-    """Test suite for Task 22.2: Ollama embeddings API response validation."""
+    """Test suite for Ollama embeddings API response validation."""
 
     @pytest.mark.asyncio
     async def test_embed_validates_data_key_exists(self) -> None:

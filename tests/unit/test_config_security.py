@@ -104,7 +104,7 @@ def test_max_output_retries_accepts_valid_range(monkeypatch: pytest.MonkeyPatch)
 def test_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that api_key value is not exposed in repr output to prevent accidental logging.
 
-    Task 16.7: With SecretStr, the field name appears in repr as 'api_key=SecretStr(...)',
+    With SecretStr, the field name appears in repr as 'api_key=SecretStr(...)',
     but the actual secret value is hidden (shown as '**********'). This is acceptable and
     more useful for debugging than completely hiding the field.
     """
@@ -127,7 +127,7 @@ def test_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_llm_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that llm_api_key value is not exposed in repr output to prevent accidental logging.
 
-    Task 16.7: With SecretStr, the field name appears but the value is hidden.
+    With SecretStr, the field name appears but the value is hidden.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
@@ -147,7 +147,7 @@ def test_llm_api_key_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_logfire_token_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that logfire_token value is not exposed in repr output to prevent accidental logging.
 
-    Task 16.7: With SecretStr, the field name appears but the value is hidden.
+    With SecretStr, the field name appears but the value is hidden.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
@@ -168,7 +168,7 @@ def test_logfire_token_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_all_secrets_protected_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that all secret field values are protected in repr output when all are set.
 
-    Task 16.7: With SecretStr, field names appear but actual secret values are hidden.
+    With SecretStr, field names appear but actual secret values are hidden.
     This is the desired behavior - we want to see which fields are set while keeping values secret.
     """
     monkeypatch.setenv("API_KEY", "secret-api-key-123")

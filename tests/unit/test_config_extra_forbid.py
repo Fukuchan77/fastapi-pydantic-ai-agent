@@ -1,6 +1,6 @@
 """Tests for Settings extra='forbid' validation.
 
-Task 16.11: Verify Settings rejects unknown environment variables.
+Verify Settings rejects unknown environment variables.
 """
 
 import pytest

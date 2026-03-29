@@ -1,6 +1,5 @@
 """Tests for concurrent iteration issue in cleanup_expired_sessions.
 
-Task: FIX 優先対応事項 - Issue 1
 Problem: RuntimeError can occur when cleanup_expired_sessions iterates over
 _last_access.items() while another coroutine modifies the dictionary via clear().
 """

@@ -1,6 +1,6 @@
 """Tests for OpenAPI security scheme configuration in main.py.
 
-Task 16.5: Verify that the OpenAPI schema correctly defines the API key
+Verify that the OpenAPI schema correctly defines the API key
 security scheme so that API documentation (Swagger UI) properly displays
 authentication requirements.
 """

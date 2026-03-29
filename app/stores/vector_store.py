@@ -88,7 +88,7 @@ class InMemoryVectorStore:
         - Default limit is 100,000 characters per chunk
     """
 
-    # Task 16.14: Extract magic numbers to class constants for maintainability
+    # Extract magic numbers to class constants for maintainability
     DEFAULT_MAX_DOCUMENTS: int = 1000
     DEFAULT_MAX_CHUNK_SIZE: int = 100_000
     MAX_TOP_K: int = 1000
@@ -196,7 +196,7 @@ class InMemoryVectorStore:
         # Tokenize query
         query_tokens = self._tokenize(query)
 
-        # Task 3.13: Validate token count to prevent DoS via excessive tokens
+        # Validate token count to prevent DoS via excessive tokens
         # This is defense-in-depth: with whitespace tokenization, the character
         # limit is more restrictive than the token limit,
         # but this validation guards against future tokenization changes or edge cases.
@@ -486,13 +486,13 @@ class ChromaVectorStore:
         if not chunks:
             return
 
-        # Task 21.4: Generate unique IDs using UUID4 to prevent race conditions
+        # Generate unique IDs using UUID4 to prevent race conditions
         # in multi-process deployments with shared persistent Chroma DB.
         # UUID-based IDs eliminate collisions that occur with counter-based IDs.
         ids = [str(uuid.uuid4()) for _ in chunks]
 
-        # Task 21.3: Wrap synchronous Chroma operation in executor to prevent blocking event loop
-        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        # Wrap synchronous Chroma operation in executor to prevent blocking event loop
+        # Use get_running_loop() instead of deprecated get_event_loop()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -522,8 +522,8 @@ class ChromaVectorStore:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
 
-        # Task 21.3: Wrap synchronous Chroma operations in executor to prevent blocking event loop
-        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        # Wrap synchronous Chroma operations in executor to prevent blocking event loop
+        # Use get_running_loop() instead of deprecated get_event_loop()
         loop = asyncio.get_running_loop()
 
         # Check collection count (synchronous operation)
@@ -554,8 +554,8 @@ class ChromaVectorStore:
         Deletes the entire collection and recreates it with the same
         configuration (name and embedding function).
         """
-        # Task 21.3: Wrap synchronous Chroma operations in executor to prevent blocking event loop
-        # Task 23.1: Use get_running_loop() instead of deprecated get_event_loop()
+        # Wrap synchronous Chroma operations in executor to prevent blocking event loop
+        # Use get_running_loop() instead of deprecated get_event_loop()
         loop = asyncio.get_running_loop()
 
         # Delete the collection
@@ -590,7 +590,7 @@ class OllamaEmbeddingVectorStore:
     /v1/embeddings API endpoint. Uses cosine similarity for document ranking.
     Suitable for local development and testing with Ollama.
 
-    Task 25.1: This class calls the Ollama API directly (POST /v1/embeddings)
+    This class calls the Ollama API directly (POST /v1/embeddings)
     without going through LiteLLM, so the base URL MUST include the /v1 suffix.
     This differs from build_model() in chat_agent.py which uses LiteLLM (which
     auto-appends /v1 for Ollama), so build_model() uses base URL without /v1.
@@ -630,7 +630,7 @@ class OllamaEmbeddingVectorStore:
         """
         self._embedding_model = embedding_model
         self._base_url = base_url.rstrip("/")
-        # Task 22.1: Track whether we own the http_client for proper cleanup
+        # Track whether we own the http_client for proper cleanup
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(timeout=self.DEFAULT_TIMEOUT)
         self._documents: list[str] = []
@@ -655,14 +655,14 @@ class OllamaEmbeddingVectorStore:
         response.raise_for_status()
         data = response.json()
 
-        # Validate response structure (Task 22.2)
+        # Validate response structure ()
         if "data" not in data:
             raise ValueError(f"Unexpected Ollama embeddings response: {data}")
 
         # Sort by index to ensure correct order
         sorted_data = sorted(data["data"], key=lambda x: x["index"])
 
-        # Validate each item has 'embedding' key (Task 23.3)
+        # Validate each item has 'embedding' key ()
         for item in sorted_data:
             if "embedding" not in item:
                 raise ValueError(f"Missing 'embedding' in response item: {item}")
@@ -727,7 +727,7 @@ class OllamaEmbeddingVectorStore:
     async def close(self) -> None:
         """Close the HTTP client if it was created internally.
 
-        Task 22.1: Prevents resource leaks by properly closing the AsyncClient
+        Prevents resource leaks by properly closing the AsyncClient
         when the store is no longer needed. Only closes the client if it was
         created by the store itself (not externally provided).
 

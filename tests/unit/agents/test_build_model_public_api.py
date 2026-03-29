@@ -1,6 +1,6 @@
 """Tests for public build_model API.
 
-Task 16.33: Verify that build_model is exposed as a public function
+Verify that build_model is exposed as a public function
 and can be imported and used by other modules.
 """
 

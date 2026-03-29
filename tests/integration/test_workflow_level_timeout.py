@@ -1,6 +1,6 @@
 """Tests for workflow-level timeout in Corrective RAG workflow.
 
-Task 17.6: Verify workflow.run() is wrapped with asyncio.timeout() to prevent
+Verify workflow.run() is wrapped with asyncio.timeout() to prevent
 indefinite hangs when max_retries is high or LLM is slow.
 """
 
@@ -23,7 +23,7 @@ async def test_workflow_times_out_after_rag_workflow_timeout(
 ) -> None:
     """Test that workflow.run() times out after rag_workflow_timeout seconds.
 
-    Task 17.6: Verify entire workflow execution is wrapped with timeout to prevent
+    Verify entire workflow execution is wrapped with timeout to prevent
     indefinite hangs even when individual LLM agent timeouts work correctly.
     """
     # Set workflow timeout of 10 seconds
@@ -55,7 +55,7 @@ async def test_workflow_times_out_after_rag_workflow_timeout(
     )
 
     # Run workflow - should timeout at workflow level (10s, not 15s or 30s)
-    # Wrap with asyncio.timeout() to simulate what the API does (Task 17.6)
+    # Wrap with asyncio.timeout() to simulate what the API does ()
     start_time = asyncio.get_event_loop().time()
 
     with pytest.raises(asyncio.TimeoutError):
@@ -75,7 +75,7 @@ async def test_workflow_timeout_is_configurable(
 ) -> None:
     """Test that rag_workflow_timeout setting is respected.
 
-    Task 17.6: Verify timeout value comes from Settings.rag_workflow_timeout.
+    Verify timeout value comes from Settings.rag_workflow_timeout.
     """
     # Set higher workflow timeout
     monkeypatch.setenv("API_KEY", "test-api-key-1234567890")
@@ -106,7 +106,7 @@ async def test_workflow_timeout_is_configurable(
     )
 
     # Run workflow - should NOT timeout (8s < 20s)
-    # Wrap with asyncio.timeout() to simulate what the API does (Task 17.6)
+    # Wrap with asyncio.timeout() to simulate what the API does ()
     async with asyncio.timeout(settings.rag_workflow_timeout):
         result = await workflow.run(query="test query", max_retries=1)
 

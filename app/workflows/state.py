@@ -20,6 +20,8 @@ class WorkflowState(BaseModel):
         query: The original user query string.
         search_count: Number of vector store searches performed (incremented on each retry).
         max_retries: Maximum number of search retries allowed before giving up.
+            Set to 0 to perform search only once without retries (internal use).
+            Public API requires minimum 1.
         final_answer: The synthesized answer from the LLM, or None if not yet generated.
         context_found: Whether relevant context was found (True) or retries were exhausted (False).
     """

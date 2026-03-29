@@ -51,11 +51,11 @@ def clear_settings_cache():
 def clear_workflow_cache():
     """Clear workflow cache before and after each test to prevent pollution.
 
-    Task 27.1: The _workflow_cache dict in app/deps/workflow.py is a module-level
+    The _workflow_cache dict in app/deps/workflow.py is a module-level
     global that persists between tests. Without clearing it, tests can see stale
     entries from previous tests, especially if Python reuses id() values after GC.
 
-    Task 28.2: Also clear the _get_cached_model LRU cache to prevent settings
+    Also clear the _get_cached_model LRU cache to prevent settings
     pollution. When tests change LLM settings via monkeypatch, the @lru_cache
     decorator on _get_cached_model() causes the old model to persist, leading
     to tests inadvertently sharing configuration.
@@ -85,7 +85,7 @@ def test_env(monkeypatch):
     that need to verify cloud provider validation should explicitly unset it
     using monkeypatch.delenv("LLM_API_KEY").
 
-    Task 16.34: Fixed misleading comment - the fixture DOES set LLM_API_KEY.
+    Fixed misleading comment - the fixture DOES set LLM_API_KEY.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")

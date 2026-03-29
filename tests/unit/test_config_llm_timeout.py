@@ -1,4 +1,4 @@
-"""Unit tests for LLM agent timeout configuration (Task 19.3)."""
+"""Unit tests for LLM agent timeout configuration ()."""
 
 import pytest
 from pydantic import ValidationError

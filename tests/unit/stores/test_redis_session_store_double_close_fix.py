@@ -1,4 +1,4 @@
-"""Unit test for Task 24.1: Fix double redis.close() call bug.
+"""Unit test for Fix double redis.close() call bug.
 
 This test verifies that RedisSessionStore.close() calls the underlying
 Redis client's close() method exactly once, not twice.
@@ -34,7 +34,7 @@ def redis_store(mock_redis):
 async def test_redis_store_close_called_once(redis_store, mock_redis):
     """Test that close() calls redis.close() exactly once, not twice.
 
-    Task 24.1 P1-HIGH: The bug at lines 492-493 calls await self._redis.close()
+    P1-HIGH: The bug at lines 492-493 calls await self._redis.close()
     twice consecutively, which can cause ConnectionError or connection pool
     corruption. This test verifies the fix by asserting close() is called
     exactly once.

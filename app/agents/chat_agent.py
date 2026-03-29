@@ -35,7 +35,7 @@ def build_model(settings: Settings) -> Model:
     llm_model = settings.llm_model
     if ":" in llm_model:
         provider_name, model_name = llm_model.split(":", 1)
-        provider_name = provider_name.lower()  # Normalize to lowercase (Task 22.3)
+        provider_name = provider_name.lower()  # Normalize to lowercase ()
     else:
         provider_name, model_name = "openai", llm_model
 
@@ -49,7 +49,7 @@ def build_model(settings: Settings) -> Model:
     if settings.llm_base_url:
         model_settings["litellm_api_base"] = str(settings.llm_base_url)
     elif provider_name == "ollama":
-        # Task 25.1: Ollama base URL does NOT include /v1 suffix because LiteLLM
+        # Ollama base URL does NOT include /v1 suffix because LiteLLM
         # automatically appends /v1 when making requests to Ollama endpoints.
         # This differs from OllamaEmbeddingVectorStore which calls the Ollama API
         # directly (not through LiteLLM) and therefore needs the full URL with /v1.

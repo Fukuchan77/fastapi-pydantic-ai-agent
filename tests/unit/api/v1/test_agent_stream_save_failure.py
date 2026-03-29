@@ -1,6 +1,5 @@
 """Tests for silent session save failure in streaming endpoint.
 
-Task: FIX 優先対応事項 - Issue 3
 Problem: In agent.py:237-244, session save failures during streaming are silently caught
 by the outer exception handler without specific logging or error handling.
 """

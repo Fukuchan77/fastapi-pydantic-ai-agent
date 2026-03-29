@@ -1,4 +1,4 @@
-"""Tests for VectorStore memory usage monitoring - Task 19.5.
+"""Tests for VectorStore memory usage monitoring - .
 
 These tests verify that the VectorStore correctly:
 - Tracks memory usage as documents are added

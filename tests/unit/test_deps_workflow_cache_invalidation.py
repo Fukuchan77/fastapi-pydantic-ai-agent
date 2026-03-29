@@ -1,6 +1,6 @@
 """Tests for _get_cached_model cache invalidation strategy.
 
-Task 30.1: The @lru_cache decorator on _get_cached_model() doesn't key the cache
+The @lru_cache decorator on _get_cached_model() doesn't key the cache
 by settings values. When settings change (e.g., LLM_MODEL environment variable),
 the cached model persists instead of being rebuilt with the new settings.
 

@@ -32,7 +32,7 @@ def configure_logfire(settings: Settings) -> None:
         # Pydantic AI is now instrumented for observability
     """
     # Only configure logfire if token is provided and non-empty
-    # Task 16.7: Extract secret value from SecretStr
+    # Extract secret value from SecretStr
     if settings.logfire_token:
         logfire.configure(
             token=settings.logfire_token.get_secret_value(),

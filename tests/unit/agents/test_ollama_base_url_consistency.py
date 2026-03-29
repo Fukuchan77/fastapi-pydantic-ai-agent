@@ -1,6 +1,6 @@
 """Test Ollama base URL consistency between build_model() and OllamaEmbeddingVectorStore.
 
-Task 25.1: Verify that the apparent inconsistency is intentional:
+Verify that the apparent inconsistency is intentional:
 - build_model() uses http://localhost:11434 (no /v1) because LiteLLM auto-appends /v1
 - OllamaEmbeddingVectorStore uses http://localhost:11434/v1 because it calls API directly
 
@@ -21,7 +21,7 @@ from app.stores.vector_store import OllamaEmbeddingVectorStore
 def test_ollama_base_url_litellm_auto_appends_v1():
     """Verify that LiteLLM auto-appends /v1 to Ollama base URL.
 
-    Task 25.1: This test documents that build_model() correctly uses
+    This test documents that build_model() correctly uses
     http://localhost:11434 (without /v1) because LiteLLM automatically
     appends /v1 when making requests to Ollama.
 
@@ -69,7 +69,7 @@ def test_ollama_base_url_litellm_auto_appends_v1():
 def test_ollama_embedding_vector_store_needs_v1():
     """Verify that OllamaEmbeddingVectorStore correctly includes /v1 in base URL.
 
-    Task 25.1: This test documents that OllamaEmbeddingVectorStore must use
+    This test documents that OllamaEmbeddingVectorStore must use
     http://localhost:11434/v1 (WITH /v1) because it calls the Ollama API
     directly without going through LiteLLM.
 
@@ -89,7 +89,7 @@ def test_ollama_embedding_vector_store_needs_v1():
 def test_ollama_consistency_documented_in_code():
     """Verify that the inconsistency is documented with comments in source code.
 
-    Task 25.1: After fixing, both files should have comments explaining
+    After fixing, both files should have comments explaining
     why build_model() uses base_url without /v1 while OllamaEmbeddingVectorStore
     uses base_url with /v1.
     """
@@ -114,7 +114,7 @@ def test_ollama_consistency_documented_in_code():
 def test_ollama_litellm_actual_request_url():
     """Integration test: Verify LiteLLM actually appends /v1 when calling Ollama.
 
-    Task 25.1: This integration test would verify the actual HTTP request
+    This integration test would verify the actual HTTP request
     made by LiteLLM includes /v1, but we can't run it without a real Ollama
     instance. Marked as integration test.
     """

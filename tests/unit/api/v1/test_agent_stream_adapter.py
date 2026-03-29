@@ -7,7 +7,7 @@ class TestDefaultSSEAdapter:
     """Test DefaultSSEAdapter SSE format compliance."""
 
     def test_format_event_has_data_prefix(self) -> None:
-        """format_event() must return SSE with ' ' prefix (Task 8.1.1)."""
+        """format_event() must return SSE with ' ' prefix (.1)."""
         adapter = DefaultSSEAdapter()
         result = adapter.format_event("delta", "Hello")
 

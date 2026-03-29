@@ -47,7 +47,7 @@ class TestSessionStoreProtocol:
         assert hasattr(SessionStore, "clear")
 
     def test_protocol_has_cleanup_expired_sessions_method(self) -> None:
-        """Protocol declares cleanup_expired_sessions() method (Task 3.15)."""
+        """Protocol declares cleanup_expired_sessions() method ()."""
         assert hasattr(SessionStore, "cleanup_expired_sessions")
 
     def test_in_memory_store_satisfies_protocol(self) -> None:
@@ -86,7 +86,7 @@ class TestInMemorySessionStoreConstruction:
         assert store.session_ttl == 1800
 
     def test_custom_max_sessions(self) -> None:
-        """Constructor accepts custom max_sessions limit (Task 3.16)."""
+        """Constructor accepts custom max_sessions limit ()."""
         store = InMemorySessionStore(max_sessions=5000)
         assert store.max_sessions == 5000
 
@@ -233,7 +233,7 @@ class TestSaveHistory:
 
     @pytest.mark.asyncio
     async def test_save_history_non_model_message_raises(self) -> None:
-        """save_history() raises TypeError for non-ModelMessage instances (Task 3.14)."""
+        """save_history() raises TypeError for non-ModelMessage instances ()."""
         store = InMemorySessionStore()
         invalid_messages: list[Any] = [{"role": "user", "content": "Hello"}]
         with pytest.raises(TypeError, match="must be ModelMessage instances"):
@@ -282,7 +282,7 @@ class TestClear:
 
     @pytest.mark.asyncio
     async def test_clear_removes_last_access(self) -> None:
-        """clear() removes last_access entry to prevent memory leak (Task 3.12)."""
+        """clear() removes last_access entry to prevent memory leak ()."""
         store = InMemorySessionStore()
         await store.save_history("session-1", [])
         # Verify last_access exists
@@ -395,7 +395,7 @@ class TestMessageValidation:
 
     @pytest.mark.asyncio
     async def test_strict_isinstance_check(self) -> None:
-        """save_history() uses strict isinstance check (Task 3.14)."""
+        """save_history() uses strict isinstance check ()."""
         store = InMemorySessionStore()
 
         class FakeMessage:
@@ -408,7 +408,7 @@ class TestMessageValidation:
 
 
 class TestTTLAndCleanup:
-    """Test TTL-based session lifecycle management (Task 3.11)."""
+    """Test TTL-based session lifecycle management ()."""
 
     @pytest.mark.asyncio
     async def test_cleanup_removes_expired_sessions(self) -> None:
@@ -422,14 +422,14 @@ class TestTTLAndCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_is_public_method(self) -> None:
-        """cleanup_expired_sessions() is public for external calling (Task 3.15)."""
+        """cleanup_expired_sessions() is public for external calling ()."""
         store = InMemorySessionStore()
         assert hasattr(store, "cleanup_expired_sessions")
         assert not store.cleanup_expired_sessions.__name__.startswith("_")
 
 
 class TestLRUEviction:
-    """Test LRU eviction when max_sessions limit is exceeded (Task 3.16)."""
+    """Test LRU eviction when max_sessions limit is exceeded ()."""
 
     @pytest.mark.asyncio
     async def test_lru_eviction_when_limit_exceeded(self) -> None:
@@ -445,7 +445,7 @@ class TestLRUEviction:
 
 
 class TestConcurrency:
-    """Test per-session locking for concurrent operations (Task 3.5)."""
+    """Test per-session locking for concurrent operations ()."""
 
     @pytest.mark.asyncio
     async def test_concurrent_access_different_sessions(self) -> None:

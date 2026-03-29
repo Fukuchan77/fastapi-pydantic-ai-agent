@@ -12,7 +12,7 @@ from app.config import Settings
 def test_main_app_can_be_imported() -> None:
     """Test that main app can be imported successfully.
 
-    Task 16.3: Fixed misleading test name from 'test_main_app_import_fails'.
+    Fixed misleading test name from 'test_main_app_import_fails'.
     The test verifies successful import, not failure.
     """
     from app.main import app
@@ -48,7 +48,7 @@ def test_exception_handler_returns_500_with_error_response() -> None:
 
     assert response.status_code == 500
     # Should return generic message, not the actual exception message
-    # Task 16.9: Error code is now consistently used
+    # Error code is now consistently used
     assert response.json() == {
         "message": "Internal server error occurred",
         "code": "INTERNAL_ERROR",
@@ -82,7 +82,7 @@ def test_exception_handler_structure() -> None:
 def test_lifespan_initializes_app_state_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that lifespan initializes http_client and settings in app.state.
 
-    Task 2.6: This test verifies that after lifespan startup, app.state.http_client
+    This test verifies that after lifespan startup, app.state.http_client
     is an httpx.AsyncClient instance and app.state.settings is a Settings instance.
 
     TestClient properly triggers the lifespan context manager, ensuring that
@@ -122,7 +122,7 @@ def test_lifespan_initializes_app_state_attributes(monkeypatch: pytest.MonkeyPat
 def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that cleanup interval has a minimum of 300 seconds.
 
-    Task 2.7: When session_ttl is very short (e.g., 60 seconds for testing),
+    When session_ttl is very short (e.g., 60 seconds for testing),
     the cleanup interval should not be session_ttl // 2 (30 seconds), but
     should have a minimum of 300 seconds to avoid wasting CPU on frequent cleanups.
 

@@ -1,6 +1,6 @@
 """Performance benchmark tests for fastapi-pydantic-ai-agent.
 
-Task 17.5: Baseline latency, throughput, and cache hit rate metrics.
+Baseline latency, throughput, and cache hit rate metrics.
 
 These tests measure performance characteristics:
 - Latency: Time taken for individual requests
@@ -52,7 +52,7 @@ async def benchmark_client(client: AsyncClient) -> AsyncIterator[AsyncClient]:
 
     yield client
 
-    # Task 21.6: Cleanup vector store to prevent test contamination
+    # Cleanup vector store to prevent test contamination
     # This ensures benchmark tests don't affect other tests sharing the same app instance
     await app.state.vector_store.clear()
 
@@ -62,7 +62,7 @@ async def benchmark_client(client: AsyncClient) -> AsyncIterator[AsyncClient]:
 async def test_agent_chat_latency(benchmark_client):
     """Measure baseline latency for agent chat endpoint.
 
-    Task 17.5: Establishes baseline latency metric for POST /v1/agent/chat.
+    Establishes baseline latency metric for POST /v1/agent/chat.
     Measures time from request to response completion.
 
     Acceptance Criteria:
@@ -106,7 +106,7 @@ async def test_agent_chat_latency(benchmark_client):
 async def test_rag_query_latency(benchmark_client):
     """Measure baseline latency for RAG query endpoint.
 
-    Task 17.5: Establishes baseline latency metric for POST /v1/rag/query.
+    Establishes baseline latency metric for POST /v1/rag/query.
     Measures full workflow: search -> evaluate -> synthesize.
 
     Acceptance Criteria:
@@ -148,7 +148,7 @@ async def test_rag_query_latency(benchmark_client):
 async def test_throughput_agent_chat(benchmark_client):
     """Measure throughput (requests per second) for agent chat endpoint.
 
-    Task 17.5: Measures how many concurrent requests the system can handle.
+    Measures how many concurrent requests the system can handle.
 
     Acceptance Criteria:
     - Throughput should exceed MIN_THROUGHPUT requests/second
@@ -185,7 +185,7 @@ async def test_throughput_agent_chat(benchmark_client):
 async def test_cache_hit_rate(benchmark_client):
     """Measure cache hit rate for repeated RAG queries.
 
-    Task 17.5: Validates that query result caching (Task 17.1) improves
+    Validates that query result caching () improves
     performance by reducing redundant LLM calls.
 
     Acceptance Criteria:
@@ -229,7 +229,7 @@ async def test_cache_hit_rate(benchmark_client):
 async def test_end_to_end_performance_profile(benchmark_client):
     """Comprehensive performance profile across all endpoints.
 
-    Task 17.5: Generates complete performance baseline covering
+    Generates complete performance baseline covering
     agent chat, RAG query, and streaming endpoints.
 
     Reports:

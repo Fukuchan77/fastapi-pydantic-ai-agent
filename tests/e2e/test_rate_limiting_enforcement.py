@@ -1,6 +1,6 @@
 """E2E tests for rate limiting enforcement on API routes.
 
-Task 20.2: Verify that rate limiting is actually enforced on all routes.
+Verify that rate limiting is actually enforced on all routes.
 Quick workaround (Option C): All routes including health checks have a 1000/minute
 rate limit applied globally via SlowAPIMiddleware. This effectively exempts health
 checks (they'll never hit 1000/min) while still providing protection on protected routes.

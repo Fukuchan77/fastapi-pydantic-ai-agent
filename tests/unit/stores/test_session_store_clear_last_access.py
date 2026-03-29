@@ -1,4 +1,4 @@
-"""Unit tests for Task 3.12: _last_access memory leak fix in InMemorySessionStore.clear()."""
+"""Unit tests for _last_access memory leak fix in InMemorySessionStore.clear()."""
 
 import asyncio
 
@@ -10,7 +10,7 @@ from app.stores.session_store import InMemorySessionStore
 
 
 class TestSessionStoreClearLastAccessFix:
-    """Test suite for Task 3.12: Fix _last_access memory leak in clear()."""
+    """Test suite for Fix _last_access memory leak in clear()."""
 
     @pytest.fixture
     def store(self) -> InMemorySessionStore:

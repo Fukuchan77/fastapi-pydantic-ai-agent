@@ -1,6 +1,6 @@
 """Tests for RAG workflow error classification.
 
-Task: Fix RAG Workflow error classification at app/workflows/corrective_rag.py:337
+Fix RAG Workflow error classification at app/workflows/corrective_rag.py:337
 by introducing an explicit error hierarchy for better error handling.
 """
 

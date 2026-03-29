@@ -1,4 +1,4 @@
-"""Unit tests for Task 3.13: Token count validation in InMemoryVectorStore.query()."""
+"""Unit tests for Token count validation in InMemoryVectorStore.query()."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from app.stores.vector_store import InMemoryVectorStore
 
 
 class TestVectorStoreTokenCountValidation:
-    """Test suite for Task 3.13: Add token count validation to query()."""
+    """Test suite for Add token count validation to query()."""
 
     @pytest.fixture
     def store(self) -> InMemoryVectorStore:

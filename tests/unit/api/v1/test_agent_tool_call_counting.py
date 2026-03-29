@@ -1,6 +1,6 @@
 """Unit tests for tool call counting logic in agent endpoints.
 
-Task 16.31: Fix tool_calls_made counter to count using
+Fix tool_calls_made counter to count using
 isinstance(m, ModelResponse) and isinstance(p, ToolCallPart).
 """
 

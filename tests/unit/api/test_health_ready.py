@@ -1,6 +1,6 @@
 """Unit tests for readiness health check endpoint.
 
-Task 16.1: Deep readiness health check that verifies dependencies are operational.
+Deep readiness health check that verifies dependencies are operational.
 """
 
 from unittest.mock import MagicMock

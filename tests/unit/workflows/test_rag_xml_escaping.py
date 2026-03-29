@@ -1,6 +1,6 @@
 """Unit tests for XML tag content escaping in RAG workflow prompts.
 
-Task 27.2: Ensures user queries and document chunks are HTML-escaped
+Ensures user queries and document chunks are HTML-escaped
 to prevent XML structure injection in <query> and <context> tags.
 """
 
@@ -16,7 +16,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 async def test_synthesize_answer_escapes_malicious_query():
     """Verify _synthesize_answer escapes query containing XML closing tags.
 
-    Task 27.2: Similar to evaluation, synthesis should also escape queries.
+    Similar to evaluation, synthesis should also escape queries.
     This test will FAIL initially because escaping is not implemented.
     """
     vector_store = InMemoryVectorStore()
@@ -51,7 +51,7 @@ async def test_synthesize_answer_escapes_malicious_query():
 async def test_synthesize_answer_escapes_malicious_chunks():
     """Verify _synthesize_answer escapes chunks containing XML closing tags.
 
-    Task 27.2: Chunks in synthesis should also be HTML-escaped.
+    Chunks in synthesis should also be HTML-escaped.
     This test will FAIL initially because escaping is not implemented.
     """
     vector_store = InMemoryVectorStore()

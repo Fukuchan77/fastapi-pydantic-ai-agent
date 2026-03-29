@@ -55,7 +55,7 @@ def test_settings_with_all_required_fields(monkeypatch: pytest.MonkeyPatch) -> N
 
     settings = Settings()
 
-    # Task 16.7: api_key is now SecretStr, use .get_secret_value() to compare
+    # api_key is now SecretStr, use .get_secret_value() to compare
     assert settings.api_key.get_secret_value() == "test-api-key-12345"
     assert settings.llm_model == "ollama:llama2"
     assert settings.llm_api_key is None  # Optional field for local provider
@@ -79,7 +79,7 @@ def test_settings_with_optional_fields(monkeypatch: pytest.MonkeyPatch) -> None:
 
     settings = Settings()
 
-    # Task 16.7: Secret fields are now SecretStr, use .get_secret_value() to compare
+    # Secret fields are now SecretStr, use .get_secret_value() to compare
     assert settings.api_key.get_secret_value() == "test-api-key-12345"
     assert settings.llm_model == "openai:gpt-4o"
     assert settings.llm_api_key is not None
@@ -282,7 +282,7 @@ def test_cloud_provider_works_with_api_key_openai(monkeypatch: pytest.MonkeyPatc
 
     settings = Settings()
     assert settings.llm_model == "openai:gpt-4o"
-    # Task 16.7: llm_api_key is now SecretStr, use .get_secret_value() to compare
+    # llm_api_key is now SecretStr, use .get_secret_value() to compare
     assert settings.llm_api_key is not None
     assert settings.llm_api_key.get_secret_value() == "sk-openai-test-123"
 
@@ -297,7 +297,7 @@ def test_cloud_provider_works_with_api_key_anthropic(monkeypatch: pytest.MonkeyP
 
     settings = Settings()
     assert settings.llm_model == "anthropic:claude-3-opus"
-    # Task 16.7: llm_api_key is now SecretStr, use .get_secret_value() to compare
+    # llm_api_key is now SecretStr, use .get_secret_value() to compare
     assert settings.llm_api_key is not None
     assert settings.llm_api_key.get_secret_value() == "sk-anthropic-test"
 
@@ -312,7 +312,7 @@ def test_cloud_provider_works_with_api_key_groq(monkeypatch: pytest.MonkeyPatch)
 
     settings = Settings()
     assert settings.llm_model == "groq:mixtral-8x7b"
-    # Task 16.7: llm_api_key is now SecretStr, use .get_secret_value() to compare
+    # llm_api_key is now SecretStr, use .get_secret_value() to compare
     assert settings.llm_api_key is not None
     assert settings.llm_api_key.get_secret_value() == "gsk-test-12345678"
 

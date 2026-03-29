@@ -1,6 +1,6 @@
 """FastAPI dependency injection functions.
 
-Task 20.9: Module initializer that exports public dependency functions.
+Module initializer that exports public dependency functions.
 
 This module provides a clean public API for dependency injection functions
 used throughout the FastAPI application. Instead of importing from submodules
