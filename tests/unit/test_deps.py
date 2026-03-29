@@ -4,7 +4,7 @@
 def test_deps_module_exports_verify_api_key() -> None:
     """Test that verify_api_key is exported from app.deps package.
 
-    Task 20.9: Ensures the deps package properly exports its public API.
+    Ensures the deps package properly exports its public API.
     """
     from app.deps import verify_api_key
 
@@ -15,7 +15,7 @@ def test_deps_module_exports_verify_api_key() -> None:
 def test_deps_module_exports_get_rag_workflow() -> None:
     """Test that get_rag_workflow is exported from app.deps package.
 
-    Task 20.9: Ensures the deps package properly exports its public API.
+    Ensures the deps package properly exports its public API.
     """
     from app.deps import get_rag_workflow
 
@@ -26,7 +26,7 @@ def test_deps_module_exports_get_rag_workflow() -> None:
 def test_deps_module_has_all_attribute() -> None:
     """Test that __all__ is defined for explicit public API declaration.
 
-    Task 20.9: Ensures the deps package declares its public interface.
+    Ensures the deps package declares its public interface.
     """
     import app.deps
 
@@ -39,7 +39,7 @@ def test_deps_module_has_all_attribute() -> None:
 def test_deps_module_does_not_export_private_members() -> None:
     """Test that private/implementation details are not in __all__.
 
-    Task 20.9: Ensures only public API is exported.
+    Ensures only public API is exported.
     """
     import app.deps
 

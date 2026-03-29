@@ -17,7 +17,7 @@ from app.models.errors import ErrorResponse
 def get_client_identifier(request: Request) -> str:
     """Get client identifier considering proxy headers with trusted proxy validation.
 
-    Task 20.1: Only trust X-Forwarded-For header when the immediate client
+    Only trust X-Forwarded-For header when the immediate client
     (request.client.host) is in the trusted_proxies list. This prevents
     header spoofing attacks where untrusted clients set fake X-Forwarded-For values.
 
@@ -46,7 +46,7 @@ def get_client_identifier(request: Request) -> str:
     # Check for X-Forwarded-For header (set by proxies/load balancers)
     forwarded = request.headers.get("X-Forwarded-For")
 
-    # Task 20.1: Only trust X-Forwarded-For if the immediate client is in trusted_proxies
+    # Only trust X-Forwarded-For if the immediate client is in trusted_proxies
     if forwarded and direct_client_ip in trusted_proxies:
         # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
         # The first IP is the actual client
@@ -63,7 +63,7 @@ def add_rate_limiting(
 ) -> Limiter:
     """Add rate limiting to FastAPI application using slowapi.
 
-    Task 20.2: Creates limiter instance and registers custom exception handler.
+    Creates limiter instance and registers custom exception handler.
     The limiter is stored in app.state for access via dependencies.
 
     Args:
@@ -107,7 +107,7 @@ def add_rate_limiting(
     ) -> JSONResponse:
         """Handle rate limit exceeded exception with structured error response.
 
-        Task 20.11: Adds Retry-After header to improve client UX and reduce retry storms.
+        Adds Retry-After header to improve client UX and reduce retry storms.
 
         Args:
             request: The request that exceeded rate limit
@@ -127,7 +127,7 @@ def add_rate_limiting(
         if hasattr(exc, "headers") and exc.headers:
             headers = dict(exc.headers)
 
-        # Task 20.11: Add Retry-After header (RFC 6585, RFC 7231)
+        # Add Retry-After header (RFC 6585, RFC 7231)
         # Calculate seconds until rate limit resets based on X-RateLimit-Reset header
         if "X-RateLimit-Reset" in headers:
             try:
@@ -154,10 +154,13 @@ def add_rate_limiting(
     return limiter
 
 
-# Task 20.2: FastAPI dependency function for rate limiting
+# FastAPI dependency function for rate limiting
 # This is used as Depends() in route handlers to enforce rate limiting
 async def rate_limit_dependency(request: Request) -> None:
     """FastAPI dependency that enforces rate limiting on the route.
+
+    **Note:** Reserved for future per-route rate limiting. Currently using
+    global SlowAPIMiddleware for rate limiting across all routes.
 
     This dependency uses the limiter stored in app.state to check and enforce
     rate limits. It should be added to protected routes via Depends().

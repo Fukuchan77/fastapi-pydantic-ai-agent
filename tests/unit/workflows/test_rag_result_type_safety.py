@@ -1,4 +1,4 @@
-"""Test for type safety of dict(result) calls in RAG workflow (Task 25.4).
+"""Test for type safety of dict(result) calls in RAG workflow ().
 
 The issue: Lines 191 and 206 in corrective_rag.py call dict(result) without
 verifying that result is actually a dict. If Workflow.run() returns a non-dict
@@ -23,7 +23,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 async def test_type_error_raised_for_non_dict_result_from_cache():
     """Test that TypeError is raised when cached result is not a dict.
 
-    Task 25.4 RED phase: This test should FAIL before adding type checking.
+    RED phase: This test should FAIL before adding type checking.
     After GREEN phase, it should PASS by raising TypeError.
     """
     import time
@@ -59,7 +59,7 @@ async def test_type_error_raised_for_non_dict_result_from_cache():
 async def test_type_error_raised_for_non_dict_result_from_workflow():
     """Test that TypeError is raised when workflow execution returns non-dict.
 
-    Task 25.4 RED phase: This test should FAIL before adding type checking.
+    RED phase: This test should FAIL before adding type checking.
     After GREEN phase, it should PASS by raising TypeError.
     """
     vector_store = InMemoryVectorStore()
@@ -93,7 +93,7 @@ async def test_type_error_raised_for_non_dict_result_from_workflow():
 async def test_type_error_raised_for_none_result():
     """Test that TypeError is raised when workflow returns None.
 
-    Task 25.4: Verify None is caught as invalid type.
+    Verify None is caught as invalid type.
     """
     vector_store = InMemoryVectorStore()
     await vector_store.add_documents(["Python is a programming language"])

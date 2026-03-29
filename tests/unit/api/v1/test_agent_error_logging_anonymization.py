@@ -1,4 +1,4 @@
-"""Unit tests for Task 19.2: Anonymize user messages in error logs.
+"""Unit tests for Anonymize user messages in error logs.
 
 This test ensures that user message content is NOT logged in error scenarios,
 preventing potential leakage of sensitive information (passwords, tokens, PII).
@@ -53,7 +53,7 @@ def test_error_log_does_not_contain_user_message_content(
 ) -> None:
     """Test that error logs do NOT contain user message content.
 
-    Task 19.2: User messages should NOT be logged even in truncated form.
+    User messages should NOT be logged even in truncated form.
     Only metadata like message length should be logged.
     """
     client = TestClient(app_with_failing_agent)
@@ -105,7 +105,7 @@ def test_error_log_contains_message_length_metadata(
 ) -> None:
     """Test that error logs contain message LENGTH instead of content.
 
-    Task 19.2: Logs should contain useful metadata (message length)
+    Logs should contain useful metadata (message length)
     for debugging without exposing sensitive content.
     """
     client = TestClient(app_with_failing_agent)
@@ -141,7 +141,7 @@ def test_info_log_for_client_disconnect_also_anonymized(
 ) -> None:
     """Test that client disconnect logs (line 291) are also anonymized.
 
-    Task 19.2: All user message logging should be anonymized,
+    All user message logging should be anonymized,
     including INFO-level logs for normal events like client disconnect.
     """
     app = FastAPI()

@@ -1,7 +1,7 @@
 """Unit tests for ChromaVectorStore ID generation.
 
 Tests cover ID generation to prevent race conditions in multi-process deployments.
-Task 21.4: Replace counter-based IDs with UUID-based IDs.
+Replace counter-based IDs with UUID-based IDs.
 """
 
 import re
@@ -11,7 +11,7 @@ import uuid
 def test_doc_counter_id_pattern():
     """Test that counter-based IDs follow the pattern 'doc_N'.
 
-    Task 21.4: This test documents the OLD behavior that causes race conditions.
+    This test documents the OLD behavior that causes race conditions.
     Counter-based IDs like "doc_0", "doc_1", "doc_2" cause collisions in
     multi-process deployments with shared persistent Chroma DB.
     """
@@ -31,7 +31,7 @@ def test_doc_counter_id_pattern():
 def test_uuid_format_validation():
     """Test that UUID4 strings can be parsed as valid UUIDs.
 
-    Task 21.4: This test validates that UUID4 strings are valid UUIDs
+    This test validates that UUID4 strings are valid UUIDs
     and can be used as document IDs in Chroma.
     """
     # Generate a UUID

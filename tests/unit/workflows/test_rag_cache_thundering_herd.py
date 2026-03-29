@@ -1,4 +1,4 @@
-"""Test for thundering herd problem in RAG cache (Task 25.2).
+"""Test for thundering herd problem in RAG cache ().
 
 The issue: When multiple concurrent requests arrive for the same query,
 they all see a cache miss and execute duplicate LLM workflows because
@@ -22,7 +22,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 async def test_thundering_herd_duplicate_llm_calls():
     """Test that concurrent identical queries result in only ONE workflow execution.
 
-    Task 25.2: With the pending future pattern, multiple concurrent requests
+    With the pending future pattern, multiple concurrent requests
     all enter CorrectiveRAGWorkflow.run(), but only the first request should
     execute the actual workflow via super().run(). The other requests should
     await the pending future.

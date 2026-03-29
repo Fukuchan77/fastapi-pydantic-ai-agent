@@ -9,18 +9,13 @@ router = APIRouter()
 
 @router.get("/health")
 async def health_check() -> dict[str, str]:
-    """Health check endpoint.
+    """Liveness health check endpoint.
 
-    Task 16.16: Converted to async def for consistency with FastAPI best
-    practices. All route handlers should be async to avoid blocking the
-    event loop.
-
-    This endpoint can be used by load balancers and monitoring systems to
-    verify that the service is running and healthy. No authentication is
-    required to access this endpoint.
+    Returns 200 OK when the service is running. No authentication required.
+    Used by load balancers and monitoring systems.
 
     Returns:
-        dict: Status response indicating service is healthy
+        dict: Status response indicating service is healthy.
     """
     return {"status": "ok"}
 
@@ -29,7 +24,7 @@ async def health_check() -> dict[str, str]:
 def readiness_check(request: Request) -> dict[str, str | dict[str, str]]:
     """Deep readiness health check endpoint.
 
-    Task 16.1: Verifies that all critical application dependencies are
+    Verifies that all critical application dependencies are
     operational. Unlike the basic /health endpoint, this performs actual
     checks on vector store, session store, chat agent, and background tasks.
 

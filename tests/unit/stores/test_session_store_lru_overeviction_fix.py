@@ -1,4 +1,4 @@
-"""Test for Task 16.37: Fix LRU over-eviction bug in session store.
+"""Test for Fix LRU over-eviction bug in session store.
 
 This test verifies that LRU eviction includes a guard to re-check store capacity
 after acquiring locks, preventing unnecessary eviction when concurrent operations
@@ -50,7 +50,7 @@ async def test_lru_eviction_still_works_when_store_exceeds_capacity() -> None:
 async def test_lru_eviction_race_condition_with_concurrent_clear() -> None:
     """Test the race condition scenario where clear() runs during LRU eviction.
 
-    This test demonstrates Task 16.37: Without the len(self._store) > self.max_sessions
+    This test demonstrates Without the len(self._store) > self.max_sessions
     guard inside the final critical section, an LRU session can be evicted even when
     the store is no longer over capacity due to concurrent clear() operations.
 
@@ -122,7 +122,7 @@ async def test_lru_eviction_race_condition_with_concurrent_clear() -> None:
     # Without the fix (len(self._store) > self.max_sessions guard), session_1 gets evicted.
     if "session_1" not in store._store:
         pytest.fail(
-            "BUG DETECTED: Task 16.37 - LRU session (session_1) was evicted even though "
+            "BUG DETECTED: - LRU session (session_1) was evicted even though "
             "concurrent clear() reduced store size below max_sessions. "
             "The eviction logic at line 205 needs to re-check len(self._store) > self.max_sessions "
             "before evicting to prevent this race condition."

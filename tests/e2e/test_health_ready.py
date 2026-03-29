@@ -1,6 +1,6 @@
 """E2E tests for readiness health check endpoint.
 
-Task 16.1: Deep readiness health check at GET /health/ready.
+Deep readiness health check at GET /health/ready.
 Tests the endpoint through full HTTP stack using AsyncClient.
 This endpoint requires no authentication and returns detailed dependency status.
 """

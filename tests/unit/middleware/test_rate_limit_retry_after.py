@@ -1,6 +1,6 @@
 """Unit tests for Retry-After header in rate limit responses.
 
-Task 20.11: Verify that rate limit errors include Retry-After header
+Verify that rate limit errors include Retry-After header
 to improve client UX and reduce retry storms.
 """
 
@@ -38,7 +38,7 @@ def client(app_with_rate_limiting: FastAPI) -> TestClient:
 def test_rate_limit_response_includes_retry_after_header(client: TestClient):
     """Test that 429 response includes Retry-After header.
 
-    Task 20.11: When a client exceeds the rate limit, the response should
+    When a client exceeds the rate limit, the response should
     include a Retry-After header indicating how many seconds to wait before
     retrying. This is a standard HTTP header (RFC 6585, RFC 7231) that
     improves client UX and reduces retry storms.
@@ -67,7 +67,7 @@ def test_rate_limit_response_includes_retry_after_header(client: TestClient):
 def test_retry_after_header_value_is_reasonable(client: TestClient):
     """Test that Retry-After value corresponds to the rate limit window.
 
-    Task 20.11: For a 1-minute rate limit window, the Retry-After value
+    For a 1-minute rate limit window, the Retry-After value
     should be between 1 and 60 seconds (the remaining time in the window).
     """
     # Hit rate limit
@@ -89,7 +89,7 @@ def test_retry_after_header_value_is_reasonable(client: TestClient):
 def test_retry_after_header_format_is_integer_not_http_date(client: TestClient):
     """Test that Retry-After uses delay-seconds format, not HTTP-date format.
 
-    Task 20.11: The Retry-After header can be either an HTTP-date or an
+    The Retry-After header can be either an HTTP-date or an
     integer representing seconds. For rate limiting, the integer format
     is more appropriate and easier for clients to parse.
     """

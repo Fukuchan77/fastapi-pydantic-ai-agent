@@ -1,11 +1,11 @@
 """Tests for workflow instance caching and isolation.
 
-Task 26.3: Verify that get_rag_workflow() returns cached CorrectiveRAGWorkflow
+Verify that get_rag_workflow() returns cached CorrectiveRAGWorkflow
 instances across requests. Workflows are stateless (per-run state lives in
 llama-index Context objects), so reusing them is safe and avoids rebuilding
 Agent instances on every request.
 
-Note: This supersedes the Task 16.21 per-request isolation requirement.
+Note: This supersedes the per-request isolation requirement.
 """
 
 import pytest
@@ -42,7 +42,7 @@ def mock_request(mock_app: FastAPI) -> Request:
 def test_get_rag_workflow_returns_cached_instance(mock_request: Request, mock_app: FastAPI) -> None:
     """Test that get_rag_workflow() returns the same cached instance on each call.
 
-    Task 26.3: Verifies that workflow instances are cached and reused across
+    Verifies that workflow instances are cached and reused across
     requests. Workflows are stateless so sharing is safe and improves performance.
     """
     # Act: Call get_rag_workflow multiple times
@@ -68,7 +68,7 @@ def test_different_vector_stores_get_different_workflows(
 ) -> None:
     """Test that different vector_store instances produce different workflows.
 
-    Task 26.3: Verifies that the cache key is the vector_store identity,
+    Verifies that the cache key is the vector_store identity,
     so apps with different vector stores each get their own workflow instance.
     """
     app1 = FastAPI()

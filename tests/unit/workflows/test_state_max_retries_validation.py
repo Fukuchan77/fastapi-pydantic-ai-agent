@@ -1,4 +1,4 @@
-"""Unit tests for WorkflowState max_retries upper bound validation (Task 16.17)."""
+"""Unit tests for WorkflowState max_retries upper bound validation ()."""
 
 import pytest
 from pydantic import ValidationError

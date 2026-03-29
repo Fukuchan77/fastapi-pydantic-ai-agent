@@ -1,6 +1,6 @@
 """Test SecretStr protection for sensitive configuration fields.
 
-Task 16.7: Strengthen secret field protection with SecretStr.
+Strengthen secret field protection with SecretStr.
 Tests that api_key, llm_api_key, and logfire_token use SecretStr type
 and are properly protected from exposure in repr() and logging.
 """

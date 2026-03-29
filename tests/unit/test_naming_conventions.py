@@ -1,6 +1,6 @@
 """Unit tests to enforce test naming conventions.
 
-Task 16.3: Verify that test names accurately reflect their purpose.
+Verify that test names accurately reflect their purpose.
 Tests should not have names like "test_something_fails" if they actually
 verify that something succeeds.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 def test_no_misleading_fail_names_in_test_main() -> None:
     """Verify test_main.py doesn't have tests with misleading 'fails' in name.
 
-    Task 16.3: Tests named with "_fails" should actually test failure scenarios.
+    Tests named with "_fails" should actually test failure scenarios.
     If a test verifies success, it should not have "fails" in the name.
     """
     # Read the test file
@@ -42,7 +42,7 @@ def test_no_misleading_fail_names_in_test_main() -> None:
 def test_no_misleading_fail_names_in_test_health() -> None:
     """Verify test_health.py doesn't have tests with misleading 'fails' in name.
 
-    Task 16.3: Tests named with "_fails" should actually test failure scenarios.
+    Tests named with "_fails" should actually test failure scenarios.
     If a test verifies success, it should not have "fails" in the name.
     """
     # Read the test file

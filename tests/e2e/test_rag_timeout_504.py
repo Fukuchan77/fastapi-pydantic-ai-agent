@@ -1,6 +1,6 @@
-"""Tests for Task 20.7: RAG workflow timeout should return HTTP 504.
+"""Tests for RAG workflow timeout should return HTTP 504.
 
-Task 20.7: Verify that when the RAG workflow times out (exceeds rag_workflow_timeout),
+Verify that when the RAG workflow times out (exceeds rag_workflow_timeout),
 the API returns HTTP 504 Gateway Timeout instead of HTTP 500 Internal Server Error.
 """
 
@@ -23,7 +23,7 @@ async def test_rag_query_timeout_returns_504(
 ) -> None:
     """Test that RAG workflow timeout returns HTTP 504 Gateway Timeout.
 
-    Task 20.7: asyncio.TimeoutError from asyncio.timeout() should be caught
+    asyncio.TimeoutError from asyncio.timeout() should be caught
     and converted to HTTPException(status_code=504) instead of propagating
     to the global exception handler which returns 500.
     """

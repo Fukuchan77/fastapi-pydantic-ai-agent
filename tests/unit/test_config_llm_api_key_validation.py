@@ -1,4 +1,4 @@
-"""Unit tests for llm_api_key minimum length validation (Task 16.12)."""
+"""Unit tests for llm_api_key minimum length validation ()."""
 
 import pytest
 from pydantic import SecretStr

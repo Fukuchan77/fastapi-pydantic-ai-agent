@@ -1,6 +1,5 @@
 """Tests for middleware order issue.
 
-Task: FIX 優先対応事項 - Issue 2
 Problem: Middleware order is reversed in main.py:155-159, causing RequestSizeLimitMiddleware
 to execute before RequestIDMiddleware. This means 413 responses don't have X-Request-ID headers.
 """

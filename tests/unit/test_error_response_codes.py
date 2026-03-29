@@ -1,6 +1,6 @@
 """Tests for consistent use of ErrorResponse.code field.
 
-Task 16.9: Verify that all ErrorResponse instances include appropriate
+Verify that all ErrorResponse instances include appropriate
 error codes for programmatic error handling.
 """
 
@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 def test_auth_error_has_code() -> None:
     """Test that 401 Unauthorized errors include error code.
 
-    Task 16.9: ErrorResponse for authentication failures should include
+    ErrorResponse for authentication failures should include
     a "code" field with value "UNAUTHORIZED" for programmatic handling.
     """
     from app.main import app
@@ -34,7 +34,7 @@ def test_auth_error_has_code() -> None:
         assert "message" in error_data
         assert "code" in error_data
 
-        # Task 16.9: Verify error code is set to UNAUTHORIZED
+        # Verify error code is set to UNAUTHORIZED
         assert error_data["code"] == "UNAUTHORIZED", (
             f"Expected code='UNAUTHORIZED', got code={error_data['code']!r}"
         )
@@ -44,7 +44,7 @@ def test_auth_error_has_code() -> None:
 def test_internal_error_has_code() -> None:
     """Test that 500 Internal Server errors include error code.
 
-    Task 16.9: ErrorResponse for unhandled exceptions should include
+    ErrorResponse for unhandled exceptions should include
     a "code" field with value "INTERNAL_ERROR" for programmatic handling.
     """
     from app.main import app
@@ -66,7 +66,7 @@ def test_internal_error_has_code() -> None:
     assert "message" in error_data
     assert "code" in error_data
 
-    # Task 16.9: Verify error code is set to INTERNAL_ERROR
+    # Verify error code is set to INTERNAL_ERROR
     assert error_data["code"] == "INTERNAL_ERROR", (
         f"Expected code='INTERNAL_ERROR', got code={error_data['code']!r}"
     )

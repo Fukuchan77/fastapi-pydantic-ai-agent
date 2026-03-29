@@ -80,9 +80,6 @@ class DefaultSSEAdapter:
     def format_event(self, event_type: str, content: str) -> str:
         r"""Format an SSE event with the given type and content.
 
-        Task 16.23: Added JSON serialization error handling to prevent
-        crashes from unserializable content.
-
         Args:
             event_type: Type of the event (e.g., "delta", "done", "error").
             content: Content payload for the event.
@@ -169,7 +166,7 @@ async def chat(
 
     # Return response
     # Count tool calls from message history
-    # Task 16.31: Count ToolCallPart instances in ModelResponse messages
+    # Count ToolCallPart instances in ModelResponse messages
     tool_calls_made = sum(
         1
         for m in result.all_messages()
@@ -185,7 +182,7 @@ async def chat(
         reply = result.data.reply
     else:
         # FunctionModel and simple str outputs use result.output
-        # Task 16.32: Simplified - all Python objects have __str__, so no need for conditional
+        # Simplified - all Python objects have __str__, so no need for conditional
         reply = str(result.output)
 
     return ChatResponse(
@@ -224,10 +221,10 @@ async def stream_agent(
     adapter = DefaultSSEAdapter()
 
     async def generate() -> AsyncIterator[str]:
-        """Generate SSE events from agent stream.
+        """Generate SSE events from agent stream with error handling.
 
-        Task 16.22: Added comprehensive error handling to distinguish
-        different error types and prevent leaking internal details to clients.
+        Distinguishes between validation errors, cancellation, and unexpected
+        errors to provide appropriate error messages without leaking internal details.
         """
         try:
             # Load session history if session_id provided
@@ -252,7 +249,7 @@ async def stream_agent(
                 # Must be done inside the context manager while result is still valid
                 all_messages = result.all_messages()
 
-            # MEDIUM FIX: Save session BEFORE emitting done event
+            # Save session BEFORE emitting done event
             # This ensures clients are only notified of completion if the session
             # was saved successfully. If save fails, the client won't receive a done event.
             if request.session_id:
@@ -287,17 +284,17 @@ async def stream_agent(
             yield adapter.format_done()
 
         except asyncio.CancelledError:
-            # Task 16.22: Client disconnected - log but don't send error event
-            # Task 19.2: Anonymize user messages - log only message length
+            # Client disconnected - log but don't send error event
+            # Anonymize user messages - log only message length
             logger.info("Stream cancelled by client (message_length=%d)", len(request.message))
             raise
         except ValueError as e:
-            # Task 16.22: Validation errors - safe to expose message
+            # Validation errors - safe to expose message
             logger.warning("Validation error in stream: %s", e)
             yield adapter.format_error("Invalid request parameters")
         except Exception as e:
-            # Task 16.22: Unexpected errors - log full details, return generic message
-            # Task 19.2: Anonymize user messages - log only message length, not content
+            # Unexpected errors - log full details, return generic message
+            # Anonymize user messages - log only message length, not content
             logger.error(
                 "Unexpected error in agent stream: %s",
                 e,

@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 
 
-# Task 23.2: Logger for exception logging in RedisSessionStore
+# Logger for exception logging in RedisSessionStore
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +65,7 @@ class SessionStore(Protocol):
     async def cleanup_expired_sessions(self) -> int:
         """Remove expired sessions based on TTL.
 
-        Task 3.15: This method is public (not private) so it can be called
+        This method is public (not private) so it can be called
         from external code like the lifespan manager.
 
         Returns:
@@ -76,7 +76,7 @@ class SessionStore(Protocol):
     def generate_session_id(self) -> str:
         """Generate a new UUID v4 session identifier.
 
-        Task 16.20: Server-side session ID generation for security.
+        Server-side session ID generation for security.
         UUIDs are cryptographically strong and prevent session hijacking
         via guessable or enumerable session IDs.
 
@@ -100,7 +100,7 @@ class InMemorySessionStore:
     has its own lock to allow concurrent access to different sessions.
     """
 
-    # Task 16.14: Extract magic numbers to class constants for maintainability
+    # Extract magic numbers to class constants for maintainability
     DEFAULT_MAX_MESSAGES: int = 1000
     DEFAULT_SESSION_TTL: int = 3600
     DEFAULT_MAX_SESSIONS: int = 10_000
@@ -120,7 +120,7 @@ class InMemorySessionStore:
             session_ttl: Time-to-live for inactive sessions in seconds (default: 3600).
                 Sessions not accessed for this duration will be eligible for cleanup.
             max_sessions: Maximum number of sessions to store (default: 10,000).
-                Task 3.16: When exceeded, the least-recently-used session is evicted.
+                When exceeded, the least-recently-used session is evicted.
         """
         self._store: dict[str, list[ModelMessage]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -151,7 +151,7 @@ class InMemorySessionStore:
         """
         self._validate_session_id(session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
-            # Task 24.2: Update last access time inside lock to prevent race condition
+            # Update last access time inside lock to prevent race condition
             # Moving this inside the lock prevents cleanup_expired_sessions() from
             # deleting the session between _last_access update and lock acquisition,
             # which would leave an orphaned timestamp entry (memory leak)
@@ -183,14 +183,14 @@ class InMemorySessionStore:
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store[session_id] = list(messages)
 
-        # HIGH FIX: Perform LRU eviction AFTER releasing current session lock
+        # Perform LRU eviction AFTER releasing current session lock
         # This prevents deadlock when two concurrent save_history() calls try to evict each other:
         # - Thread A: holds lock for session_1, tries to evict session_2
         # - Thread B: holds lock for session_2, tries to evict session_1
         # - DEADLOCK: circular wait for each other's locks
         # Solution: Never hold one session lock while trying to acquire another
 
-        # Task 3.16: Evict LRU session if max_sessions limit exceeded
+        # Evict LRU session if max_sessions limit exceeded
         if len(self._store) > self.max_sessions:
             # Determine which session to evict
             lru_session_id: str | None = None
@@ -211,7 +211,7 @@ class InMemorySessionStore:
             # (session lock should be acquired before store lock in the locking hierarchy)
             if lru_lock is not None and lru_session_id is not None:
                 async with lru_lock, self._store_lock:
-                    # Task 16.37: Re-check capacity inside critical section to prevent
+                    # Re-check capacity inside critical section to prevent
                     # over-eviction when concurrent clear() or TTL cleanup reduced store size
                     # between the initial capacity check and final eviction
                     if len(self._store) > self.max_sessions and lru_session_id in self._store:
@@ -241,9 +241,9 @@ class InMemorySessionStore:
         self._validate_session_id(session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             self._store.pop(session_id, None)
-            # Task 3.12: Remove _last_access entry to prevent memory leak
+            # Remove _last_access entry to prevent memory leak
             self._last_access.pop(session_id, None)
-        # FIX: Protect lock cleanup with store lock to prevent race condition
+        # Protect lock cleanup with store lock to prevent race condition
         # where concurrent operation creates new lock via setdefault between
         # releasing session lock and popping lock entry
         async with self._store_lock:
@@ -281,7 +281,7 @@ class InMemorySessionStore:
         if len(messages) > self.max_messages:
             raise ValueError(f"Too many messages (max {self.max_messages})")
 
-        # Task 3.14: Use strict isinstance check instead of structural validation
+        # Use strict isinstance check instead of structural validation
         # This prevents duck-typed objects from bypassing validation
         for msg in messages:
             if not isinstance(msg, (ModelRequest, ModelResponse)):
@@ -290,7 +290,7 @@ class InMemorySessionStore:
     async def cleanup_expired_sessions(self) -> int:
         """Remove expired sessions based on TTL.
 
-        Task 3.15: This method is public (not private) so it can be called
+        This method is public (not private) so it can be called
         from external code like the lifespan manager.
 
         Iterates through all sessions and removes those that haven't been
@@ -317,7 +317,7 @@ class InMemorySessionStore:
     def generate_session_id(self) -> str:
         """Generate a new UUID v4 session identifier.
 
-        Task 16.20: Server-side session ID generation for security.
+        Server-side session ID generation for security.
         UUIDs are cryptographically strong and prevent session hijacking
         via guessable or enumerable session IDs.
 
@@ -331,7 +331,7 @@ class InMemorySessionStore:
 class RedisSessionStore:
     """Redis-backed session history store for multi-instance deployments.
 
-    Task 17.2: Production-ready session store using Redis for persistence.
+    Production-ready session store using Redis for persistence.
     This implementation enables session sharing across multiple application
     instances, making it suitable for horizontally scaled deployments.
 
@@ -398,18 +398,18 @@ class RedisSessionStore:
         if data is None:
             return []
 
-        # Task 21.2: Deserialize JSON bytes to ModelMessage objects using Pydantic TypeAdapter
+        # Deserialize JSON bytes to ModelMessage objects using Pydantic TypeAdapter
         # Security: Replaced pickle.loads() with type-safe JSON deserialization
         # to eliminate RCE vector if Redis is compromised
         try:
             messages: list[ModelMessage] = ModelMessagesTypeAdapter.validate_json(data)
             return messages
         except (ValidationError, ValueError, TypeError):
-            # Task 25.3: Narrow exception handler to only catch expected deserialization errors
+            # Narrow exception handler to only catch expected deserialization errors
             # ValidationError: Pydantic validation fails (invalid schema)
             # ValueError: JSON parsing fails (malformed JSON)
             # TypeError: Data is wrong type (e.g., not bytes/str)
-            # Task 23.2: Log exception details for production debugging
+            # Log exception details for production debugging
             # exc_info=True includes full traceback, critical for diagnosing
             # deserialization errors in production
             logger.warning(
@@ -432,7 +432,7 @@ class RedisSessionStore:
         """
         self._validate_session_id(session_id)
 
-        # Task 21.2: Serialize messages to JSON bytes using Pydantic TypeAdapter
+        # Serialize messages to JSON bytes using Pydantic TypeAdapter
         # Security: Replaced pickle.dumps() with type-safe JSON serialization
         serialized = ModelMessagesTypeAdapter.dump_json(list(messages))
 

@@ -1,7 +1,7 @@
 """Unit tests for workflow cache isolation between tests.
 
-Task 27.1 + Task 28.1: Ensures _workflow_cache doesn't pollute between test runs.
-Updated for Task 28.1: Uses WeakKeyDictionary with vector_store objects as keys.
++ Ensures _workflow_cache doesn't pollute between test runs.
+Updated for Uses WeakKeyDictionary with vector_store objects as keys.
 """
 
 import pytest
@@ -15,7 +15,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 def test_workflow_cache_is_empty_at_test_start():
     """Verify workflow cache is cleared before each test.
 
-    Task 27.1: This test should pass if cache clearing works.
+    This test should pass if cache clearing works.
     If it fails, it means cache pollution from other tests.
     """
     # Cache should be empty at test start
@@ -27,7 +27,7 @@ def test_workflow_cache_is_empty_at_test_start():
 def test_workflow_cache_isolation_first():
     """First test that adds to cache.
 
-    Task 27.1 + 28.1: This test populates the cache to verify next test sees clean state.
+    + 28.1: This test populates the cache to verify next test sees clean state.
     Updated to use vector_store objects as keys (not integers).
     """
     # Simulate cache population using a vector_store object as key
@@ -51,7 +51,7 @@ def test_workflow_cache_isolation_first():
 def test_workflow_cache_isolation_second():
     """Second test verifies cache was cleared.
 
-    Task 27.1: This test will FAIL if cache clearing fixture is not present,
+    This test will FAIL if cache clearing fixture is not present,
     because it will see the entry from test_workflow_cache_isolation_first.
     """
     # Cache should be empty - the previous test's entry should be cleared
@@ -65,7 +65,7 @@ def test_workflow_cache_isolation_second():
 def test_workflow_cache_cleared_between_parametrized_tests(test_id):
     """Verify cache is cleared between parametrized test runs.
 
-    Task 27.1 + 28.1: Parametrized tests should also have isolated cache state.
+    + 28.1: Parametrized tests should also have isolated cache state.
     Updated to use vector_store objects as keys (not integers).
     """
     # Each parametrized run should start with empty cache

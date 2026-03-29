@@ -159,7 +159,7 @@ class Settings(BaseSettings):
                 f"llm_model provider must be one of {allowed_providers}, got: {provider}"
             )
 
-        # Return normalized llm_model with lowercase provider (Task 22.3)
+        # Return normalized llm_model with lowercase provider
         return f"{provider}:{model}"
 
     # Optional fields
@@ -562,7 +562,7 @@ class Settings(BaseSettings):
     def validate_keepalive_connections_limit(self) -> "Settings":
         """Validate that keepalive connections do not exceed total connections.
 
-        Task 16.6: Connection pool configuration validation.
+        Connection pool configuration validation.
         The number of keepalive connections in the pool cannot exceed the
         maximum total connections, as this would be a logical contradiction.
 

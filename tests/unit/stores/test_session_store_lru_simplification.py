@@ -1,4 +1,4 @@
-"""Tests for SessionStore LRU eviction - Task 19.6 concurrent execution scenarios.
+"""Tests for SessionStore LRU eviction - concurrent execution scenarios.
 
 These tests verify that LRU eviction works correctly under high concurrency,
 including edge cases like:

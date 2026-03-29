@@ -1,6 +1,6 @@
 """Unit tests for RedisSessionStore implementation.
 
-Task 17.2: Redis-backed SessionStore for multi-instance deployments.
+Redis-backed SessionStore for multi-instance deployments.
 These are unit tests with mocked Redis client - no actual Redis required.
 """
 
@@ -60,7 +60,7 @@ async def test_redis_store_save_and_get_history(redis_store, mock_redis):
         ModelResponse(parts=[TextPart(content="Hi there!")]),
     ]
 
-    # Task 21.2: Mock serialized data using JSON (matching new implementation)
+    # Mock serialized data using JSON (matching new implementation)
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
     serialized = ModelMessagesTypeAdapter.dump_json(messages)

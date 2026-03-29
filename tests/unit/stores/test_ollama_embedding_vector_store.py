@@ -13,7 +13,7 @@ from app.stores.vector_store import OllamaEmbeddingVectorStore
 async def test_close_method_closes_internal_http_client():
     """Test that close() method properly closes internally created HTTP client.
 
-    Task 22.1: When OllamaEmbeddingVectorStore creates its own AsyncClient
+    When OllamaEmbeddingVectorStore creates its own AsyncClient
     (http_client=None), calling close() should close the internal client
     to prevent resource leaks.
     """
@@ -37,7 +37,7 @@ async def test_close_method_closes_internal_http_client():
 async def test_close_method_with_external_http_client():
     """Test that close() does not close externally provided HTTP client.
 
-    Task 22.1: When an external HTTP client is provided, close() should
+    When an external HTTP client is provided, close() should
     NOT close it (caller is responsible for lifecycle management).
     """
     # Create an external client
@@ -66,7 +66,7 @@ async def test_close_method_with_external_http_client():
 async def test_add_documents_calls_embed():
     """Test that add_documents calls _embed to generate embeddings.
 
-    Task 22.4: Verifies that add_documents properly calls the Ollama API
+    Verifies that add_documents properly calls the Ollama API
     to generate embeddings for the provided documents.
     """
     from unittest.mock import AsyncMock
@@ -96,7 +96,7 @@ async def test_add_documents_calls_embed():
 async def test_query_returns_empty_list_on_empty_corpus():
     """Test that query returns empty list when no documents are stored.
 
-    Task 22.4: Verifies graceful handling of queries against empty corpus.
+    Verifies graceful handling of queries against empty corpus.
     """
     store = OllamaEmbeddingVectorStore(embedding_model="test-model")
 
@@ -113,7 +113,7 @@ async def test_query_returns_empty_list_on_empty_corpus():
 async def test_query_returns_empty_list_on_empty_query_string():
     """Test that query returns empty list when query string is empty.
 
-    Task 22.4: Verifies handling of empty or whitespace-only queries.
+    Verifies handling of empty or whitespace-only queries.
     """
     store = OllamaEmbeddingVectorStore(embedding_model="test-model")
 
@@ -136,7 +136,7 @@ async def test_query_returns_empty_list_on_empty_query_string():
 async def test_query_top_k_validation():
     """Test that query raises ValueError for invalid top_k values.
 
-    Task 22.4: Verifies input validation for top_k parameter.
+    Verifies input validation for top_k parameter.
     """
     store = OllamaEmbeddingVectorStore(embedding_model="test-model")
 
@@ -154,7 +154,7 @@ async def test_query_top_k_validation():
 async def test_clear_resets_state():
     """Test that clear() properly resets store state.
 
-    Task 22.4: Verifies that clear() removes all documents and embeddings.
+    Verifies that clear() removes all documents and embeddings.
     """
     store = OllamaEmbeddingVectorStore(embedding_model="test-model")
 
@@ -182,7 +182,7 @@ async def test_clear_resets_state():
 async def test_embed_malformed_response_raises_error():
     """Test that _embed raises ValueError for malformed API responses.
 
-    Task 22.4 & 22.2: Verifies error handling when Ollama API returns
+    & 22.2: Verifies error handling when Ollama API returns
     unexpected response format (missing 'data' key or 'embedding' field).
     """
     from unittest.mock import AsyncMock
@@ -209,7 +209,7 @@ async def test_embed_malformed_response_raises_error():
 async def test_embed_response_with_missing_embedding_field():
     """Test that _embed raises ValueError when response items lack 'embedding' field.
 
-    Task 23.3: Verifies that per-item validation raises descriptive error
+    Verifies that per-item validation raises descriptive error
     when Ollama returns items without 'embedding' key (e.g., model loading error).
     """
     from unittest.mock import AsyncMock

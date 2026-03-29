@@ -1,6 +1,6 @@
 """Verify RedisSessionStore.get_history() logs exceptions before swallowing them.
 
-Task 23.2 requires adding logger.warning() before silent exception swallow
+requires adding logger.warning() before silent exception swallow
 in RedisSessionStore.get_history() to improve production debugging.
 """
 
@@ -38,7 +38,7 @@ async def test_get_history_logs_warning_on_deserialization_error(
 ) -> None:
     """Verify get_history() logs warning when deserialization fails.
 
-    Task 23.2: Silent exception swallow makes production debugging difficult.
+    Silent exception swallow makes production debugging difficult.
     This test ensures warnings are logged with exc_info=True for traceability.
     """
     # Mock Redis to return invalid JSON data that will fail deserialization
@@ -66,7 +66,7 @@ async def test_get_history_logs_warning_with_exc_info_true(
 ) -> None:
     """Verify get_history() logs exception with exc_info=True for full traceback.
 
-    Task 23.2: exc_info=True is critical for production debugging - it includes
+    exc_info=True is critical for production debugging - it includes
     the full exception traceback in logs, not just the message.
     """
     # Mock Redis to return data that triggers ValidationError
@@ -89,7 +89,7 @@ async def test_get_history_returns_empty_list_after_logging_error(
 ) -> None:
     """Verify get_history() still returns empty list after logging (graceful degradation).
 
-    Task 23.2: After adding logging, the method should still return empty list
+    After adding logging, the method should still return empty list
     for backward compatibility and graceful error handling.
     """
     # Mock Redis to return invalid data

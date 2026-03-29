@@ -37,6 +37,38 @@ from app.workflows.state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
+# ==============================================================================
+# MODULE-LEVEL SECURITY NOTE: html.escape() limitations
+# ==============================================================================
+# We use html.escape() throughout this module to sanitize user input before
+# inserting it into XML tags (<query> and <context>). This prevents XML
+# injection attacks where malicious input could break out of the tags.
+#
+# HOWEVER, this approach has limitations:
+# 1. LLMs can decode HTML entities - they understand that &lt; means <
+# 2. This means prompt injection is still possible despite HTML escaping
+# 3. Example: A user could inject "&lt;query&gt;malicious&lt;/query&gt;"
+#    which the LLM would interpret as actual XML tags
+#
+# Real defense strategy:
+# ----------------------
+# The fundamental protection against prompt injection comes from:
+# - Using the LLM's messages API with proper system/user role separation
+# - System messages define behavior; user messages are treated as data
+# - Modern LLMs enforce this boundary to prevent prompt injection
+#
+# Current approach (defense-in-depth):
+# - XML tags provide structure for the prompt
+# - html.escape() prevents accidental XML parsing issues
+# - But don't rely on it as primary security mechanism
+#
+# Future improvement:
+# - Migrate to LLM messages API with explicit role separation
+# - Use system message for instructions, user message for query/context
+# - This provides stronger isolation than text-based XML tags
+# ==============================================================================
+
+
 class CorrectiveRAGWorkflow(Workflow):
     """Corrective RAG workflow with retry logic and result caching.
 
@@ -44,7 +76,7 @@ class CorrectiveRAGWorkflow(Workflow):
     step assesses relevance. If results are insufficient and retries remain,
     a refined SearchEvent is emitted to trigger a new retrieval cycle.
 
-    Task 17.1: Implements TTL-based LRU cache for query results to reduce
+    Implements TTL-based LRU cache for query results to reduce
     redundant LLM calls and vector store queries for identical requests.
 
     Attributes:
@@ -72,7 +104,7 @@ class CorrectiveRAGWorkflow(Workflow):
         self.llm_settings = llm_settings
         self.llm_model = llm_model
 
-        # MEDIUM FIX: Create Agent instances once during initialization
+        # Create Agent instances once during initialization
         # instead of recreating them on every LLM call (which happens in retry loops)
         # This reduces overhead from max_retries x 2 instances to just 2 instances total
         resolved_model = llm_model or llm_settings.llm_model
@@ -85,24 +117,24 @@ class CorrectiveRAGWorkflow(Workflow):
             output_type=str,
         )
 
-        # Task 17.1: Initialize cache data structures
+        # Initialize cache data structures
         # OrderedDict provides O(1) access and maintains insertion order for LRU
         self._cache: OrderedDict[str, tuple[dict, float]] = OrderedDict()
         self._cache_hits: int = 0
         self._cache_misses: int = 0
 
-        # Task 21.1: Initialize cache lock to protect concurrent access
+        # Initialize cache lock to protect concurrent access
         # Prevents race conditions when multiple coroutines access cache simultaneously
         self._cache_lock: asyncio.Lock = asyncio.Lock()
 
-        # Task 25.2: Track in-flight requests to prevent thundering herd
+        # Track in-flight requests to prevent thundering herd
         # Maps cache_key -> Future for requests currently executing
         self._pending_futures: dict[str, asyncio.Future[dict]] = {}
 
     def _generate_cache_key(self, query: str, max_retries: int) -> str:
         """Generate cache key from query and max_retries parameter.
 
-        Task 17.1: Cache key includes both query and max_retries because
+        Cache key includes both query and max_retries because
         the same query with different max_retries may produce different results.
 
         Args:
@@ -120,7 +152,7 @@ class CorrectiveRAGWorkflow(Workflow):
     def _evict_expired_entries(self) -> None:
         """Remove expired cache entries based on TTL.
 
-        Task 17.1: Removes entries where current_time - cached_time > ttl.
+        Removes entries where current_time - cached_time > ttl.
         """
         if self.llm_settings.rag_cache_ttl == 0:
             return  # Cache disabled
@@ -136,7 +168,7 @@ class CorrectiveRAGWorkflow(Workflow):
     def _evict_lru_entry(self) -> None:
         """Remove least recently used entry to maintain size limit.
 
-        Task 17.1: OrderedDict maintains insertion order, so the first item
+        OrderedDict maintains insertion order, so the first item
         is the least recently used (after move_to_end on cache hits).
         """
         if self._cache:
@@ -146,7 +178,7 @@ class CorrectiveRAGWorkflow(Workflow):
     def cache_stats(self) -> dict[str, int]:
         """Get cache statistics for monitoring.
 
-        Task 17.1: Exposes cache hit/miss/size metrics for observability.
+        Exposes cache hit/miss/size metrics for observability.
 
         Returns:
             dict: Dictionary with 'hits', 'misses', and 'size' keys.
@@ -160,7 +192,7 @@ class CorrectiveRAGWorkflow(Workflow):
     async def run(self, query: str, max_retries: int = 3) -> dict:  # type: ignore[override]
         """Run the workflow with caching support.
 
-        Task 17.1: Overrides parent run() to check cache before executing workflow.
+        Overrides parent run() to check cache before executing workflow.
         If cache hit, returns cached result immediately. Otherwise, executes workflow
         and caches the result.
 
@@ -171,34 +203,34 @@ class CorrectiveRAGWorkflow(Workflow):
         Returns:
             dict: Workflow result with answer, context_found, and search_count.
         """
-        # Task 17.1: Check if caching is disabled (ttl=0)
+        # Check if caching is disabled (ttl=0)
         if self.llm_settings.rag_cache_ttl == 0:
             # Cache disabled, execute workflow directly
             result = await super().run(query=query, max_retries=max_retries)
             return result
 
-        # Task 17.1: Generate cache key
+        # Generate cache key
         cache_key = self._generate_cache_key(query, max_retries)
 
-        # Task 21.1 & 25.2: Use double-check locking to prevent thundering herd
+        # Use double-check locking to prevent thundering herd
         async with self._cache_lock:
-            # Task 17.1: Evict expired entries before checking cache
+            # Evict expired entries before checking cache
             self._evict_expired_entries()
 
-            # Task 17.1: Check cache for existing result
+            # Check cache for existing result
             if cache_key in self._cache:
                 # Cache hit - move to end (mark as recently used) and return cached result
                 cached_result, _ = self._cache[cache_key]
                 self._cache.move_to_end(cache_key)
                 self._cache_hits += 1
                 logfire.info("RAG cache hit", query=query[:50], cache_key=cache_key[:16])
-                # Task 25.4: Verify cached result is a dict before copying
+                # Verify cached result is a dict before copying
                 if not isinstance(cached_result, dict):
                     raise TypeError(f"Expected dict from cache, got {type(cached_result).__name__}")
-                # Task 21.5: Return a copy to prevent callers from mutating the cached dict
+                # Return a copy to prevent callers from mutating the cached dict
                 return dict(cached_result)
 
-            # Task 25.2: Check if there's a pending future for this query (thundering herd fix)
+            # Check if there's a pending future for this query (thundering herd fix)
             if cache_key in self._pending_futures:
                 # Another request is already executing this workflow - wait for it
                 pending_future = self._pending_futures[cache_key]
@@ -220,31 +252,31 @@ class CorrectiveRAGWorkflow(Workflow):
                 self._pending_futures[cache_key] = future
                 pending_future = None
 
-        # Task 25.2: If we found a pending future, await it OUTSIDE the lock
+        # If we found a pending future, await it OUTSIDE the lock
         if pending_future is not None:
             result = await pending_future
-            # Task 25.4: Verify result from pending future is a dict before copying
+            # Verify result from pending future is a dict before copying
             if not isinstance(result, dict):
                 raise TypeError(f"Expected dict from workflow, got {type(result).__name__}")
             return dict(result)
 
-        # Task 21.1: Execute workflow OUTSIDE the lock to allow concurrent workflow execution
+        # Execute workflow OUTSIDE the lock to allow concurrent workflow execution
         # Only cache operations need to be protected, not the actual LLM calls
         try:
             result = await super().run(query=query, max_retries=max_retries)
 
-            # Task 25.4: Verify result from workflow is a dict before caching
+            # Verify result from workflow is a dict before caching
             if not isinstance(result, dict):
                 raise TypeError(f"Expected dict from workflow, got {type(result).__name__}")
 
-            # Task 21.1: Re-acquire lock to store result
+            # Re-acquire lock to store result
             async with self._cache_lock:
-                # Task 17.1: Store result in cache with current timestamp
-                # Task 21.5: Store a copy to prevent the returned result from mutating the cache
+                # Store result in cache with current timestamp
+                # Store a copy to prevent the returned result from mutating the cache
                 current_time = time.time()
                 self._cache[cache_key] = (dict(result), current_time)
 
-                # Task 17.1: Enforce cache size limit with LRU eviction
+                # Enforce cache size limit with LRU eviction
                 if len(self._cache) > self.llm_settings.rag_cache_size:
                     self._evict_lru_entry()
                     logfire.info(
@@ -253,14 +285,14 @@ class CorrectiveRAGWorkflow(Workflow):
                         max_size=self.llm_settings.rag_cache_size,
                     )
 
-                # Task 25.2: Resolve future and remove from pending
+                # Resolve future and remove from pending
                 future.set_result(result)
                 del self._pending_futures[cache_key]
 
             return result
 
         except Exception as e:
-            # Task 25.2: If workflow fails, reject future and remove from pending
+            # If workflow fails, reject future and remove from pending
             async with self._cache_lock:
                 if cache_key in self._pending_futures:
                     future.set_exception(e)
@@ -501,8 +533,8 @@ class CorrectiveRAGWorkflow(Workflow):
     async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
         """Evaluate relevance of retrieved chunks using LLM.
 
-        Task 16.24: Added comprehensive error handling and retry logic
-        for transient LLM API failures.
+        Uses configurable retry logic with exponential backoff for transient
+        LLM API failures. Returns "insufficient" as safe fallback on error.
 
         Args:
             chunks: Retrieved document chunks.
@@ -521,37 +553,7 @@ class CorrectiveRAGWorkflow(Workflow):
                 len(chunks),
             )
 
-        # Task 27.2 & 28.3: HTML escaping for XML tag safety
-        #
-        # SECURITY NOTE: html.escape() limitations
-        # -----------------------------------------
-        # We use html.escape() to sanitize user input before inserting it into
-        # XML tags (<query> and <context>). This prevents XML injection attacks
-        # where malicious input could break out of the tags.
-        #
-        # HOWEVER, this approach has limitations:
-        # 1. LLMs can decode HTML entities - they understand that &lt; means <
-        # 2. This means prompt injection is still possible despite HTML escaping
-        # 3. Example: A user could inject "&lt;query&gt;malicious&lt;/query&gt;"
-        #    which the LLM would interpret as actual XML tags
-        #
-        # Real defense strategy:
-        # ----------------------
-        # The fundamental protection against prompt injection comes from:
-        # - Using the LLM's messages API with proper system/user role separation
-        # - System messages define behavior; user messages are treated as data
-        # - Modern LLMs enforce this boundary to prevent prompt injection
-        #
-        # Current approach (defense-in-depth):
-        # - XML tags provide structure for the prompt
-        # - html.escape() prevents accidental XML parsing issues
-        # - But don't rely on it as primary security mechanism
-        #
-        # Future improvement (Task 28.3):
-        # - Migrate to LLM messages API with explicit role separation
-        # - Use system message for instructions, user message for query/context
-        # - This provides stronger isolation than text-based XML tags
-        #
+        # See MODULE-LEVEL SECURITY NOTE above for html.escape() limitations
         # DRY refactoring: Use _build_prompt() helper to avoid code duplication
         instruction = """Given the following chunks and query, assess if the chunks contain \
 relevant information to answer the query."""
@@ -564,7 +566,7 @@ Respond with exactly one word:
 
 Response:"""
 
-        # Task 16.24: Retry logic with exponential backoff for transient errors
+        # Retry logic with exponential backoff for transient errors
         # Use configurable retry parameters from settings
         max_retries = self.llm_settings.llm_retry_max_attempts
         base_delay = self.llm_settings.llm_retry_base_delay
@@ -572,7 +574,7 @@ Response:"""
         for attempt in range(max_retries):
             try:
                 # Run evaluation using pre-initialized agent with timeout
-                # Task 19.3: Wrap agent execution with timeout to prevent indefinite hangs
+                # Wrap agent execution with timeout to prevent indefinite hangs
                 result = await asyncio.wait_for(
                     self._eval_agent.run(prompt),
                     timeout=self.llm_settings.llm_agent_timeout,
@@ -585,7 +587,7 @@ Response:"""
                 return "insufficient"
 
             except TimeoutError:
-                # Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+                # asyncio.TimeoutError indicates the LLM is consistently too slow,
                 # not a transient failure. Return graceful fallback immediately (no retries).
                 logger.error(
                     "LLM evaluation timed out after %ds (attempt %d/%d): "
@@ -602,7 +604,7 @@ Response:"""
 
                 if attempt < max_retries - 1 and is_transient:
                     # Exponential backoff with jitter for transient errors
-                    # Task 17.7: Add jitter to prevent thundering herd
+                    # Add jitter to prevent thundering herd
                     delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                     logger.warning(
                         "Transient error in LLM evaluation (attempt %d/%d), retrying in %.1fs: %s",
@@ -631,8 +633,8 @@ Response:"""
     async def _synthesize_answer(self, chunks: list[str], query: str) -> str:
         """Synthesize final answer from relevant chunks using LLM.
 
-        Task 16.24: Added comprehensive error handling and retry logic
-        for transient LLM API failures.
+        Uses configurable retry logic with exponential backoff for transient
+        LLM API failures. Returns graceful error message as fallback on error.
 
         Args:
             chunks: Relevant document chunks.
@@ -651,37 +653,7 @@ Response:"""
                 len(chunks),
             )
 
-        # Task 27.2 & 28.3: HTML escaping for XML tag safety
-        #
-        # SECURITY NOTE: html.escape() limitations
-        # -----------------------------------------
-        # We use html.escape() to sanitize user input before inserting it into
-        # XML tags (<query> and <context>). This prevents XML injection attacks
-        # where malicious input could break out of the tags.
-        #
-        # HOWEVER, this approach has limitations:
-        # 1. LLMs can decode HTML entities - they understand that &lt; means <
-        # 2. This means prompt injection is still possible despite HTML escaping
-        # 3. Example: A user could inject "&lt;query&gt;malicious&lt;/query&gt;"
-        #    which the LLM would interpret as actual XML tags
-        #
-        # Real defense strategy:
-        # ----------------------
-        # The fundamental protection against prompt injection comes from:
-        # - Using the LLM's messages API with proper system/user role separation
-        # - System messages define behavior; user messages are treated as data
-        # - Modern LLMs enforce this boundary to prevent prompt injection
-        #
-        # Current approach (defense-in-depth):
-        # - XML tags provide structure for the prompt
-        # - html.escape() prevents accidental XML parsing issues
-        # - But don't rely on it as primary security mechanism
-        #
-        # Future improvement (Task 28.3):
-        # - Migrate to LLM messages API with explicit role separation
-        # - Use system message for instructions, user message for query/context
-        # - This provides stronger isolation than text-based XML tags
-        #
+        # See MODULE-LEVEL SECURITY NOTE above for html.escape() limitations
         # DRY refactoring: Use _build_prompt() helper to avoid code duplication
         instruction = (
             "Using the following context, provide a clear and concise answer to the query."
@@ -689,7 +661,7 @@ Response:"""
         prompt = self._build_prompt(query, chunks, instruction, chunk_label="Source")
         prompt += "\n\nAnswer:"
 
-        # Task 16.24: Retry logic with exponential backoff for transient errors
+        # Retry logic with exponential backoff for transient errors
         # Use configurable retry parameters from settings
         max_retries = self.llm_settings.llm_retry_max_attempts
         base_delay = self.llm_settings.llm_retry_base_delay
@@ -697,7 +669,7 @@ Response:"""
         for attempt in range(max_retries):
             try:
                 # Generate answer using pre-initialized agent with timeout
-                # Task 19.3: Wrap agent execution with timeout to prevent indefinite hangs
+                # Wrap agent execution with timeout to prevent indefinite hangs
                 result = await asyncio.wait_for(
                     self._synth_agent.run(prompt),
                     timeout=self.llm_settings.llm_agent_timeout,
@@ -705,7 +677,7 @@ Response:"""
                 return result.output.strip()
 
             except TimeoutError:
-                # Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+                # asyncio.TimeoutError indicates the LLM is consistently too slow,
                 # not a transient failure. Return graceful error message immediately (no retries).
                 logger.error(
                     "LLM synthesis timed out after %ds (attempt %d/%d): "
@@ -725,7 +697,7 @@ Response:"""
 
                 if attempt < max_retries - 1 and is_transient:
                     # Exponential backoff with jitter for transient errors
-                    # Task 17.7: Add jitter to prevent thundering herd
+                    # Add jitter to prevent thundering herd
                     delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                     logger.warning(
                         "Transient error in LLM synthesis (attempt %d/%d), retrying in %.1fs: %s",

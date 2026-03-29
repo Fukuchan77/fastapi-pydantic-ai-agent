@@ -1,6 +1,6 @@
-"""Tests for Task 20.6: asyncio.TimeoutError should NOT trigger retries.
+"""Tests for asyncio.TimeoutError should NOT trigger retries.
 
-Task 20.6: Exclude asyncio.TimeoutError from LLM retry logic.
+Exclude asyncio.TimeoutError from LLM retry logic.
 asyncio.TimeoutError is a subclass of TimeoutError, but it indicates
 the LLM is consistently too slow, not a transient failure.
 Retrying wastes time and resources.
@@ -25,7 +25,7 @@ async def test_asyncio_timeout_error_does_not_retry_evaluation(
 ) -> None:
     """Test that asyncio.TimeoutError in evaluation does NOT trigger retries.
 
-    Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+    asyncio.TimeoutError indicates the LLM is consistently too slow,
     not a transient failure. Retrying wastes time.
     """
     # Configure settings with multiple retry attempts
@@ -86,7 +86,7 @@ async def test_asyncio_timeout_error_does_not_retry_synthesis(
 ) -> None:
     """Test that asyncio.TimeoutError in synthesis does NOT trigger retries.
 
-    Task 20.6: asyncio.TimeoutError indicates the LLM is consistently too slow,
+    asyncio.TimeoutError indicates the LLM is consistently too slow,
     not a transient failure. Retrying wastes time.
     """
     # Configure settings with multiple retry attempts

@@ -86,7 +86,7 @@ class CORSMiddleware(BaseHTTPMiddleware):
             response.headers["Access-Control-Allow-Origin"] = "*"
         else:
             response.headers["Access-Control-Allow-Origin"] = origin
-            # Task 20.4: Add Vary: Origin header when returning specific origin
+            # Add Vary: Origin header when returning specific origin
             # to prevent proxy caches from returning wrong CORS headers to different clients
             response.headers["Vary"] = "Origin"
 

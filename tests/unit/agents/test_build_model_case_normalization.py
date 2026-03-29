@@ -1,4 +1,4 @@
-"""Unit tests for build_model provider name case normalization (Task 22.3)."""
+"""Unit tests for build_model provider name case normalization ()."""
 
 from unittest.mock import patch
 
@@ -9,7 +9,7 @@ from app.config import Settings
 
 
 class TestBuildModelCaseNormalization:
-    """Test suite for Task 22.3: provider name case normalization."""
+    """Test suite for provider name case normalization."""
 
     def test_build_model_normalizes_uppercase_ollama_provider(self, monkeypatch) -> None:
         """build_model should normalize uppercase 'Ollama' to lowercase 'ollama'.

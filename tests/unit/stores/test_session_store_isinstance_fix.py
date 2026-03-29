@@ -1,4 +1,4 @@
-"""Unit tests for Task 3.14: Fix _validate_messages() isinstance check."""
+"""Unit tests for Fix _validate_messages() isinstance check."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from app.stores.session_store import InMemorySessionStore
 
 
 class TestValidateMessagesInstanceOfFix:
-    """Test suite for Task 3.14: Fix _validate_messages() to use strict isinstance check."""
+    """Test suite for Fix _validate_messages() to use strict isinstance check."""
 
     @pytest.fixture
     def store(self) -> InMemorySessionStore:

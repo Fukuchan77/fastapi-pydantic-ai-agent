@@ -1,4 +1,4 @@
-"""Unit tests for Task 19.1: CORS wildcard warning at startup.
+"""Unit tests for CORS wildcard warning at startup.
 
 This test ensures that a warning is logged when CORS_ORIGINS contains "*"
 to prevent accidental production misconfiguration.
@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 def test_cors_wildcard_logs_warning_at_startup(caplog: pytest.LogCaptureFixture) -> None:
     """Test that a warning is logged when CORS_ORIGINS contains wildcard.
 
-    Task 19.1: Prevent accidental production misconfiguration by warning
+    Prevent accidental production misconfiguration by warning
     when CORS allows all origins.
     """
     # Clear settings cache to ensure fresh settings
@@ -55,7 +55,7 @@ def test_cors_wildcard_logs_warning_at_startup(caplog: pytest.LogCaptureFixture)
 def test_cors_specific_origins_no_warning(caplog: pytest.LogCaptureFixture) -> None:
     """Test that NO warning is logged when CORS has specific origins.
 
-    Task 19.1: Warning should only appear for wildcard "*", not for
+    Warning should only appear for wildcard "*", not for
     legitimate specific origins.
     """
     # Clear settings cache to ensure fresh settings
@@ -100,7 +100,7 @@ def test_cors_specific_origins_no_warning(caplog: pytest.LogCaptureFixture) -> N
 def test_cors_wildcard_in_list_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
     """Test that warning is logged even when wildcard is in a list with other origins.
 
-    Task 19.1: Having "*" anywhere in the origins list is a security risk.
+    Having "*" anywhere in the origins list is a security risk.
     """
     # Clear settings cache to ensure fresh settings
     from app.config import get_settings

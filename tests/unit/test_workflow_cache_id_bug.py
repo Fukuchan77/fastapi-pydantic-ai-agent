@@ -1,6 +1,6 @@
-"""Unit tests for Task 28.1 - id() cache key bug fix.
+"""Unit tests for - id() cache key bug fix.
 
-Task 28.1 (P1-HIGH): Tests for WeakKeyDictionary implementation.
+(P1-HIGH): Tests for WeakKeyDictionary implementation.
 
 These tests verify that using WeakKeyDictionary prevents id() collision bugs.
 
@@ -23,7 +23,7 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 def test_weakkeydictionary_type():
     """Test that _workflow_cache is a WeakKeyDictionary after fix.
 
-    Task 28.1 (P1-HIGH): Verify correct implementation type.
+    (P1-HIGH): Verify correct implementation type.
 
     This test verifies the implementation uses WeakKeyDictionary instead of dict.
     """
@@ -37,7 +37,7 @@ def test_weakkeydictionary_type():
 def test_workflow_cache_uses_object_identity():
     """Test that cache uses object identity, not id().
 
-    Task 28.1 (P1-HIGH): WeakKeyDictionary uses object identity.
+    (P1-HIGH): WeakKeyDictionary uses object identity.
 
     This test verifies that different vector_store objects get different
     cache entries, even if they happen to have the same id() after GC.
@@ -82,7 +82,7 @@ def test_workflow_cache_uses_object_identity():
 def test_workflow_cache_auto_cleanup_on_unreference():
     """Test that WeakKeyDictionary auto-removes entries when keys are GC'd.
 
-    Task 28.1 (P1-HIGH): Automatic cache cleanup.
+    (P1-HIGH): Automatic cache cleanup.
 
     This test verifies that when a vector_store object is no longer referenced
     anywhere (including not being referenced by a workflow in the cache),
@@ -140,7 +140,7 @@ def test_workflow_cache_auto_cleanup_on_unreference():
 def test_no_id_collision_bug():
     """Test that WeakKeyDictionary prevents the id() collision bug.
 
-    Task 28.1 (P1-HIGH): Main bug fix verification.
+    (P1-HIGH): Main bug fix verification.
 
     The old implementation used id(vector_store) as the cache key. After a
     vector_store was deleted and GC'd, Python could reuse that id() for a

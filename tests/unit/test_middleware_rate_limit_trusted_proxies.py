@@ -1,6 +1,6 @@
 """Unit tests for trusted proxy validation in rate limiter.
 
-Task 20.1: Verify that X-Forwarded-For header is only trusted when the
+Verify that X-Forwarded-For header is only trusted when the
 immediate client is in the trusted proxy list, preventing header spoofing attacks.
 """
 

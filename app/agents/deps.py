@@ -15,6 +15,11 @@ class AgentDeps:
 
     This dataclass is the generic type parameter for RunContext in all
     agent tool functions, providing access to shared resources.
+
+    Attributes:
+        http_client: Shared async HTTP client for external API calls.
+        settings: Application configuration settings.
+        session_store: Session history persistence backend.
     """
 
     http_client: httpx.AsyncClient

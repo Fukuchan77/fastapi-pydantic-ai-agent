@@ -10,9 +10,7 @@ from typing import Any
 
 import httpx
 import logfire
-from fastapi import BackgroundTasks
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -23,8 +21,7 @@ from app.config import get_settings
 from app.logging_config import configure_logging
 from app.middleware.cors import CORSMiddleware
 from app.middleware.rate_limit import add_rate_limiting
-from app.middleware.request_id import RequestIDMiddleware
-from app.middleware.request_id import request_id_var
+from app.middleware.request_id import RequestIDMiddleware, request_id_var
 from app.middleware.request_size import RequestSizeLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.models.errors import ErrorResponse
@@ -32,10 +29,9 @@ from app.observability import configure_logfire
 from app.stores.session_store import InMemorySessionStore
 from app.stores.vector_store import InMemoryVectorStore
 
-
 logger = logging.getLogger(__name__)
 
-# Task 2.7: Minimum cleanup interval to avoid wasting CPU on frequent cleanups
+# Minimum cleanup interval to avoid wasting CPU on frequent cleanups
 # Even if session_ttl is very short (e.g., 60 seconds in tests), the cleanup
 # interval should not be less than this value.
 CLEANUP_INTERVAL_MIN: int = 300  # seconds (5 minutes)
@@ -44,11 +40,11 @@ CLEANUP_INTERVAL_MIN: int = 300  # seconds (5 minutes)
 class RetryTransport(httpx.AsyncHTTPTransport):
     """Custom HTTP transport with retry logic and exponential backoff.
 
-    Task 19.4: Implements automatic retry for transient failures (network errors,
+    Implements automatic retry for transient failures (network errors,
     5xx server errors) with exponential backoff and jitter. Does NOT retry client
     errors (4xx) as they indicate issues with the request itself.
 
-    Task 26.1: Only retries transient 5xx errors {500, 502, 503, 504}.
+    Only retries transient 5xx errors {500, 502, 503, 504}.
     Non-transient errors like 501 (Not Implemented) and 505 (HTTP Version Not Supported)
     are permanent configuration issues that will not be resolved by retrying.
 
@@ -66,7 +62,7 @@ class RetryTransport(httpx.AsyncHTTPTransport):
         **kwargs: Additional arguments passed to AsyncHTTPTransport
     """
 
-    # Task 26.1: Define retryable status codes - only transient server errors
+    # Define retryable status codes - only transient server errors
     # Use frozenset for immutability (RUF012)
     RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({500, 502, 503, 504})
 
@@ -108,7 +104,7 @@ class RetryTransport(httpx.AsyncHTTPTransport):
             try:
                 response = await super().handle_async_request(request)
 
-                # Task 26.1: Only retry transient 5xx errors {500, 502, 503, 504}
+                # Only retry transient 5xx errors {500, 502, 503, 504}
                 # Non-transient errors (501, 505, etc.) are permanent and should not be retried
                 if (
                     response.status_code in self.RETRYABLE_STATUS_CODES
@@ -177,20 +173,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         None: Control during application lifetime
     """
     try:
-        # Task 2.6: Initialize settings from environment variables
+        # Initialize settings from environment variables
         app.state.settings = get_settings()
 
-        # Task 16.8: Configure Python logging at startup
+        # Configure Python logging at startup
         # This must be done early, before any logging occurs
         configure_logging(app.state.settings)
         logger.info("Configured Python logging")
 
         logger.info("Initialized application settings")
 
-        # Task 2.6: Initialize HTTP client for agent tool usage
-        # Task 16.26: Configure timeout to prevent indefinite hangs
-        # Task 16.6: Configure connection pooling limits
-        # Task 19.4: Add retry logic with exponential backoff using custom transport
+        # Initialize HTTP client for agent tool usage
+        # Configure timeout to prevent indefinite hangs
+        # Configure connection pooling limits
+        # Add retry logic with exponential backoff using custom transport
         retry_transport = RetryTransport(
             max_attempts=app.state.settings.http_retry_max_attempts,
             base_delay=app.state.settings.http_retry_base_delay,
@@ -219,26 +215,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
         raise
 
-    # Task 8.0: Initialize InMemoryVectorStore
+    # Initialize InMemoryVectorStore
     app.state.vector_store = InMemoryVectorStore()
     logger.info("Initialized vector store")
 
-    # Task 3.11: Initialize InMemorySessionStore with TTL
+    # Initialize InMemorySessionStore with TTL
     app.state.session_store = InMemorySessionStore()
     logger.info(
         "Initialized session store with TTL of %d seconds",
         app.state.session_store.session_ttl,
     )
 
-    # Task 3.11: Start background cleanup task for expired sessions
+    # Start background cleanup task for expired sessions
     async def cleanup_loop() -> None:
         """Background task that periodically cleans up expired sessions.
 
-        Task 16.19: Added comprehensive error handling to prevent cleanup
+        Added comprehensive error handling to prevent cleanup
         task from stopping on transient errors, which would cause memory leaks.
         """
         session_store = app.state.session_store
-        # Task 2.7: Ensure cleanup interval has a minimum bound to avoid wasting CPU
+        # Ensure cleanup interval has a minimum bound to avoid wasting CPU
         cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
         logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
 
@@ -246,12 +242,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             while True:
                 await asyncio.sleep(cleanup_interval)
                 try:
-                    # Task 3.15: cleanup_expired_sessions is now public
+                    # cleanup_expired_sessions is now public
                     removed_count = await session_store.cleanup_expired_sessions()
                     if removed_count > 0:
                         logger.info("Cleaned up %d expired sessions", removed_count)
                 except Exception as e:
-                    # Task 16.19: Catch all non-CancelledError exceptions
+                    # Catch all non-CancelledError exceptions
                     # Log the error but continue the cleanup loop to prevent memory leaks
                     logger.error(
                         "Error during session cleanup (will retry): %s",
@@ -265,15 +261,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create and store the cleanup task
     app.state.cleanup_task = asyncio.create_task(cleanup_loop())
 
-    # Task 8.0: Initialize chat agent
+    # Initialize chat agent
     app.state.chat_agent = build_chat_agent()
     logger.info("Initialized chat agent")
 
-    # Task 9.1 & 9.2: Configure Logfire observability
+    # Configure Logfire observability
     configure_logfire(app.state.settings)
     logger.info("Configured Logfire observability")
 
-    # Task 19.1: Log warning if CORS_ORIGINS contains wildcard "*"
+    # Log warning if CORS_ORIGINS contains wildcard "*"
     # Check after logging is configured so warning is properly logged
     if "*" in app.state.settings.cors_origins:
         logger.warning(
@@ -285,7 +281,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # Cleanup happens here after yield
-    # Task 3.11: Cancel the cleanup task during shutdown
+    # Cancel the cleanup task during shutdown
     if hasattr(app.state, "cleanup_task"):
         app.state.cleanup_task.cancel()
         try:
@@ -293,12 +289,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except asyncio.CancelledError:
             logger.info("Session cleanup task successfully cancelled")
 
-    # Task 22.1: Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
+    # Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
     if hasattr(app.state, "vector_store") and hasattr(app.state.vector_store, "close"):
         await app.state.vector_store.close()
         logger.info("Closed vector store")
 
-    # Task 2.6: Close HTTP client during shutdown
+    # Close HTTP client during shutdown
     if hasattr(app.state, "http_client"):
         await app.state.http_client.aclose()
         logger.info("Closed HTTP client")
@@ -322,10 +318,6 @@ app = FastAPI(
     ),
     version="0.1.0",
     lifespan=lifespan,
-    contact={
-        "name": "API Support",
-        "url": "https://github.com/yourusername/fastapi-pydantic-ai-agent",
-    },
     license_info={
         "name": "MIT",
         "url": "https://opensource.org/licenses/MIT",
@@ -336,10 +328,9 @@ app = FastAPI(
 # This is called at module level before lifespan runs
 settings = get_settings()
 
-# Task 15.3 & 20.2: Initialize rate limiting (slowapi) with quick workaround
+# Initialize rate limiting (slowapi) with quick workaround
 # Quick workaround (Option C): Accept that health endpoints will be rate limited,
 # but set a very high limit (1000/minute) that effectively exempts them in practice.
-# This is a temporary solution to unblock progress while the 31 remaining tasks are completed.
 # Trade-off: Health checks get rate limited, but at such a high threshold they won't be affected.
 add_rate_limiting(app, default_limits=["1000/minute"])
 logger.info("Initialized rate limiting (1000/minute) - applied globally via middleware")
@@ -347,21 +338,21 @@ logger.info("Initialized rate limiting (1000/minute) - applied globally via midd
 # Add SlowAPIMiddleware to enforce rate limiting on all routes
 app.add_middleware(SlowAPIMiddleware)  # type: ignore[arg-type]
 
-# Task 15.4: Add security headers middleware
+# Add security headers middleware
 # Added first so it applies to all responses (executes last in the middleware chain)
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 
-# FIX: Add request size limit middleware BEFORE request ID middleware
+# Add request size limit middleware BEFORE request ID middleware
 # Middleware executes in REVERSE order of addition, so this ensures
 # RequestIDMiddleware runs first, adding X-Request-ID to all responses including 413
 app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)  # type: ignore[arg-type]
 
-# HIGH FIX: Add request ID middleware for distributed tracing
+# Add request ID middleware for distributed tracing
 app.add_middleware(RequestIDMiddleware)  # type: ignore[arg-type]
 
-# Task 15.1: Add CORS middleware for cross-origin requests
+# Add CORS middleware for cross-origin requests
 # Added last so it executes first (handles preflight requests before other middleware)
-# CRITICAL FIX: Use cors_origins from settings instead of wildcard
+# Use cors_origins from settings instead of wildcard
 # This prevents CSRF attacks by restricting allowed origins
 # Note: cors_origins is validated to always be list[str] by field_validator
 app.add_middleware(
@@ -374,13 +365,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Task 9.2: Instrument FastAPI with Logfire for HTTP tracing
+# Instrument FastAPI with Logfire for HTTP tracing
 logfire.instrument_fastapi(app)
 
 # Register routers
 app.include_router(health_router)
 
-# Task 8.0: Register v1 router
+# Register v1 router
 app.include_router(v1_router, prefix="/v1")
 
 
@@ -398,7 +389,7 @@ async def unhandled_exception_handler(
     leaking sensitive information (stack traces, database paths, etc.).
     Full exception details are logged internally via background task.
 
-    Task 2.5: Logging is performed in a background task to prevent logging
+    Logging is performed in a background task to prevent logging
     backend latency from delaying the HTTP response. The traceback is captured
     before creating the background task to ensure it's available when logging runs.
 
@@ -418,7 +409,7 @@ async def unhandled_exception_handler(
     # Define background logging function
     def log_exception() -> None:
         """Log exception details in background to avoid blocking the response."""
-        # HIGH FIX: Include request ID for distributed tracing
+        # Include request ID for distributed tracing
         logger.error(
             "Unhandled exception during request to %s: %s",
             request_path,
@@ -432,7 +423,7 @@ async def unhandled_exception_handler(
     background_tasks.add_task(log_exception)
 
     # Return generic error message to client immediately (never expose internal details)
-    # Task 16.9: Add error code for programmatic error handling
+    # Add error code for programmatic error handling
     error_response = ErrorResponse(
         message="Internal server error occurred",
         code="INTERNAL_ERROR",

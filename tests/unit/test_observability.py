@@ -70,7 +70,7 @@ class TestConfigureLogfire:
     ) -> None:
         """Test that empty logfire_token raises ValidationError during Settings construction."""
         # Arrange & Act & Assert
-        # Task 16.13 added validation that rejects empty or whitespace-only tokens
+        # added validation that rejects empty or whitespace-only tokens
         with pytest.raises(ValidationError) as exc_info:
             Settings(
                 api_key=SecretStr("test-api-key-12345"),

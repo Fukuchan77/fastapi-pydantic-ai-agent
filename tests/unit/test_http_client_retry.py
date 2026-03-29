@@ -1,4 +1,4 @@
-"""Unit tests for HTTP client retry logic (Task 19.4).
+"""Unit tests for HTTP client retry logic ().
 
 Tests verify that the HTTP client in app.state.http_client properly retries
 transient failures with exponential backoff, while not retrying permanent failures.

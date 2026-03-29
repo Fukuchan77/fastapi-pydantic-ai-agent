@@ -1,6 +1,6 @@
 """Unit tests for RAG workflow result caching.
 
-Task 17.1: Implement query result caching to reduce redundant LLM calls
+Implement query result caching to reduce redundant LLM calls
 and vector store queries for identical requests.
 """
 
@@ -44,7 +44,7 @@ async def test_identical_queries_return_cached_results(
 ):
     """Test that identical queries return cached results without re-executing workflow.
 
-    Task 17.1: When the same query is executed twice within the cache TTL,
+    When the same query is executed twice within the cache TTL,
     the second call should return the cached result immediately without
     calling the vector store or LLM.
     """
@@ -78,7 +78,7 @@ async def test_different_queries_are_not_cached_together(
 ):
     """Test that different queries execute independently (not cached together).
 
-    Task 17.1: Each unique query should have its own cache entry.
+    Each unique query should have its own cache entry.
     Different queries should not share cached results.
     """
     workflow = CorrectiveRAGWorkflow(
@@ -107,7 +107,7 @@ async def test_cache_respects_max_retries_parameter(
 ):
     """Test that cache key includes max_retries parameter.
 
-    Task 17.1: The same query with different max_retries should be
+    The same query with different max_retries should be
     cached separately, as they may produce different results.
     """
     workflow = CorrectiveRAGWorkflow(
@@ -139,7 +139,7 @@ async def test_cache_has_size_limit(
 ):
     """Test that cache has LRU eviction when size limit is reached.
 
-    Task 17.1: The cache should have a maximum size (default 100 entries).
+    The cache should have a maximum size (default 100 entries).
     When the limit is reached, the least recently used entry should be evicted.
     """
     mock_settings.rag_cache_size = 5  # Small cache for testing
@@ -172,7 +172,7 @@ async def test_cache_statistics_are_tracked(
 ):
     """Test that cache hit/miss statistics are tracked.
 
-    Task 17.1: The workflow should expose cache statistics
+    The workflow should expose cache statistics
     (hits, misses, size) for monitoring and debugging.
     """
     workflow = CorrectiveRAGWorkflow(

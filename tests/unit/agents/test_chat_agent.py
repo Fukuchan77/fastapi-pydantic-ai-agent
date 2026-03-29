@@ -147,7 +147,7 @@ class TestBuildModel:
             )
 
     def test_build_model_validator_normalizes_uppercase_provider(self) -> None:
-        """Settings validator should normalize uppercase provider names to lowercase (Task 22.3)."""
+        """Settings validator should normalize uppercase provider names to lowercase ()."""
         # Settings validator now normalizes uppercase providers instead of rejecting them
         settings = Settings(
             api_key=SecretStr("test-api-key-12345"),

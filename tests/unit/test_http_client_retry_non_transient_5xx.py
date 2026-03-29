@@ -1,6 +1,6 @@
-"""Unit tests for Task 26.1: RetryTransport should not retry non-transient 5xx errors.
+"""Unit tests for RetryTransport should not retry non-transient 5xx errors.
 
-Task 26.1: RetryTransport currently retries ALL 5xx errors (500-599) including
+RetryTransport currently retries ALL 5xx errors (500-599) including
 non-transient errors like 501 (Not Implemented) and 505 (HTTP Version Not Supported).
 These are permanent errors that should not be retried.
 
@@ -21,7 +21,7 @@ from app.main import RetryTransport
 async def test_retry_transport_does_not_retry_501_not_implemented() -> None:
     """Test that RetryTransport does NOT retry 501 Not Implemented.
 
-    Task 26.1: 501 indicates the server does not support the functionality
+    501 indicates the server does not support the functionality
     required to fulfill the request. This is a permanent error that will
     not be resolved by retrying.
 
@@ -69,7 +69,7 @@ async def test_retry_transport_does_not_retry_501_not_implemented() -> None:
 async def test_retry_transport_does_not_retry_505_http_version_not_supported() -> None:
     """Test that RetryTransport does NOT retry 505 HTTP Version Not Supported.
 
-    Task 26.1: 505 indicates the server does not support the HTTP version
+    505 indicates the server does not support the HTTP version
     used in the request. This is a permanent configuration error that will
     not be resolved by retrying.
 
@@ -117,7 +117,7 @@ async def test_retry_transport_does_not_retry_505_http_version_not_supported() -
 async def test_retry_transport_retries_transient_5xx_errors() -> None:
     """Test that RetryTransport DOES retry transient 5xx errors.
 
-    Task 26.1: Only {500, 502, 503, 504} should be retried as these
+    Only {500, 502, 503, 504} should be retried as these
     are typically transient server issues that may resolve on retry.
 
     Expected behavior:

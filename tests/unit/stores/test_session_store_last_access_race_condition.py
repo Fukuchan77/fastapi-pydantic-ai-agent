@@ -1,4 +1,4 @@
-"""Unit test for Task 24.2: Race condition in InMemorySessionStore.get_history().
+"""Unit test for Race condition in InMemorySessionStore.get_history().
 
 This test verifies that _last_access timestamp updates happen inside the
 session lock to prevent memory leaks when concurrent cleanup operations occur.
@@ -33,7 +33,7 @@ from app.stores.session_store import InMemorySessionStore
 async def test_last_access_update_inside_lock_prevents_orphaned_timestamp():
     """Test that _last_access is updated inside session lock to prevent race condition.
 
-    Task 24.2 P2-MEDIUM: Moving _last_access update inside the session lock prevents
+    P2-MEDIUM: Moving _last_access update inside the session lock prevents
     a race condition where cleanup_expired_sessions() could delete session data
     after _last_access is updated but before the lock is acquired, leaving an
     orphaned timestamp entry (memory leak).

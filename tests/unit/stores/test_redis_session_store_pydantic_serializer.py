@@ -1,4 +1,4 @@
-"""Tests for Task 21.2: Replace pickle with Pydantic serializer in RedisSessionStore.
+"""Tests for Replace pickle with Pydantic serializer in RedisSessionStore.
 
 Security: pickle.loads() is an RCE vector if Redis is compromised.
 Solution: Use Pydantic AI's type-safe JSON serialization instead.
@@ -37,7 +37,7 @@ def session_store(mock_redis):
 
 @pytest.mark.asyncio
 async def test_save_history_uses_json_serialization_not_pickle(session_store, mock_redis):
-    """Task 21.2: Verify save_history uses JSON serialization instead of pickle.
+    """Verify save_history uses JSON serialization instead of pickle.
 
     Security requirement: pickle.dumps() must not be used for serialization.
     """
@@ -55,7 +55,7 @@ async def test_save_history_uses_json_serialization_not_pickle(session_store, mo
     # Extract the serialized data (second argument)
     serialized_data = call_args[0][1]
 
-    # Task 21.2: Data should be JSON bytes, not pickle bytes
+    # Data should be JSON bytes, not pickle bytes
     # JSON starts with '[' or '{', pickle starts with '\x80' or other binary markers
     assert isinstance(serialized_data, bytes), "Serialized data should be bytes"
     assert serialized_data[0:1] in (b"[", b"{"), "Data should be JSON, not pickle"
@@ -63,7 +63,7 @@ async def test_save_history_uses_json_serialization_not_pickle(session_store, mo
 
 @pytest.mark.asyncio
 async def test_get_history_uses_json_deserialization_not_pickle(session_store, mock_redis):
-    """Task 21.2: Verify get_history uses JSON deserialization instead of pickle.
+    """Verify get_history uses JSON deserialization instead of pickle.
 
     Security requirement: pickle.loads() must not be used for deserialization.
     RCE risk: If Redis is compromised, attacker can inject malicious pickle data.
@@ -95,7 +95,7 @@ async def test_get_history_uses_json_deserialization_not_pickle(session_store, m
 
 @pytest.mark.asyncio
 async def test_get_history_returns_empty_list_on_invalid_json(session_store, mock_redis):
-    """Task 21.2: Verify graceful handling of corrupted JSON data.
+    """Verify graceful handling of corrupted JSON data.
 
     When Redis data is corrupted, should return empty list instead of raising exception.
     """
@@ -110,7 +110,7 @@ async def test_get_history_returns_empty_list_on_invalid_json(session_store, moc
 
 @pytest.mark.asyncio
 async def test_get_history_rejects_pickle_data(session_store, mock_redis):
-    """Task 21.2 SECURITY: Verify that pickle data is NOT accepted.
+    """SECURITY: Verify that pickle data is NOT accepted.
 
     If Redis contains old pickle-serialized data, it should be rejected
     (return empty list) rather than unsafely deserialized.

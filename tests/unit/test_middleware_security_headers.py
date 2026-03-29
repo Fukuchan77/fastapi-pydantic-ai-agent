@@ -41,7 +41,7 @@ def test_security_headers_included_in_response(client: TestClient) -> None:
     assert "X-Frame-Options" in response.headers
     assert response.headers["X-Frame-Options"] == "DENY"
 
-    # Task 20.5: X-XSS-Protection removed - deprecated in modern browsers
+    # X-XSS-Protection removed - deprecated in modern browsers
     # CSP supersedes it (tested below)
     assert "X-XSS-Protection" not in response.headers
 
@@ -123,7 +123,7 @@ def test_custom_security_headers() -> None:
 def test_x_xss_protection_not_included() -> None:
     """Test that X-XSS-Protection header is NOT included.
 
-    Task 20.5: X-XSS-Protection header was removed from modern browsers
+    X-XSS-Protection header was removed from modern browsers
     (Chrome 2019) and can cause XSS vulnerabilities in older IE versions.
     Content-Security-Policy supersedes it and provides better protection.
     """

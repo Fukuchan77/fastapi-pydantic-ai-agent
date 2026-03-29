@@ -1,6 +1,6 @@
 """Benchmark utilities for performance testing.
 
-Task 17.5: Utilities for measuring latency, throughput, and cache hit rates.
+Utilities for measuring latency, throughput, and cache hit rates.
 """
 
 import asyncio

@@ -1,4 +1,4 @@
-"""Test for narrowing broad Exception handlers in session_store (Task 25.3).
+"""Test for narrowing broad Exception handlers in session_store ().
 
 The issue: Line 406 in session_store.py uses `except Exception:` which is too broad
 and can mask legitimate errors like ValidationError, ValueError, TypeError during
@@ -20,7 +20,7 @@ from app.stores.session_store import RedisSessionStore
 async def test_validation_error_caught_during_deserialization():
     """Test that ValidationError during deserialization is caught and handled gracefully.
 
-    Task 25.3: After narrowing the exception handler to catch only
+    After narrowing the exception handler to catch only
     (ValidationError, ValueError, TypeError), this should still work - returning []
     instead of raising.
     """
@@ -40,7 +40,7 @@ async def test_validation_error_caught_during_deserialization():
 async def test_value_error_caught_during_deserialization():
     """Test that ValueError during deserialization is caught and handled gracefully.
 
-    Task 25.3: After narrowing, ValueError should still be caught.
+    After narrowing, ValueError should still be caught.
     """
     store = RedisSessionStore(redis_url="redis://localhost:6379/0")
 
@@ -57,7 +57,7 @@ async def test_value_error_caught_during_deserialization():
 async def test_unexpected_error_not_caught():
     """Test that unexpected errors (not in the narrow exception list) propagate.
 
-    Task 25.3 RED phase: This test should FAIL before fix because broad
+    RED phase: This test should FAIL before fix because broad
     `except Exception:` catches RuntimeError during validation. After narrowing
     to specific exceptions, RuntimeError should propagate and this test will PASS.
     """

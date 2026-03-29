@@ -1,4 +1,4 @@
-"""Unit tests for API key strength validation (Task 16.2).
+"""Unit tests for API key strength validation ().
 
 Tests that placeholder and weak API keys are rejected at startup.
 """

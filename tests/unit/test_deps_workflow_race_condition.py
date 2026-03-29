@@ -1,4 +1,4 @@
-"""Tests for get_rag_workflow race condition fix (Task 29.1).
+"""Tests for get_rag_workflow race condition fix ().
 
 This test demonstrates the check-then-set race condition in get_rag_workflow
 where concurrent requests can create multiple workflow instances instead of

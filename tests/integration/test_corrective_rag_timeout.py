@@ -1,6 +1,6 @@
 """Tests for LLM agent timeout in Corrective RAG workflow.
 
-Task 19.3: Verify timeout is applied to _eval_agent.run() and _synth_agent.run()
+Verify timeout is applied to _eval_agent.run() and _synth_agent.run()
 to prevent indefinite hangs when LLM provider is slow or unresponsive.
 """
 
@@ -23,7 +23,7 @@ async def test_evaluation_times_out_after_llm_agent_timeout(
 ) -> None:
     """Test that LLM evaluation times out after llm_agent_timeout seconds.
 
-    Task 19.3: Verify asyncio.wait_for() wraps _eval_agent.run() with timeout.
+    Verify asyncio.wait_for() wraps _eval_agent.run() with timeout.
     """
     # Set short timeout for fast test execution (5 seconds minimum per Settings validation)
     monkeypatch.setenv("API_KEY", "test-api-key-1234567890")
@@ -71,7 +71,7 @@ async def test_synthesis_times_out_after_llm_agent_timeout(
 ) -> None:
     """Test that LLM synthesis times out after llm_agent_timeout seconds.
 
-    Task 19.3: Verify asyncio.wait_for() wraps _synth_agent.run() with timeout.
+    Verify asyncio.wait_for() wraps _synth_agent.run() with timeout.
     """
     # Set short timeout for fast test execution (5 seconds minimum per Settings validation)
     monkeypatch.setenv("API_KEY", "test-api-key-1234567890")
@@ -128,7 +128,7 @@ async def test_timeout_is_configurable_via_settings(
 ) -> None:
     """Test that llm_agent_timeout setting is respected.
 
-    Task 19.3: Verify timeout value comes from Settings.llm_agent_timeout.
+    Verify timeout value comes from Settings.llm_agent_timeout.
     """
     # Set custom timeout of 10 seconds (higher than minimum 5)
     monkeypatch.setenv("API_KEY", "test-api-key-1234567890")

@@ -1,4 +1,4 @@
-"""Unit tests for server-side session ID generation (Task 16.20).
+"""Unit tests for server-side session ID generation ().
 
 Tests verify that:
 - SessionStore can generate new UUIDs for sessions
@@ -13,7 +13,7 @@ from app.stores.session_store import InMemorySessionStore
 
 
 class TestServerGeneratedSessionIds:
-    """Test server-side UUID generation for session IDs (Task 16.20)."""
+    """Test server-side UUID generation for session IDs ()."""
 
     def test_session_store_has_generate_session_id_method(self) -> None:
         """SessionStore should have a generate_session_id() method."""

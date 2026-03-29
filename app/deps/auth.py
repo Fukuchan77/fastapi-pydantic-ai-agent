@@ -16,7 +16,7 @@ from app.models.errors import ErrorResponse
 logger = logging.getLogger(__name__)
 
 
-# Task 16.5: Define APIKeyHeader security scheme with description for OpenAPI documentation
+# Define APIKeyHeader security scheme with description for OpenAPI documentation
 api_key_header = APIKeyHeader(
     name="X-API-Key",
     auto_error=False,
@@ -36,7 +36,7 @@ async def verify_api_key(
     This dependency should be applied at the router level to protect endpoints
     while allowing specific routes (like /health) to remain unauthenticated.
 
-    Task 16.28: Uses constant-time comparison to prevent timing attacks.
+    Uses constant-time comparison to prevent timing attacks.
 
     Args:
         api_key: API key from X-API-Key header (None if not provided)
@@ -48,9 +48,9 @@ async def verify_api_key(
     Raises:
         HTTPException: 401 Unauthorized if key is missing or invalid
     """
-    # Task 16.28: Use constant-time comparison to prevent timing attacks
+    # Use constant-time comparison to prevent timing attacks
     # secrets.compare_digest() requires both arguments to be strings
-    # Task 16.7: Extract secret value from SecretStr for comparison
+    # Extract secret value from SecretStr for comparison
     if api_key is None or not secrets.compare_digest(api_key, settings.api_key.get_secret_value()):
         # Log authentication failure for security monitoring
         # Do NOT log the actual API key values (security risk)
@@ -66,7 +66,7 @@ async def verify_api_key(
                 request_id,
             )
 
-        # Task 16.9: Add error code for programmatic error handling
+        # Add error code for programmatic error handling
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(message="Unauthorized", code="UNAUTHORIZED").model_dump(),
