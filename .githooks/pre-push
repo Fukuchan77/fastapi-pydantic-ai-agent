@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Availability-gated pre-push hook (Req 1.6/1.7).
+#
+# Ollama-dependent local tests and the evals suite are too slow/flaky for
+# GitHub Actions (AC 1.8), so they run here instead, but only when Ollama is
+# actually reachable. If it isn't, the push proceeds with a warning rather
+# than blocking on infrastructure the developer doesn't have running.
+#
+# Enable this hook with: git config core.hooksPath .githooks
+set -euo pipefail
+
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+if curl --fail --silent --show-error --max-time 5 "${OLLAMA_BASE_URL}/api/tags" >/dev/null 2>&1; then
+  echo "pre-push: Ollama reachable at ${OLLAMA_BASE_URL} - running local tests and evals" >&2
+  mise run test:local
+  mise run evals
+else
+  echo "pre-push: WARNING - Ollama not reachable at ${OLLAMA_BASE_URL}; skipping local tests and evals" >&2
+fi

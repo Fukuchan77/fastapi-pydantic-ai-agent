@@ -29,6 +29,18 @@ run = "uv run pytest tests/benchmarks/ -v -s"
 description = "Run local tests (requires running Ollama instance)"
 run = "uv run pytest tests/local/ -v -m ollama"
 
+[tasks."test:ci"]
+description = "PR CI test stage: unit+integration+e2e with coverage gate (TestModel/FunctionModel only, no live LLM/Ollama)"
+run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --cov-report=term-missing"
+
+[tasks.audit]
+description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
+run = "uv run pip-audit"
+
+[tasks.evals]
+description = "Run the offline evals suite (placeholder until task 13.2 implements the real runner)"
+run = "echo 'evals: no-op placeholder (see task 13.2)'"
+
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
 run = ["uv run ruff check app/ tests/", "uv run ty check app/"]
