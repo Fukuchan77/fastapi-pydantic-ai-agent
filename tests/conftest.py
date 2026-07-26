@@ -2,7 +2,6 @@
 
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -14,9 +13,14 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
+from app.config import Settings
 
-# Set minimal environment variables before importing app
-# This is required because app/main.py calls get_settings() at module level
+
+# Some test modules still import the module-level `app.main.app` singleton
+# directly at module scope (executed at collection time, before any fixture
+# runs). Set minimal environment variables so that import keeps working; the
+# `client` fixture below builds its own app via `create_app()` and does not
+# depend on this.
 if "API_KEY" not in os.environ:
     os.environ["API_KEY"] = "test-api-key-12345"
 if "LLM_MODEL" not in os.environ:
@@ -24,7 +28,7 @@ if "LLM_MODEL" not in os.environ:
 if "LLM_API_KEY" not in os.environ:
     os.environ["LLM_API_KEY"] = "test-llm-key-12345"
 
-from app.main import app
+from app.main import create_app
 
 
 @pytest.fixture(autouse=True)
@@ -223,58 +227,36 @@ def test_model() -> FunctionModel:
     return FunctionModel(simple_llm_function, stream_function=simple_llm_stream_function)
 
 
-@asynccontextmanager
-async def test_lifespan_override(test_model: FunctionModel):
-    """Override lifespan to inject test model.
+def build_test_settings(**overrides: object) -> Settings:
+    """Build a `Settings` instance for tests without relying on environment variables.
 
-    This context manager wraps the real lifespan but replaces the
-    chat agent and RAG workflow with ones using FunctionModel to avoid real LLM calls.
+    Passing explicit field values to `Settings(...)` bypasses environment/`.env`
+    lookups for those fields, so callers can construct isolated configurations
+    (e.g. per-test CORS origins) without monkeypatching `os.environ`.
 
     Args:
-        test_model: FunctionModel to use for testing.
+        **overrides: Field overrides layered on top of the minimal valid defaults.
 
-    Yields:
-        None: Control during test app lifetime.
+    Returns:
+        A validated `Settings` instance.
     """
-    from app.agents.chat_agent import build_chat_agent
-    from app.deps.workflow import get_rag_workflow
-    from app.main import lifespan as real_lifespan
-    from app.workflows.corrective_rag import CorrectiveRAGWorkflow
-
-    # Define test workflow factory that uses test_model
-    def get_test_rag_workflow(req: Request):
-        """Test version of get_rag_workflow that uses FunctionModel."""
-        from app.config import get_settings
-
-        return CorrectiveRAGWorkflow(
-            vector_store=req.app.state.vector_store,
-            llm_settings=get_settings(),
-            llm_model=test_model,  # Inject test model here
-        )
-
-    # Run the real lifespan
-    async with real_lifespan(app):
-        # Override the chat agent with test model
-        app.state.chat_agent = build_chat_agent(model=test_model)
-
-        # Override RAG workflow dependency to use test model
-        app.dependency_overrides[get_rag_workflow] = get_test_rag_workflow
-
-        yield
-
-        # Clean up overrides
-        app.dependency_overrides.clear()
+    defaults: dict[str, object] = {
+        "api_key": "test-api-key-12345",
+        "llm_model": "openai:gpt-4",
+        "llm_api_key": "test-llm-key-12345",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type]
 
 
 @pytest_asyncio.fixture
 async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     """Provide an async HTTP client for E2E tests.
 
-    This fixture creates an AsyncClient with ASGI transport that communicates
-    directly with the FastAPI app without starting a real HTTP server.
-    The app's lifespan is executed, ensuring proper startup/shutdown.
-
-    The chat agent is overridden with a FunctionModel to avoid real LLM API calls.
+    Builds an isolated app via `create_app(settings=..., model=test_model)` so the
+    chat agent is wired directly with the `FunctionModel`, without needing to
+    monkeypatch environment variables or post-hoc override `app.state.chat_agent`.
+    The RAG workflow dependency is separately overridden to also use `test_model`.
 
     Args:
         test_model: FunctionModel fixture for testing.
@@ -282,11 +264,25 @@ async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     Yields:
         AsyncClient configured for testing.
     """
-    # Create a test app with overridden lifespan and async client with ASGI transport
+    from app.deps.workflow import get_rag_workflow
+    from app.workflows.corrective_rag import CorrectiveRAGWorkflow
+
+    test_app = create_app(settings=build_test_settings(), model=test_model)
+
+    def get_test_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
+        """Test version of get_rag_workflow that uses FunctionModel."""
+        return CorrectiveRAGWorkflow(
+            vector_store=req.app.state.vector_store,
+            llm_settings=req.app.state.settings,
+            llm_model=test_model,  # Inject test model here
+        )
+
+    test_app.dependency_overrides[get_rag_workflow] = get_test_rag_workflow
+
     async with (
-        test_lifespan_override(test_model),
+        test_app.router.lifespan_context(test_app),
         AsyncClient(
-            transport=ASGITransport(app=app),
+            transport=ASGITransport(app=test_app),
             base_url="http://test",
         ) as test_client,
     ):

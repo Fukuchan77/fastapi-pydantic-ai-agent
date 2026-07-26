@@ -1,30 +1,91 @@
-"""Unit tests for main application module."""
+"""Unit tests for main application module and the create_app() factory."""
+
+import asyncio
+import time
+from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic_ai.models.test import TestModel
 
 from app.config import Settings
+from app.main import create_app
+from app.stores.session_store import InMemorySessionStore
+
+
+def _build_settings(**overrides: object) -> Settings:
+    """Build a valid Settings instance directly, without touching os.environ."""
+    defaults: dict[str, object] = {
+        "api_key": "test-api-key-12345",
+        "llm_model": "openai:gpt-4",
+        "llm_api_key": "test-llm-key-12345",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type]
 
 
 def test_main_app_can_be_imported() -> None:
-    """Test that main app can be imported successfully.
-
-    Fixed misleading test name from 'test_main_app_import_fails'.
-    The test verifies successful import, not failure.
-    """
+    """Test that the module-level app singleton (used by uvicorn) can be imported."""
     from app.main import app
 
     assert isinstance(app, FastAPI)
 
 
+def test_create_app_returns_fastapi_instance() -> None:
+    """create_app() should return a configured FastAPI instance."""
+    app = create_app(settings=_build_settings(), model=TestModel())
+
+    assert isinstance(app, FastAPI)
+
+
+def test_create_app_builds_without_environment_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_app() with explicit settings must not require env vars (Req 8.1, 8.3).
+
+    Tests construct the app via the factory with an explicit Settings instance
+    and injected model, so no API_KEY/LLM_MODEL/LLM_API_KEY need to be set.
+    """
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    app = create_app(settings=_build_settings(), model=TestModel())
+
+    assert isinstance(app, FastAPI)
+
+
+def test_create_app_does_not_call_get_settings_when_settings_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_app() must not call get_settings() when settings is explicitly provided (Req 8.1)."""
+    import app.main as main_module
+
+    def _fail_if_called() -> Settings:
+        raise AssertionError("get_settings() should not be called when settings is provided")
+
+    monkeypatch.setattr(main_module, "get_settings", _fail_if_called)
+
+    # Must not raise: get_settings() is never invoked because settings is provided.
+    create_app(settings=_build_settings(), model=TestModel())
+
+
+def test_create_app_wires_injected_model_into_chat_agent() -> None:
+    """create_app(model=...) must build the chat agent with the injected model (Req 8.2)."""
+    test_model = TestModel()
+    app = create_app(settings=_build_settings(), model=test_model)
+
+    with TestClient(app):
+        assert app.state.chat_agent.model is test_model
+
+
 def test_health_router_registered() -> None:
     """Test that health router is registered on the app."""
-    from app.main import app
+    app = create_app(settings=_build_settings(), model=TestModel())
 
-    # Check that health endpoint exists
     routes = [route.path for route in app.routes if isinstance(route, APIRoute)]
     assert "/health" in routes
 
@@ -35,11 +96,9 @@ def test_exception_handler_returns_500_with_error_response() -> None:
     Security: The handler should return a generic error message to prevent
     leaking sensitive information to clients.
     """
-    from app.main import app
-
+    app = create_app(settings=_build_settings(), model=TestModel())
     client = TestClient(app, raise_server_exceptions=False)
 
-    # Create a test endpoint that raises an exception
     @app.get("/test-error")
     def test_error_endpoint() -> None:
         raise ValueError("Test error message")
@@ -48,7 +107,6 @@ def test_exception_handler_returns_500_with_error_response() -> None:
 
     assert response.status_code == 500
     # Should return generic message, not the actual exception message
-    # Error code is now consistently used
     assert response.json() == {
         "message": "Internal server error occurred",
         "code": "INTERNAL_ERROR",
@@ -61,8 +119,7 @@ def test_exception_handler_structure() -> None:
     Security: Verifies that the response structure is correct and contains
     a generic error message instead of exposing internal exception details.
     """
-    from app.main import app
-
+    app = create_app(settings=_build_settings(), model=TestModel())
     client = TestClient(app, raise_server_exceptions=False)
 
     @app.get("/test-error-2")
@@ -79,27 +136,17 @@ def test_exception_handler_structure() -> None:
     assert json_data["message"] == "Internal server error occurred"
 
 
-def test_lifespan_initializes_app_state_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lifespan_initializes_app_state_attributes() -> None:
     """Test that lifespan initializes http_client and settings in app.state.
-
-    This test verifies that after lifespan startup, app.state.http_client
-    is an httpx.AsyncClient instance and app.state.settings is a Settings instance.
 
     TestClient properly triggers the lifespan context manager, ensuring that
     app.state attributes are initialized before the first request.
     """
-    # Clear the lru_cache to ensure fresh settings are loaded with test env vars
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-
-    # Set required environment variables for Settings
-    monkeypatch.setenv("API_KEY", "test-api-key-for-lifespan-test-123456")
-    monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-
-    # Import app after setting environment variables
-    from app.main import app
+    settings = _build_settings(
+        api_key="test-api-key-for-lifespan-test-123456",
+        llm_model="openai:gpt-4o",
+    )
+    app = create_app(settings=settings, model=TestModel())
 
     # TestClient triggers the lifespan context manager
     with TestClient(app) as client:
@@ -114,38 +161,18 @@ def test_lifespan_initializes_app_state_attributes(monkeypatch: pytest.MonkeyPat
         )
 
         assert hasattr(app.state, "settings"), "app.state.settings not initialized"
-        assert isinstance(app.state.settings, Settings), (
-            "app.state.settings is not a Settings instance"
+        assert app.state.settings is settings, (
+            "app.state.settings should be the exact Settings instance injected via create_app()"
         )
 
 
-def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_interval_has_minimum_bound() -> None:
     """Test that cleanup interval has a minimum of 300 seconds.
 
     When session_ttl is very short (e.g., 60 seconds for testing),
     the cleanup interval should not be session_ttl // 2 (30 seconds), but
     should have a minimum of 300 seconds to avoid wasting CPU on frequent cleanups.
-
-    RED PHASE: This test will fail initially because the cleanup interval
-    calculation doesn't have a minimum bound.
     """
-    # Clear the lru_cache to ensure fresh settings
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-
-    # Set required environment variables
-    monkeypatch.setenv("API_KEY", "test-cleanup-interval-key-1234567890")
-    monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
-
-    # Import dependencies
-    import asyncio
-    import time
-    from unittest.mock import patch
-
-    from app.stores.session_store import InMemorySessionStore
-
     # Track what interval asyncio.sleep was called with
     sleep_intervals = []
 
@@ -167,16 +194,14 @@ def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> 
         patch("asyncio.sleep", side_effect=mock_sleep),
         patch.object(InMemorySessionStore, "__init__", mock_init),
     ):
-        # Import app after patching so the lifespan uses our mocked session store
-        from app.main import app
+        app = create_app(settings=_build_settings(), model=TestModel())
 
         # TestClient triggers the lifespan
         with TestClient(app) as _:
             # Wait a bit for the cleanup task to call asyncio.sleep
             time.sleep(0.1)
 
-    # Verify that the cleanup interval was 30 seconds (60 // 2) without the fix
-    # After implementing the fix, it should be 300 seconds (max(300, 60 // 2))
+    # Verify that the cleanup interval was 300 seconds (max(300, 60 // 2))
     assert len(sleep_intervals) > 0, "asyncio.sleep was not called"
     actual_interval = sleep_intervals[0]
     assert actual_interval == 300, (
@@ -184,35 +209,27 @@ def test_cleanup_interval_has_minimum_bound(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_cors_middleware_respects_default_settings() -> None:
-    """Test that CORS middleware uses default settings from config.
+def test_cors_middleware_respects_injected_settings() -> None:
+    """Test that CORS middleware uses the cors_origins from the injected Settings.
 
-    Security: CORS should use configured origins, not wildcard.
-    This test verifies that CORS uses the default setting (localhost:3000).
-
-    Note: Cannot test dynamic monkeypatch because settings are loaded at module level.
-    The default from conftest.py should be http://localhost:3000 or the test env default.
+    Security: CORS should use configured origins, not wildcard. Because settings
+    are now injected explicitly via create_app(), this test controls the exact
+    configured origin instead of depending on whatever default was baked in at
+    module import time.
     """
-    from app.config import get_settings
-    from app.main import app
+    settings = _build_settings(cors_origins=["http://localhost:3000"])
+    app = create_app(settings=settings, model=TestModel())
 
-    # Get the current settings to verify what CORS origins are configured
-    settings = get_settings()
-
-    # Test with TestClient to verify CORS behavior
     with TestClient(app) as client:
-        # Test with the configured origin (default is http://localhost:3000)
-        configured_origin = (
-            settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
-        )
+        # Test with the configured origin
         response = client.get(
             "/health",
-            headers={"Origin": configured_origin},
+            headers={"Origin": "http://localhost:3000"},
         )
 
         assert response.status_code == 200
         # CORS header should be set for configured origin
-        assert response.headers.get("Access-Control-Allow-Origin") == configured_origin
+        assert response.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
 
         # Test with disallowed origin (not in settings)
         response2 = client.get(

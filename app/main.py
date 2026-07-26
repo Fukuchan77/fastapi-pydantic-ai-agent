@@ -14,11 +14,13 @@ from fastapi import BackgroundTasks
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from pydantic_ai.models import Model
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
+from app.config import Settings
 from app.config import get_settings
 from app.logging_config import configure_logging
 from app.middleware.cors import CORSMiddleware
@@ -158,282 +160,307 @@ class RetryTransport(httpx.AsyncHTTPTransport):
         raise RuntimeError("Retry logic error: no response or exception")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan manager.
+def create_app(
+    settings: Settings | None = None,
+    model: Model | str | None = None,
+) -> FastAPI:
+    """Build and configure the FastAPI application (composition root).
 
-    Handles startup and shutdown of application resources including:
-    - Vector store initialization
-    - Session store initialization
-    - HTTP client setup
-    - Agent construction
-    - Observability configuration
-    - Background cleanup task for expired sessions
+    Constructs the FastAPI app, registers middleware in the existing
+    load-bearing order, wires the lifespan manager, and registers routers
+    and the global exception handler. Does not call `get_settings()` unless
+    `settings` is omitted, so tests can inject a `Settings` instance and a
+    test `Model` without relying on environment variables.
 
     Args:
-        app: FastAPI application instance
+        settings: Application settings. Resolved via `get_settings()` when
+            omitted (used by the production `uvicorn app.main:app` entrypoint).
+        model: LLM model for the chat agent. Forwarded to `build_chat_agent()`;
+            when `None`, the chat agent builds its own model from `settings`.
 
-    Yields:
-        None: Control during application lifetime
+    Returns:
+        Configured FastAPI application instance.
     """
-    try:
-        # Initialize settings from environment variables
-        app.state.settings = get_settings()
+    resolved_settings = settings or get_settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Application lifespan manager.
+
+        Handles startup and shutdown of application resources including:
+        - Vector store initialization
+        - Session store initialization
+        - HTTP client setup
+        - Agent construction
+        - Observability configuration
+        - Background cleanup task for expired sessions
+
+        Args:
+            app: FastAPI application instance
+
+        Yields:
+            None: Control during application lifetime
+        """
+        app.state.settings = resolved_settings
 
         # Configure Python logging at startup
         # This must be done early, before any logging occurs
-        configure_logging(app.state.settings)
+        configure_logging(resolved_settings)
         logger.info("Configured Python logging")
-
         logger.info("Initialized application settings")
 
-        # Initialize HTTP client for agent tool usage
-        # Configure timeout to prevent indefinite hangs
-        # Configure connection pooling limits
-        # Add retry logic with exponential backoff using custom transport
-        retry_transport = RetryTransport(
-            max_attempts=app.state.settings.http_retry_max_attempts,
-            base_delay=app.state.settings.http_retry_base_delay,
-        )
-        app.state.http_client = httpx.AsyncClient(
-            transport=retry_transport,
-            timeout=httpx.Timeout(
-                app.state.settings.http_timeout, connect=app.state.settings.http_connect_timeout
-            ),
-            limits=httpx.Limits(
-                max_connections=app.state.settings.http_max_connections,
-                max_keepalive_connections=app.state.settings.http_max_keepalive_connections,
-            ),
-        )
-        logger.info(
-            "Initialized HTTP client with %ss timeout (%ss connect), "
-            "max_connections=%d, max_keepalive=%d, retry_max_attempts=%d, retry_base_delay=%.1fs",
-            app.state.settings.http_timeout,
-            app.state.settings.http_connect_timeout,
-            app.state.settings.http_max_connections,
-            app.state.settings.http_max_keepalive_connections,
-            app.state.settings.http_retry_max_attempts,
-            app.state.settings.http_retry_base_delay,
-        )
-    except Exception as e:
-        logger.error("Failed to initialize app.state.settings or http_client: %s", e, exc_info=True)
-        raise
-
-    # Initialize InMemoryVectorStore
-    app.state.vector_store = InMemoryVectorStore()
-    logger.info("Initialized vector store")
-
-    # Initialize InMemorySessionStore with TTL
-    app.state.session_store = InMemorySessionStore()
-    logger.info(
-        "Initialized session store with TTL of %d seconds",
-        app.state.session_store.session_ttl,
-    )
-
-    # Start background cleanup task for expired sessions
-    async def cleanup_loop() -> None:
-        """Background task that periodically cleans up expired sessions.
-
-        Added comprehensive error handling to prevent cleanup
-        task from stopping on transient errors, which would cause memory leaks.
-        """
-        session_store = app.state.session_store
-        # Ensure cleanup interval has a minimum bound to avoid wasting CPU
-        cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
-        logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
-
         try:
-            while True:
-                await asyncio.sleep(cleanup_interval)
-                try:
-                    # cleanup_expired_sessions is now public
-                    removed_count = await session_store.cleanup_expired_sessions()
-                    if removed_count > 0:
-                        logger.info("Cleaned up %d expired sessions", removed_count)
-                except Exception as e:
-                    # Catch all non-CancelledError exceptions
-                    # Log the error but continue the cleanup loop to prevent memory leaks
-                    logger.error(
-                        "Error during session cleanup (will retry): %s",
-                        e,
-                        exc_info=True,
-                    )
-        except asyncio.CancelledError:
-            logger.info("Session cleanup task cancelled during shutdown")
+            # Initialize HTTP client for agent tool usage
+            # Configure timeout to prevent indefinite hangs
+            # Configure connection pooling limits
+            # Add retry logic with exponential backoff using custom transport
+            retry_transport = RetryTransport(
+                max_attempts=resolved_settings.http_retry_max_attempts,
+                base_delay=resolved_settings.http_retry_base_delay,
+            )
+            app.state.http_client = httpx.AsyncClient(
+                transport=retry_transport,
+                timeout=httpx.Timeout(
+                    resolved_settings.http_timeout,
+                    connect=resolved_settings.http_connect_timeout,
+                ),
+                limits=httpx.Limits(
+                    max_connections=resolved_settings.http_max_connections,
+                    max_keepalive_connections=resolved_settings.http_max_keepalive_connections,
+                ),
+            )
+            logger.info(
+                "Initialized HTTP client with %ss timeout (%ss connect), "
+                "max_connections=%d, max_keepalive=%d, "
+                "retry_max_attempts=%d, retry_base_delay=%.1fs",
+                resolved_settings.http_timeout,
+                resolved_settings.http_connect_timeout,
+                resolved_settings.http_max_connections,
+                resolved_settings.http_max_keepalive_connections,
+                resolved_settings.http_retry_max_attempts,
+                resolved_settings.http_retry_base_delay,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize app.state.http_client: %s", e, exc_info=True)
             raise
 
-    # Create and store the cleanup task
-    app.state.cleanup_task = asyncio.create_task(cleanup_loop())
+        # Initialize InMemoryVectorStore
+        app.state.vector_store = InMemoryVectorStore()
+        logger.info("Initialized vector store")
 
-    # Initialize chat agent
-    app.state.chat_agent = build_chat_agent()
-    logger.info("Initialized chat agent")
-
-    # Configure Logfire observability
-    configure_logfire(app.state.settings)
-    logger.info("Configured Logfire observability")
-
-    # Log warning if CORS_ORIGINS contains wildcard "*"
-    # Check after logging is configured so warning is properly logged
-    if "*" in app.state.settings.cors_origins:
-        logger.warning(
-            "CORS wildcard '*' detected in CORS_ORIGINS configuration. "
-            "This allows requests from ANY origin and may pose a security risk in production. "
-            "Consider restricting to specific origins for production deployments."
+        # Initialize InMemorySessionStore with TTL
+        app.state.session_store = InMemorySessionStore()
+        logger.info(
+            "Initialized session store with TTL of %d seconds",
+            app.state.session_store.session_ttl,
         )
 
-    yield
+        # Start background cleanup task for expired sessions
+        async def cleanup_loop() -> None:
+            """Background task that periodically cleans up expired sessions.
 
-    # Cleanup happens here after yield
-    # Cancel the cleanup task during shutdown
-    if hasattr(app.state, "cleanup_task"):
-        app.state.cleanup_task.cancel()
-        try:
-            await app.state.cleanup_task
-        except asyncio.CancelledError:
-            logger.info("Session cleanup task successfully cancelled")
+            Added comprehensive error handling to prevent cleanup
+            task from stopping on transient errors, which would cause memory leaks.
+            """
+            session_store = app.state.session_store
+            # Ensure cleanup interval has a minimum bound to avoid wasting CPU
+            cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
+            logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
 
-    # Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
-    if hasattr(app.state, "vector_store") and hasattr(app.state.vector_store, "close"):
-        await app.state.vector_store.close()
-        logger.info("Closed vector store")
+            try:
+                while True:
+                    await asyncio.sleep(cleanup_interval)
+                    try:
+                        # cleanup_expired_sessions is now public
+                        removed_count = await session_store.cleanup_expired_sessions()
+                        if removed_count > 0:
+                            logger.info("Cleaned up %d expired sessions", removed_count)
+                    except Exception as e:
+                        # Catch all non-CancelledError exceptions
+                        # Log the error but continue the cleanup loop to prevent memory leaks
+                        logger.error(
+                            "Error during session cleanup (will retry): %s",
+                            e,
+                            exc_info=True,
+                        )
+            except asyncio.CancelledError:
+                logger.info("Session cleanup task cancelled during shutdown")
+                raise
 
-    # Close HTTP client during shutdown
-    if hasattr(app.state, "http_client"):
-        await app.state.http_client.aclose()
-        logger.info("Closed HTTP client")
+        # Create and store the cleanup task
+        app.state.cleanup_task = asyncio.create_task(cleanup_loop())
 
+        # Initialize chat agent, forwarding the injected model (if any)
+        app.state.chat_agent = build_chat_agent(model=model, settings=resolved_settings)
+        logger.info("Initialized chat agent")
 
-app = FastAPI(
-    title="FastAPI Pydantic AI Agent",
-    description=(
-        "Production-ready agentic AI framework combining FastAPI, "
-        "Pydantic AI, and LlamaIndex Workflows. "
-        "Features include:\n\n"
-        "- **Chat Agent**: Conversational AI with tool-calling capabilities "
-        "and session management\n"
-        "- **RAG System**: Corrective RAG workflow with TF-IDF vector store "
-        "for document retrieval\n"
-        "- **Streaming**: Server-Sent Events (SSE) streaming for real-time responses\n"
-        "- **Observability**: Integrated Logfire instrumentation for AI-native monitoring\n"
-        "- **Security**: API key authentication, CORS, rate limiting, and security headers\n\n"
-        "Built with enterprise features: connection pooling, request size limits, "
-        "comprehensive error handling, and production-ready configuration management."
-    ),
-    version="0.1.0",
-    lifespan=lifespan,
-    license_info={
-        "name": "MIT",
-        "url": "https://opensource.org/licenses/MIT",
-    },
-)
+        # Configure Logfire observability
+        configure_logfire(resolved_settings)
+        logger.info("Configured Logfire observability")
 
-# Get settings for middleware configuration
-# This is called at module level before lifespan runs
-settings = get_settings()
+        # Log warning if CORS_ORIGINS contains wildcard "*"
+        # Check after logging is configured so warning is properly logged
+        if "*" in resolved_settings.cors_origins:
+            logger.warning(
+                "CORS wildcard '*' detected in CORS_ORIGINS configuration. "
+                "This allows requests from ANY origin and may pose a security risk in "
+                "production. Consider restricting to specific origins for production "
+                "deployments."
+            )
 
-# Initialize rate limiting (slowapi) with quick workaround
-# Quick workaround (Option C): Accept that health endpoints will be rate limited,
-# but set a very high limit (1000/minute) that effectively exempts them in practice.
-# Trade-off: Health checks get rate limited, but at such a high threshold they won't be affected.
-add_rate_limiting(app, default_limits=["1000/minute"])
-logger.info("Initialized rate limiting (1000/minute) - applied globally via middleware")
+        yield
 
-# Add SlowAPIMiddleware to enforce rate limiting on all routes
-app.add_middleware(SlowAPIMiddleware)  # type: ignore[arg-type]
+        # Cleanup happens here after yield
+        # Cancel the cleanup task during shutdown
+        if hasattr(app.state, "cleanup_task"):
+            app.state.cleanup_task.cancel()
+            try:
+                await app.state.cleanup_task
+            except asyncio.CancelledError:
+                logger.info("Session cleanup task successfully cancelled")
 
-# Add security headers middleware
-# Added first so it applies to all responses (executes last in the middleware chain)
-app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
+        # Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
+        if hasattr(app.state, "vector_store") and hasattr(app.state.vector_store, "close"):
+            await app.state.vector_store.close()
+            logger.info("Closed vector store")
 
-# Add request size limit middleware BEFORE request ID middleware
-# Middleware executes in REVERSE order of addition, so this ensures
-# RequestIDMiddleware runs first, adding X-Request-ID to all responses including 413
-app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)  # type: ignore[arg-type]
+        # Close HTTP client during shutdown
+        if hasattr(app.state, "http_client"):
+            await app.state.http_client.aclose()
+            logger.info("Closed HTTP client")
 
-# Add request ID middleware for distributed tracing
-app.add_middleware(RequestIDMiddleware)  # type: ignore[arg-type]
+    app = FastAPI(
+        title="FastAPI Pydantic AI Agent",
+        description=(
+            "Production-ready agentic AI framework combining FastAPI, "
+            "Pydantic AI, and LlamaIndex Workflows. "
+            "Features include:\n\n"
+            "- **Chat Agent**: Conversational AI with tool-calling capabilities "
+            "and session management\n"
+            "- **RAG System**: Corrective RAG workflow with TF-IDF vector store "
+            "for document retrieval\n"
+            "- **Streaming**: Server-Sent Events (SSE) streaming for real-time responses\n"
+            "- **Observability**: Integrated Logfire instrumentation for AI-native monitoring\n"
+            "- **Security**: API key authentication, CORS, rate limiting, and security headers\n\n"
+            "Built with enterprise features: connection pooling, request size limits, "
+            "comprehensive error handling, and production-ready configuration management."
+        ),
+        version="0.1.0",
+        lifespan=lifespan,
+        license_info={
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT",
+        },
+    )
 
-# Add CORS middleware for cross-origin requests
-# Added last so it executes first (handles preflight requests before other middleware)
-# Use cors_origins from settings instead of wildcard
-# This prevents CSRF attacks by restricting allowed origins
-# Note: cors_origins is validated to always be list[str] by field_validator
-app.add_middleware(
-    CORSMiddleware,  # type: ignore[arg-type]
-    allow_origins=settings.cors_origins
-    if isinstance(settings.cors_origins, list)
-    else [settings.cors_origins],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+    # Initialize rate limiting (slowapi) with quick workaround
+    # Quick workaround (Option C): Accept that health endpoints will be rate limited,
+    # but set a very high limit (1000/minute) that effectively exempts them in practice.
+    # Trade-off: Health checks get rate limited, but at such a high threshold they won't
+    # be affected.
+    add_rate_limiting(app, default_limits=["1000/minute"])
+    logger.info("Initialized rate limiting (1000/minute) - applied globally via middleware")
 
-# Instrument FastAPI with Logfire for HTTP tracing
-logfire.instrument_fastapi(app)
+    # Add SlowAPIMiddleware to enforce rate limiting on all routes
+    app.add_middleware(SlowAPIMiddleware)  # type: ignore[arg-type]
 
-# Register routers
-app.include_router(health_router)
+    # Add security headers middleware
+    # Added first so it applies to all responses (executes last in the middleware chain)
+    app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 
-# Register v1 router
-app.include_router(v1_router, prefix="/v1")
+    # Add request size limit middleware BEFORE request ID middleware
+    # Middleware executes in REVERSE order of addition, so this ensures
+    # RequestIDMiddleware runs first, adding X-Request-ID to all responses including 413
+    app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)  # type: ignore[arg-type]
 
+    # Add request ID middleware for distributed tracing
+    app.add_middleware(RequestIDMiddleware)  # type: ignore[arg-type]
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(
-    request: Request,
-    exc: Exception,
-) -> JSONResponse:
-    """Global exception handler for unhandled exceptions.
+    # Add CORS middleware for cross-origin requests
+    # Added last so it executes first (handles preflight requests before other middleware)
+    # Use cors_origins from settings instead of wildcard
+    # This prevents CSRF attacks by restricting allowed origins
+    # Note: cors_origins is validated to always be list[str] by field_validator
+    app.add_middleware(
+        CORSMiddleware,  # type: ignore[arg-type]
+        allow_origins=resolved_settings.cors_origins
+        if isinstance(resolved_settings.cors_origins, list)
+        else [resolved_settings.cors_origins],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
-    Catches any unhandled exception during request processing and returns
-    a structured error response with HTTP 500 status code.
+    # Instrument FastAPI with Logfire for HTTP tracing
+    logfire.instrument_fastapi(app)
 
-    Security: Returns a generic error message to the client to prevent
-    leaking sensitive information (stack traces, database paths, etc.).
-    Full exception details are logged internally via background task.
+    # Register routers
+    app.include_router(health_router)
 
-    Logging is performed in a background task to prevent logging
-    backend latency from delaying the HTTP response. The traceback is captured
-    before creating the background task to ensure it's available when logging runs.
+    # Register v1 router
+    app.include_router(v1_router, prefix="/v1")
 
-    Args:
-        request: The incoming request that caused the exception
-        exc: The unhandled exception
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        """Global exception handler for unhandled exceptions.
 
-    Returns:
-        JSONResponse: HTTP 500 response with generic ErrorResponse body
-    """
-    # Capture exception info immediately while still in exception context
-    # This must be done BEFORE creating the background task to preserve traceback
-    exc_info = sys.exc_info()
-    request_path = request.url.path
-    exc_str = str(exc)
+        Catches any unhandled exception during request processing and returns
+        a structured error response with HTTP 500 status code.
 
-    # Define background logging function
-    def log_exception() -> None:
-        """Log exception details in background to avoid blocking the response."""
-        # Include request ID for distributed tracing
-        logger.error(
-            "Unhandled exception during request to %s: %s",
-            request_path,
-            exc_str,
-            exc_info=exc_info,
-            extra={"request_id": request_id_var.get()},
+        Security: Returns a generic error message to the client to prevent
+        leaking sensitive information (stack traces, database paths, etc.).
+        Full exception details are logged internally via background task.
+
+        Logging is performed in a background task to prevent logging
+        backend latency from delaying the HTTP response. The traceback is captured
+        before creating the background task to ensure it's available when logging runs.
+
+        Args:
+            request: The incoming request that caused the exception
+            exc: The unhandled exception
+
+        Returns:
+            JSONResponse: HTTP 500 response with generic ErrorResponse body
+        """
+        # Capture exception info immediately while still in exception context
+        # This must be done BEFORE creating the background task to preserve traceback
+        exc_info = sys.exc_info()
+        request_path = request.url.path
+        exc_str = str(exc)
+
+        # Define background logging function
+        def log_exception() -> None:
+            """Log exception details in background to avoid blocking the response."""
+            # Include request ID for distributed tracing
+            logger.error(
+                "Unhandled exception during request to %s: %s",
+                request_path,
+                exc_str,
+                exc_info=exc_info,
+                extra={"request_id": request_id_var.get()},
+            )
+
+        # Create background tasks and add logging
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(log_exception)
+
+        # Return generic error message to client immediately (never expose internal details)
+        # Add error code for programmatic error handling
+        error_response = ErrorResponse(
+            message="Internal server error occurred",
+            code="INTERNAL_ERROR",
+        )
+        return JSONResponse(
+            status_code=500,
+            content=error_response.model_dump(),
+            background=background_tasks,
         )
 
-    # Create background tasks and add logging
-    background_tasks = BackgroundTasks()
-    background_tasks.add_task(log_exception)
+    return app
 
-    # Return generic error message to client immediately (never expose internal details)
-    # Add error code for programmatic error handling
-    error_response = ErrorResponse(
-        message="Internal server error occurred",
-        code="INTERNAL_ERROR",
-    )
-    return JSONResponse(
-        status_code=500,
-        content=error_response.model_dump(),
-        background=background_tasks,
-    )
+
+# Module-level app instance for `uvicorn app.main:app`.
+app = create_app()
