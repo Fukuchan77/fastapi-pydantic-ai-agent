@@ -407,6 +407,50 @@ class Settings(BaseSettings):
         "(Ollama embeddings via embedding_model/embedding_base_url). "
         "'ollama' requires embedding_model to be set",
     )
+    sse_max_events: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum number of SSE events emitted per agent stream request "
+        "before the stream stops producing further events",
+    )
+    sse_heartbeat_interval: int = Field(
+        default=15,
+        ge=1,
+        description="Interval in seconds between SSE heartbeat comments emitted "
+        "while the agent stream is idle (no event ready to send)",
+    )
+    sse_send_timeout: int = Field(
+        default=60,
+        ge=1,
+        description="Timeout in seconds for producing a single SSE event; the "
+        "stream aborts with a terminal error event if exceeded",
+    )
+
+    @model_validator(mode="after")
+    def validate_sse_heartbeat_interval_within_send_timeout(self) -> "Settings":
+        """Validate that sse_heartbeat_interval does not exceed sse_send_timeout.
+
+        The heartbeat loop only gets a chance to fire between waits bounded by
+        `sse_send_timeout`; a heartbeat interval larger than the send timeout
+        would never actually fire before the stream aborts, defeating its
+        purpose of keeping idle connections alive.
+
+        Returns:
+            Settings: The validated settings instance.
+
+        Raises:
+            ValueError: If sse_heartbeat_interval exceeds sse_send_timeout.
+        """
+        if self.sse_heartbeat_interval > self.sse_send_timeout:
+            raise ValueError(
+                f"sse_heartbeat_interval ({self.sse_heartbeat_interval}) "
+                f"cannot exceed sse_send_timeout ({self.sse_send_timeout}). "
+                "A heartbeat that never fires within the send-timeout budget "
+                "cannot keep idle connections alive."
+            )
+
+        return self
+
     cors_origins: str | list[str] = Field(
         default=["http://localhost:3000"],
         description="Allowed CORS origins (comma-separated or JSON array)",

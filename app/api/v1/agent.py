@@ -1,15 +1,15 @@
-"""Agent API routes and SSE streaming adapter.
+"""Agent API routes and SSE streaming endpoint.
 
 This module provides FastAPI routes for the Pydantic AI chat agent,
 including both standard request/response and Server-Sent Events (SSE)
-streaming endpoints.
+streaming endpoints. The SSE wire contract is the typed 5-event union
+defined in `app.patterns.sse`; stream lifecycle hardening is owned by
+`app.api.v1._stream`.
 """
 
 import asyncio
-import json
 import logging
-from typing import Protocol
-from typing import runtime_checkable
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -20,6 +20,7 @@ from pydantic_ai.messages import ToolCallPart
 
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
+from app.api.v1._stream import event_source
 from app.deps.auth import verify_api_key
 from app.models.agent import ChatRequest
 from app.models.agent import ChatResponse
@@ -27,94 +28,7 @@ from app.models.agent import ChatResponse
 
 logger = logging.getLogger(__name__)
 
-
-@runtime_checkable
-class StreamAdapter(Protocol):
-    r"""Protocol for SSE stream adapters.
-
-    Defines the interface for formatting Server-Sent Events (SSE) in different
-    protocols (standard SSE, Vercel AI Data Stream, AG-UI, etc.).
-    """
-
-    def format_event(self, event_type: str, content: str) -> str:
-        r"""Format an SSE event with the given type and content.
-
-        Args:
-            event_type: Type of the event (e.g., "delta", "done", "error").
-            content: Content payload for the event.
-
-        Returns:
-            Formatted SSE event string.
-        """
-        ...
-
-    def format_done(self) -> str:
-        """Format a terminal "done" event to signal stream completion.
-
-        Returns:
-            Formatted SSE event string for stream completion.
-        """
-        ...
-
-    def format_error(self, message: str) -> str:
-        """Format an error event with the given message.
-
-        Args:
-            message: Error message to include in the event.
-
-        Returns:
-            Formatted SSE event string for error.
-        """
-        ...
-
-
-class DefaultSSEAdapter:
-    r"""Default SSE adapter that emits standard JSON events.
-
-    Produces SSE events in the format:
-        data: {"type": "event_type", "content": "content"}\n\n
-
-    This format is compatible with standard EventSource API clients.
-    """
-
-    def format_event(self, event_type: str, content: str) -> str:
-        r"""Format an SSE event with the given type and content.
-
-        Args:
-            event_type: Type of the event (e.g., "delta", "done", "error").
-            content: Content payload for the event.
-
-        Returns:
-            Formatted SSE event string in the format:
-                 {"type": "...", "content": "..."}\n\n
-        """
-        try:
-            payload = {"type": event_type, "content": content}
-            return f"data: {json.dumps(payload)}\n\n"
-        except (TypeError, ValueError) as e:
-            logger.error("Failed to serialize SSE event: %s", e, exc_info=True)
-            error_payload = {"type": "error", "content": "Serialization failed"}
-            return f"data: {json.dumps(error_payload)}\n\n"
-
-    def format_done(self) -> str:
-        """Format a terminal "done" event to signal stream completion.
-
-        Returns:
-            Formatted SSE event string with type="done" and empty content.
-        """
-        return self.format_event("done", "")
-
-    def format_error(self, message: str) -> str:
-        """Format an error event with the given message.
-
-        Args:
-            message: Error message to include in the event.
-
-        Returns:
-            Formatted SSE event string with type="error" and the error message.
-        """
-        return self.format_event("error", message)
-
+_HEARTBEAT_COMMENT = ": heartbeat\n\n"
 
 # Create router for agent endpoints
 router = APIRouter(tags=["agent"])
@@ -192,6 +106,43 @@ async def chat(
     )
 
 
+async def _with_heartbeat(
+    agen: AsyncIterator[str],
+    interval: float,
+) -> AsyncIterator[str]:
+    """Interleave SSE heartbeat comments while `agen` is idle (Req 2.8).
+
+    Uses `asyncio.wait()` (never `asyncio.wait_for()`) around the pending
+    upstream call, so a heartbeat tick only checks readiness — it never
+    cancels the in-flight event `_stream.py` is still producing.
+
+    Args:
+        agen: The SSE wire-text generator to wrap (e.g. from `event_source`).
+        interval: Seconds to wait for the next value before emitting a heartbeat.
+
+    Yields:
+        Values from `agen` in order, interspersed with heartbeat comments.
+    """
+    next_task: asyncio.Task[str] | None = None
+    try:
+        while True:
+            if next_task is None:
+                next_task = asyncio.ensure_future(agen.__anext__())
+            done, _pending = await asyncio.wait({next_task}, timeout=interval)
+            if not done:
+                yield _HEARTBEAT_COMMENT
+                continue
+            try:
+                yield next_task.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                next_task = None
+    finally:
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
+
+
 @router.post("/agent/stream")
 async def stream_agent(
     request: ChatRequest,
@@ -201,9 +152,10 @@ async def stream_agent(
 ) -> StreamingResponse:
     """Stream chat responses from the Pydantic AI agent via Server-Sent Events.
 
-    This endpoint loads session history if a session_id is provided,
-    runs the agent with streaming enabled, emits SSE events as tokens
-    are generated, saves the updated history, and sends a terminal done event.
+    Emits the typed 5-event union (`step_started`/`tool_called`/`token`/
+    `completed`/`error`) defined in `app.patterns.sse`. Session history is
+    loaded and saved by the event source in `app.api.v1._stream`; this route
+    only wires headers and the idle heartbeat.
 
     Args:
         request: ChatRequest with message and optional session_id.
@@ -214,93 +166,14 @@ async def stream_agent(
     Returns:
         StreamingResponse with text/event-stream media type.
     """
-    from collections.abc import AsyncIterator
-
-    from fastapi.responses import StreamingResponse
-
-    adapter = DefaultSSEAdapter()
-
-    async def generate() -> AsyncIterator[str]:
-        """Generate SSE events from agent stream with error handling.
-
-        Distinguishes between validation errors, cancellation, and unexpected
-        errors to provide appropriate error messages without leaking internal details.
-        """
-        try:
-            # Load session history if session_id provided
-            history = []
-            if request.session_id:
-                history = await deps.session_store.get_history(request.session_id)
-
-            # Get the chat agent from app.state
-            chat_agent = req.app.state.chat_agent
-
-            # Run agent with streaming enabled
-            async with chat_agent.run_stream(
-                request.message,
-                deps=deps,
-                message_history=history,
-            ) as result:
-                # Stream deltas as they arrive
-                async for delta in result.stream_text(delta=True):
-                    yield adapter.format_event("delta", delta)
-
-                # Collect all messages for history saving
-                # Must be done inside the context manager while result is still valid
-                all_messages = result.all_messages()
-
-            # Save session BEFORE emitting done event
-            # This ensures clients are only notified of completion if the session
-            # was saved successfully. If save fails, the client won't receive a done event.
-            if request.session_id:
-                try:
-                    await deps.session_store.save_history(
-                        request.session_id,
-                        all_messages,
-                    )
-                except ValueError as e:
-                    # Validation errors (e.g., message count exceeded) - log and notify client
-                    logger.warning(
-                        "Failed to save session history for session %s: %s",
-                        request.session_id,
-                        e,
-                    )
-                    # Emit error event instead of done event
-                    yield adapter.format_error(f"Failed to save session: {e}")
-                    return  # Don't emit done event
-                except Exception as e:
-                    # Unexpected errors during save - log and notify client
-                    logger.error(
-                        "Unexpected error saving session history for session %s: %s",
-                        request.session_id,
-                        e,
-                        exc_info=True,
-                    )
-                    # Emit error event instead of done event
-                    yield adapter.format_error("Failed to save session")
-                    return  # Don't emit done event
-
-            # Emit terminal done event (only if save succeeded or no session_id)
-            yield adapter.format_done()
-
-        except asyncio.CancelledError:
-            # Client disconnected - log but don't send error event
-            # Anonymize user messages - log only message length
-            logger.info("Stream cancelled by client (message_length=%d)", len(request.message))
-            raise
-        except ValueError as e:
-            # Validation errors - safe to expose message
-            logger.warning("Validation error in stream: %s", e)
-            yield adapter.format_error("Invalid request parameters")
-        except Exception as e:
-            # Unexpected errors - log full details, return generic message
-            # Anonymize user messages - log only message length, not content
-            logger.error(
-                "Unexpected error in agent stream: %s",
-                e,
-                exc_info=True,
-                extra={"message_length": len(request.message)},
-            )
-            yield adapter.format_error("An unexpected error occurred")
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    settings = req.app.state.settings
+    chat_agent = req.app.state.chat_agent
+    wire_stream = event_source(req, chat_agent, request, deps, settings)
+    return StreamingResponse(
+        _with_heartbeat(wire_stream, settings.sse_heartbeat_interval),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

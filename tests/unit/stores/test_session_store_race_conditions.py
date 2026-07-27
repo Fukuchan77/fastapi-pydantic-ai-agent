@@ -1,9 +1,8 @@
 """Tests for critical race conditions in session_store.py.
 
-This module tests the three critical issues identified in the code review:
+This module tests the two critical issues identified in the code review:
 1. LRU eviction race condition (line 157)
 2. Lock cleanup race condition (line 187)
-3. SSE  prefix consistency
 """
 
 import asyncio
@@ -121,44 +120,3 @@ class TestLockCleanupRaceCondition:
         # Note: Lock may or may not exist depending on timing - get_history()
         # might create a new lock after clear() completes. This is OK and doesn't
         # indicate a bug. The important thing is no deadlock or corruption occurred.
-
-
-class TestSSEDataPrefixConsistency:
-    """Test SSE  prefix consistency (issue at line 99)."""
-
-    def test_format_event_with_serialization_error_has_data_prefix(self):
-        r"""Test that error events from serialization failures have 'data: ' prefix.
-
-        Issue: Line 99 in app/api/v1/agent.py returns formatted string without 'data: ' prefix
-        when JSON serialization fails. It returns:
-            f"data: {json.dumps(error_payload)}\\n\\n"
-
-        But should return:
-            f"data: {json.dumps(error_payload)}\\n\\n"
-
-        Expected behavior: All SSE events must have 'data: ' prefix for proper parsing.
-        """
-        import json
-
-        from app.api.v1.agent import DefaultSSEAdapter
-
-        adapter = DefaultSSEAdapter()
-
-        # Create an object that json.dumps cannot serialize (set is not JSON serializable)
-        unserializable_content = {"data": set([1, 2, 3])}  # type: ignore
-
-        # Try to format an event with unserializable content
-        # This will trigger the exception handler at line 96-99
-        result = adapter.format_event("delta", unserializable_content)  # type: ignore
-
-        # The result should have ' ' prefix even in error case
-        assert result.startswith("data: "), f"SSE event missing 'data: ' prefix. Got: {result[:50]}"
-
-        # Verify it's properly formatted SSE
-        assert result.endswith("\n\n"), "SSE event should end with \\n\\n"
-
-        # Verify the error payload is valid JSON
-        data_line = result.removeprefix("data: ").removesuffix("\n\n")
-        error_payload = json.loads(data_line)
-        assert error_payload["type"] == "error"
-        assert "content" in error_payload
