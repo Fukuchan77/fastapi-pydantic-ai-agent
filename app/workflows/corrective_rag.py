@@ -26,7 +26,10 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.config import Settings
+from app.models.rag import RetrievedHit
 from app.stores.vector_store import VectorStore
+from app.workflows.citation import order_hits
+from app.workflows.citation import validate_citations
 from app.workflows.events import EvaluateEvent
 from app.workflows.events import SearchEvent
 from app.workflows.events import SynthesizeEvent
@@ -307,15 +310,17 @@ class CorrectiveRAGWorkflow(Workflow):
     ) -> EvaluateEvent:
         """Retrieve documents from vector store.
 
-        On StartEvent: Initializes WorkflowState with query and max_retries.
-        On SearchEvent: Increments search_count and retrieves documents.
+        On StartEvent: Initializes WorkflowState with query and max_retries, and
+            retrieves with `rag_initial_k` hits.
+        On SearchEvent: Increments search_count and retrieves with the widened
+            `rag_widened_k` hit count (AC 3.2).
 
         Args:
             ctx: LlamaIndex workflow context (unused in event-based state management).
             ev: Either StartEvent (initial query) or SearchEvent (retry).
 
         Returns:
-            EvaluateEvent with retrieved chunks and updated state.
+            EvaluateEvent with retrieved hits and updated state.
         """
         with logfire.span("rag_workflow.search"):
             # Initialize or load state
@@ -329,24 +334,28 @@ class CorrectiveRAGWorkflow(Workflow):
                     search_count=0,
                     max_retries=max_retries,
                 )
+                top_k = self.llm_settings.rag_initial_k
             else:
                 # Load existing state from SearchEvent
                 state = ev.state
+                top_k = self.llm_settings.rag_widened_k
 
             # Increment search count
             state.search_count += 1
 
             # Retrieve documents from vector store
             query = state.query
-            chunks = await self.vector_store.query(query, top_k=5)
+            hits = await self.vector_store.query_with_scores(query, top_k=top_k)
+            state.retrieved_hit_ids |= {hit.chunk_id for hit in hits}
 
             logfire.info(
-                "Retrieved chunks",
+                "Retrieved hits",
                 search_count=state.search_count,
-                chunk_count=len(chunks),
+                top_k=top_k,
+                hit_count=len(hits),
             )
 
-            return EvaluateEvent(query=query, chunks=chunks, state=state)
+            return EvaluateEvent(query=query, hits=hits, state=state)
 
     @step
     async def evaluate(
@@ -354,15 +363,15 @@ class CorrectiveRAGWorkflow(Workflow):
         ctx: Context,
         ev: EvaluateEvent,
     ) -> SearchEvent | SynthesizeEvent:
-        """Assess relevance of retrieved chunks.
+        """Assess relevance of retrieved hits.
 
-        Uses LLM to classify chunks as relevant or insufficient.
+        Uses LLM to classify hits as relevant or insufficient.
         If insufficient and retries remain, emits SearchEvent for retry.
         Otherwise, emits SynthesizeEvent to generate final answer.
 
         Args:
             ctx: LlamaIndex workflow context (unused in event-based state management).
-            ev: EvaluateEvent with chunks to evaluate and current state.
+            ev: EvaluateEvent with hits to evaluate and current state.
 
         Returns:
             SearchEvent (retry) or SynthesizeEvent (proceed to synthesis).
@@ -370,18 +379,18 @@ class CorrectiveRAGWorkflow(Workflow):
         with logfire.span("rag_workflow.evaluate"):
             state = ev.state
 
-            # If no chunks retrieved, proceed to synthesis with context_found=False
-            if not ev.chunks:
-                logfire.warn("No chunks retrieved", search_count=state.search_count)
+            # AC 3.1: zero hits skip the LLM call entirely and terminate early.
+            if not ev.hits:
+                logfire.warn("No hits retrieved", search_count=state.search_count)
                 return SynthesizeEvent(
                     query=ev.query,
-                    chunks=[],
+                    hits=[],
                     context_found=False,
                     state=state,
                 )
 
             # Evaluate relevance using LLM
-            relevance = await self._evaluate_relevance(ev.chunks, ev.query)
+            relevance = await self._evaluate_relevance([hit.text for hit in ev.hits], ev.query)
 
             logfire.info(
                 "Evaluated relevance",
@@ -393,12 +402,12 @@ class CorrectiveRAGWorkflow(Workflow):
             if relevance == "relevant":
                 return SynthesizeEvent(
                     query=ev.query,
-                    chunks=ev.chunks,
+                    hits=ev.hits,
                     context_found=True,
                     state=state,
                 )
 
-            # If insufficient and retries remain, emit refined search
+            # If insufficient and retries remain, emit refined search (widened k)
             if state.search_count < state.max_retries:
                 logfire.info(
                     "Insufficient context, refining search",
@@ -407,7 +416,8 @@ class CorrectiveRAGWorkflow(Workflow):
                 )
                 return SearchEvent(query=ev.query, refined=True, state=state)
 
-            # Retries exhausted, proceed to synthesis without context
+            # AC 3.6: retries exhausted but hits exist — proceed to a degraded,
+            # grounded-subset synthesis instead of a generic "no context" message.
             logfire.warn(
                 "Retries exhausted",
                 search_count=state.search_count,
@@ -415,7 +425,7 @@ class CorrectiveRAGWorkflow(Workflow):
             )
             return SynthesizeEvent(
                 query=ev.query,
-                chunks=ev.chunks,
+                hits=ev.hits,
                 context_found=False,
                 state=state,
             )
@@ -426,31 +436,44 @@ class CorrectiveRAGWorkflow(Workflow):
         ctx: Context,
         ev: SynthesizeEvent,
     ) -> StopEvent:
-        """Generate final answer from relevant context.
+        """Generate final answer from relevant or grounded-subset context.
 
-        If context_found is False, returns a graceful "no context" response.
-        Otherwise, uses LLM to synthesize answer from chunks and query.
+        If no hits were ever retrieved, returns a graceful "no context" response
+        without calling the LLM. Otherwise (context_found=True, or retries
+        exhausted with hits still present per AC 3.6), synthesizes an answer from
+        the deterministically-ordered hits and cites exactly the hits used.
 
         Args:
             ctx: LlamaIndex workflow context (unused in event-based state management).
-            ev: SynthesizeEvent with chunks, context_found flag, and current state.
+            ev: SynthesizeEvent with hits, context_found flag, and current state.
 
         Returns:
-            StopEvent with final answer and metadata.
+            StopEvent with final answer, citations, and metadata.
         """
         with logfire.span("rag_workflow.synthesize"):
             state = ev.state
+            citations: list[RetrievedHit] = []
 
-            # Handle no context found case
-            if not ev.context_found:
+            if not ev.hits:
+                # No hits were ever retrieved this run — nothing to ground an answer on.
                 logfire.warn("No relevant context found", query=ev.query)
                 answer = (
                     "I couldn't find relevant information to answer your question. "
                     "Please try rephrasing or asking a different question."
                 )
             else:
-                # Synthesize answer from chunks
-                answer = await self._synthesize_answer(ev.chunks, ev.query)
+                # Order deterministically before truncation (AC 3.8), then synthesize
+                # from whatever survives the character budget — the grounded subset.
+                ordered_hits = order_hits(ev.hits)
+                citations = self._truncate_hits(ordered_hits, max_chars=15000)
+                answer = await self._synthesize_answer(citations, ev.query)
+
+                # Defense-in-depth: every citation is drawn from this run's own
+                # retrieved hits by construction, so this should never raise.
+                validate_citations(
+                    cited_ids={hit.chunk_id for hit in citations},
+                    hit_ids=state.retrieved_hit_ids,
+                )
 
             # Update state with final answer
             state.final_answer = answer
@@ -460,6 +483,7 @@ class CorrectiveRAGWorkflow(Workflow):
                 "Synthesized answer",
                 context_found=ev.context_found,
                 search_count=state.search_count,
+                citation_count=len(citations),
             )
 
             # Return result with answer and metadata
@@ -468,6 +492,7 @@ class CorrectiveRAGWorkflow(Workflow):
                     "answer": answer,
                     "context_found": ev.context_found,
                     "search_count": state.search_count,
+                    "citations": citations,
                 }
             )
 
@@ -502,6 +527,38 @@ class CorrectiveRAGWorkflow(Workflow):
         # Always return at least the first chunk (even if it exceeds the limit)
         # to ensure we have some context
         return result if result else chunks[:1]
+
+    def _truncate_hits(
+        self, hits: list[RetrievedHit], max_chars: int = 15000
+    ) -> list[RetrievedHit]:
+        """Truncate ordered hits to fit within a character budget.
+
+        Mirrors `_truncate_chunks()` but preserves the `RetrievedHit` objects
+        (chunk_id/score) so the surviving hits can be cited, instead of
+        collapsing to plain text.
+
+        Args:
+            hits: Hits to truncate, already ordered (highest priority first).
+            max_chars: Maximum total character count across hit texts.
+
+        Returns:
+            The leading hits whose text fits within max_chars. Always returns
+            at least the first hit (even if it exceeds the limit) when the
+            input is non-empty, to avoid an ungrounded answer.
+        """
+        if not hits:
+            return []
+
+        total = 0
+        result: list[RetrievedHit] = []
+        for hit in hits:
+            hit_len = len(hit.text)
+            if total + hit_len > max_chars and result:
+                break
+            result.append(hit)
+            total += hit_len
+
+        return result if result else hits[:1]
 
     def _build_prompt(
         self,
@@ -630,27 +687,28 @@ Response:"""
         # Fallback (should not reach here)
         return "insufficient"
 
-    async def _synthesize_answer(self, chunks: list[str], query: str) -> str:
-        """Synthesize final answer from relevant chunks using LLM.
+    async def _synthesize_answer(self, hits: list[RetrievedHit], query: str) -> str:
+        """Synthesize final answer from relevant hits using LLM.
 
         Uses configurable retry logic with exponential backoff for transient
         LLM API failures. Returns graceful error message as fallback on error.
 
         Args:
-            chunks: Relevant document chunks.
+            hits: Relevant retrieved hits to ground the answer in.
             query: Original user query.
 
         Returns:
             Synthesized answer.
         """
-        # MEDIUM FIX: Use helper method to truncate chunks based on actual character count
-        original_count = len(chunks)
-        chunks = self._truncate_chunks(chunks, max_chars=15000)
-        if len(chunks) < original_count:
+        # MEDIUM FIX: Use helper method to truncate hits based on actual character count
+        # (defense-in-depth; callers such as synthesize() already truncate before this call)
+        original_count = len(hits)
+        hits = self._truncate_hits(hits, max_chars=15000)
+        if len(hits) < original_count:
             logger.warning(
                 "Context length exceeded 15000 chars, truncated from %d to %d chunks",
                 original_count,
-                len(chunks),
+                len(hits),
             )
 
         # See MODULE-LEVEL SECURITY NOTE above for html.escape() limitations
@@ -658,7 +716,9 @@ Response:"""
         instruction = (
             "Using the following context, provide a clear and concise answer to the query."
         )
-        prompt = self._build_prompt(query, chunks, instruction, chunk_label="Source")
+        prompt = self._build_prompt(
+            query, [hit.text for hit in hits], instruction, chunk_label="Source"
+        )
         prompt += "\n\nAnswer:"
 
         # Retry logic with exponential backoff for transient errors

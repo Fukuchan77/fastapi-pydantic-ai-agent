@@ -2,10 +2,15 @@
 
 from llama_index.core.workflow import Event
 
+from app.models.rag import RetrievedHit
 from app.workflows.events import EvaluateEvent
 from app.workflows.events import SearchEvent
 from app.workflows.events import SynthesizeEvent
 from app.workflows.state import WorkflowState
+
+
+def _hit(chunk_id: str = "memory::0000", text: str = "chunk", score: float = 1.0) -> RetrievedHit:
+    return RetrievedHit(chunk_id=chunk_id, text=text, score=score)
 
 
 class TestSearchEvent:
@@ -66,38 +71,38 @@ class TestEvaluateEvent:
         assert issubclass(EvaluateEvent, Event)
 
     def test_evaluate_event_with_required_fields(self) -> None:
-        """EvaluateEvent should be constructable with query, chunks, and state."""
+        """EvaluateEvent should be constructable with query, hits, and state."""
         state = WorkflowState(query="test query")
-        chunks = ["chunk1", "chunk2", "chunk3"]
+        hits = [_hit("memory::0000"), _hit("memory::0001"), _hit("memory::0002")]
 
-        event = EvaluateEvent(query="test query", chunks=chunks, state=state)
+        event = EvaluateEvent(query="test query", hits=hits, state=state)
 
         assert event.query == "test query"
-        assert event.chunks == chunks
+        assert event.hits == hits
         assert event.state == state
 
-    def test_evaluate_event_with_empty_chunks(self) -> None:
-        """EvaluateEvent should accept empty chunks list."""
+    def test_evaluate_event_with_empty_hits(self) -> None:
+        """EvaluateEvent should accept an empty hits list."""
         state = WorkflowState(query="test query")
 
-        event = EvaluateEvent(query="test query", chunks=[], state=state)
+        event = EvaluateEvent(query="test query", hits=[], state=state)
 
-        assert event.chunks == []
-        assert isinstance(event.chunks, list)
+        assert event.hits == []
+        assert isinstance(event.hits, list)
 
-    def test_evaluate_event_chunks_are_strings(self) -> None:
-        """EvaluateEvent chunks should be list of strings."""
+    def test_evaluate_event_hits_are_retrieved_hits(self) -> None:
+        """EvaluateEvent hits should be a list of RetrievedHit."""
         state = WorkflowState(query="test query")
-        chunks = ["first chunk", "second chunk"]
+        hits = [_hit("memory::0000"), _hit("memory::0001")]
 
-        event = EvaluateEvent(query="test query", chunks=chunks, state=state)
+        event = EvaluateEvent(query="test query", hits=hits, state=state)
 
-        assert all(isinstance(chunk, str) for chunk in event.chunks)
+        assert all(isinstance(hit, RetrievedHit) for hit in event.hits)
 
     def test_evaluate_event_query_is_string(self) -> None:
         """EvaluateEvent query field should be string type."""
         state = WorkflowState(query="test")
-        event = EvaluateEvent(query="test query", chunks=[], state=state)
+        event = EvaluateEvent(query="test query", hits=[], state=state)
 
         assert isinstance(event.query, str)
 
@@ -112,34 +117,34 @@ class TestSynthesizeEvent:
     def test_synthesize_event_with_all_fields(self) -> None:
         """SynthesizeEvent should be constructable with all required fields."""
         state = WorkflowState(query="test query", context_found=True)
-        chunks = ["relevant chunk 1", "relevant chunk 2"]
+        hits = [_hit("memory::0000"), _hit("memory::0001")]
 
         event = SynthesizeEvent(
             query="test query",
-            chunks=chunks,
+            hits=hits,
             context_found=True,
             state=state,
         )
 
         assert event.query == "test query"
-        assert event.chunks == chunks
+        assert event.hits == hits
         assert event.context_found is True
         assert event.state == state
 
     def test_synthesize_event_context_found_true(self) -> None:
-        """SynthesizeEvent with context_found=True should have chunks."""
+        """SynthesizeEvent with context_found=True should have hits."""
         state = WorkflowState(query="test query", context_found=True)
-        chunks = ["chunk1", "chunk2"]
+        hits = [_hit("memory::0000"), _hit("memory::0001")]
 
         event = SynthesizeEvent(
             query="test query",
-            chunks=chunks,
+            hits=hits,
             context_found=True,
             state=state,
         )
 
         assert event.context_found is True
-        assert len(event.chunks) > 0
+        assert len(event.hits) > 0
 
     def test_synthesize_event_context_found_false(self) -> None:
         """SynthesizeEvent with context_found=False should indicate retries exhausted."""
@@ -147,27 +152,27 @@ class TestSynthesizeEvent:
 
         event = SynthesizeEvent(
             query="test query",
-            chunks=[],
+            hits=[],
             context_found=False,
             state=state,
         )
 
         assert event.context_found is False
-        assert event.chunks == []
+        assert event.hits == []
         assert event.state.search_count >= event.state.max_retries
 
-    def test_synthesize_event_empty_chunks_when_no_context(self) -> None:
-        """SynthesizeEvent should have empty chunks when context_found=False."""
+    def test_synthesize_event_empty_hits_when_no_context(self) -> None:
+        """SynthesizeEvent should have empty hits when context_found=False and no hits exist."""
         state = WorkflowState(query="test query", context_found=False)
 
         event = SynthesizeEvent(
             query="test query",
-            chunks=[],
+            hits=[],
             context_found=False,
             state=state,
         )
 
-        assert event.chunks == []
+        assert event.hits == []
         assert event.context_found is False
 
     def test_synthesize_event_context_found_is_bool(self) -> None:
@@ -175,7 +180,7 @@ class TestSynthesizeEvent:
         state = WorkflowState(query="test")
         event = SynthesizeEvent(
             query="test",
-            chunks=[],
+            hits=[],
             context_found=True,
             state=state,
         )
@@ -199,11 +204,11 @@ class TestEventFieldTypes:
     def test_evaluate_event_has_correct_field_types(self) -> None:
         """EvaluateEvent should have correct type annotations for all fields."""
         state = WorkflowState(query="test")
-        event = EvaluateEvent(query="test", chunks=["a", "b"], state=state)
+        event = EvaluateEvent(query="test", hits=[_hit("a::0000"), _hit("b::0000")], state=state)
 
         # Verify field types through runtime checks
         assert isinstance(event.query, str)
-        assert isinstance(event.chunks, list)
+        assert isinstance(event.hits, list)
         assert isinstance(event.state, WorkflowState)
 
     def test_synthesize_event_has_correct_field_types(self) -> None:
@@ -211,13 +216,13 @@ class TestEventFieldTypes:
         state = WorkflowState(query="test")
         event = SynthesizeEvent(
             query="test",
-            chunks=["a"],
+            hits=[_hit("a::0000")],
             context_found=True,
             state=state,
         )
 
         # Verify field types through runtime checks
         assert isinstance(event.query, str)
-        assert isinstance(event.chunks, list)
+        assert isinstance(event.hits, list)
         assert isinstance(event.context_found, bool)
         assert isinstance(event.state, WorkflowState)

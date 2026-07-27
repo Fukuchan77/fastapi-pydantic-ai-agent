@@ -390,6 +390,19 @@ class Settings(BaseSettings):
         le=10000,
         description="Maximum number of entries in RAG query result cache (LRU eviction)",
     )
+    rag_initial_k: int = Field(
+        default=2,
+        ge=1,
+        le=50,
+        description="Number of hits to retrieve on the initial CRAG search attempt",
+    )
+    rag_widened_k: int = Field(
+        default=4,
+        ge=1,
+        le=50,
+        description="Number of hits to retrieve on a CRAG retry after insufficient grading "
+        "(widened from rag_initial_k)",
+    )
     redis_url: str | None = Field(
         default=None,
         description="Redis connection URL for session store (e.g., redis://localhost:6379/0). "

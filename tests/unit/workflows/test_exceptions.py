@@ -4,6 +4,8 @@ Tests that workflow exception classes can be imported from their new location
 and have the expected behavior for error classification and properties.
 """
 
+from app.workflows.exceptions import DanglingCitationError
+from app.workflows.exceptions import EmptyCitationError
 from app.workflows.exceptions import RAGEvaluationError
 from app.workflows.exceptions import RAGPermanentError
 from app.workflows.exceptions import RAGRetrievalError
@@ -140,3 +142,44 @@ class TestRAGPermanentError:
         error = RAGPermanentError.from_exception(original)
         assert error.cause is original
         assert "Invalid input" in error.message
+
+
+class TestEmptyCitationError:
+    """Tests for EmptyCitationError."""
+
+    def test_empty_citation_error_inherits_from_base(self) -> None:
+        """EmptyCitationError should extend RAGWorkflowError."""
+        error = EmptyCitationError()
+        assert isinstance(error, RAGWorkflowError)
+        assert isinstance(error, Exception)
+
+    def test_empty_citation_error_message_mentions_citations(self) -> None:
+        """EmptyCitationError message should explain the missing-citation condition."""
+        error = EmptyCitationError()
+        assert "citation" in str(error).lower()
+
+
+class TestDanglingCitationError:
+    """Tests for DanglingCitationError."""
+
+    def test_dangling_citation_error_inherits_from_base(self) -> None:
+        """DanglingCitationError should extend RAGWorkflowError."""
+        error = DanglingCitationError(unknown_ids={"memory::0099"}, known_ids={"memory::0000"})
+        assert isinstance(error, RAGWorkflowError)
+        assert isinstance(error, Exception)
+
+    def test_dangling_citation_error_stores_unknown_and_known_ids(self) -> None:
+        """DanglingCitationError should retain the unknown and known id sets."""
+        error = DanglingCitationError(
+            unknown_ids={"memory::0099", "memory::0100"},
+            known_ids={"memory::0000", "memory::0001"},
+        )
+        assert error.unknown_ids == frozenset({"memory::0099", "memory::0100"})
+        assert error.known_ids == frozenset({"memory::0000", "memory::0001"})
+
+    def test_dangling_citation_error_message_lists_unknown_and_known_ids(self) -> None:
+        """DanglingCitationError message should list every unknown id and the known set."""
+        error = DanglingCitationError(unknown_ids={"memory::0099"}, known_ids={"memory::0000"})
+        message = str(error)
+        assert "memory::0099" in message
+        assert "memory::0000" in message

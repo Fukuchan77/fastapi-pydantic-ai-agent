@@ -66,18 +66,22 @@ async def test_asyncio_timeout_error_does_not_retry_evaluation(
     result = await workflow.run(query="test query", max_retries=1)
     elapsed = asyncio.get_event_loop().time() - start_time
 
-    # CRITICAL: Verify model was called ONLY ONCE (no retries)
-    # Currently FAILS: model is called 3 times due to retry logic
-    assert call_count == 1, f"Expected 1 call (no retries), but got {call_count} calls"
+    # CRITICAL: Verify each LLM call happens exactly once (no exponential-backoff retries).
+    # With max_retries=1, evaluation is exhausted immediately, and since a hit exists,
+    # the workflow now attempts a degraded synthesis (AC 3.6) instead of a canned message
+    # — so both the evaluation call and the synthesis call hit the same slow model once each.
+    # Currently FAILS if either call is retried 3x due to exponential-backoff retry logic.
+    assert call_count == 2, f"Expected 2 calls (1 eval + 1 synth, no retries), got {call_count}"
 
     # Verify it completed quickly (no retry delays)
-    # 3 retries would add ~7 seconds (1 + 2 + 4 seconds exponential backoff)
-    # Should complete in ~5 seconds (just the timeout)
-    assert elapsed < 7, f"Expected ~5s (no retries), but took {elapsed:.1f}s"
+    # 3 retries per call would add ~7 seconds each; two independent 5s timeouts
+    # should complete in ~10 seconds, not 14+ seconds.
+    assert elapsed < 12, f"Expected ~10s (no retries), but took {elapsed:.1f}s"
 
-    # Verify graceful fallback
+    # Verify graceful fallback: the degraded synthesis attempt also times out,
+    # so the answer is the synthesis-timeout fallback message, not the "no context" one.
     assert result["context_found"] is False
-    assert "couldn't find relevant information" in result["answer"].lower()
+    assert "encountered an error" in result["answer"].lower()
 
 
 @pytest.mark.asyncio

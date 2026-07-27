@@ -57,12 +57,16 @@ async def test_evaluation_times_out_after_llm_agent_timeout(
     result = await workflow.run(query="test query", max_retries=1)
     elapsed = asyncio.get_event_loop().time() - start_time
 
-    # Verify timeout occurred (should complete in ~5 seconds, not 10 seconds)
-    assert elapsed < 7, f"Expected timeout at 5s, but took {elapsed:.1f}s"
+    # Verify timeout occurred. With max_retries=1, evaluation is exhausted after a
+    # single timed-out attempt, and since a hit exists the workflow now attempts a
+    # degraded synthesis (AC 3.6) against the same slow model, which also times out —
+    # two independent 5s timeouts, ~10s total, not 15+.
+    assert elapsed < 12, f"Expected ~10s (two 5s timeouts), but took {elapsed:.1f}s"
 
-    # Verify graceful fallback (evaluation timeout returns "insufficient")
+    # Verify graceful fallback: the degraded synthesis attempt also times out,
+    # so the answer is the synthesis-timeout fallback message.
     assert result["context_found"] is False
-    assert "couldn't find relevant information" in result["answer"].lower()
+    assert "encountered an error" in result["answer"].lower()
 
 
 @pytest.mark.asyncio

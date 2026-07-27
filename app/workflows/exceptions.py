@@ -250,3 +250,43 @@ class RAGPermanentError(RAGWorkflowError):
         """
         message = f"Permanent error: {exception!s}"
         return cls(message, cause=exception)
+
+
+class EmptyCitationError(RAGWorkflowError):
+    """Raised when a generated answer has no citations but citations are required.
+
+    Attributes:
+        message: Human-readable error message.
+    """
+
+    def __init__(self) -> None:
+        """Initialize empty citation error."""
+        super().__init__(
+            "Generated answer contains no citations, but citations are required "
+            "for a fully grounded response."
+        )
+
+
+class DanglingCitationError(RAGWorkflowError):
+    """Raised when a generated answer cites an id absent from the current hit set.
+
+    Attributes:
+        message: Human-readable error message.
+        unknown_ids: Cited ids that do not belong to the current run's retrieved hits.
+        known_ids: The full set of hit ids actually retrieved in the current run.
+    """
+
+    def __init__(self, unknown_ids: set[str], known_ids: set[str]) -> None:
+        """Initialize dangling citation error.
+
+        Args:
+            unknown_ids: Cited ids absent from the current run's retrieved hit set.
+            known_ids: The full set of hit ids actually retrieved in the current run.
+        """
+        self.unknown_ids = frozenset(unknown_ids)
+        self.known_ids = frozenset(known_ids)
+        message = (
+            f"Generated answer cites unknown id(s): {sorted(self.unknown_ids)}; "
+            f"known ids for this run: {sorted(self.known_ids)}"
+        )
+        super().__init__(message)

@@ -52,6 +52,21 @@ class TestWorkflowState:
 
         assert state.context_found is False
 
+    def test_workflow_state_retrieved_hit_ids_defaults_to_empty_set(self) -> None:
+        """WorkflowState retrieved_hit_ids should default to an empty set."""
+        state = WorkflowState(query="test")
+
+        assert state.retrieved_hit_ids == set()
+
+    def test_workflow_state_retrieved_hit_ids_accumulates(self) -> None:
+        """WorkflowState retrieved_hit_ids should accumulate ids across retries."""
+        state = WorkflowState(query="test")
+
+        state.retrieved_hit_ids |= {"memory::0000", "memory::0001"}
+        state.retrieved_hit_ids |= {"memory::0002"}
+
+        assert state.retrieved_hit_ids == {"memory::0000", "memory::0001", "memory::0002"}
+
     def test_workflow_state_with_all_fields_custom(self) -> None:
         """WorkflowState should accept custom values for all fields."""
         state = WorkflowState(

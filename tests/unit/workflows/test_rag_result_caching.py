@@ -11,6 +11,7 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 from app.config import Settings
+from app.models.rag import RetrievedHit
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 
 
@@ -18,7 +19,9 @@ from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 def mock_vector_store():
     """Create mock vector store for testing."""
     store = AsyncMock()
-    store.query.return_value = ["Test document chunk"]
+    store.query_with_scores.return_value = [
+        RetrievedHit(chunk_id="memory::0000", text="Test document chunk", score=1.0)
+    ]
     return store
 
 
@@ -34,6 +37,8 @@ def mock_settings():
     settings.llm_retry_base_delay = 1.0
     settings.rag_cache_ttl = 300  # 5 minutes
     settings.rag_cache_size = 100  # Max 100 cached results
+    settings.rag_initial_k = 2
+    settings.rag_widened_k = 4
     return settings
 
 
@@ -58,11 +63,11 @@ async def test_identical_queries_return_cached_results(
 
     # First call - should execute workflow and cache result
     result1 = await workflow.run(query=query, max_retries=3)
-    first_call_count = mock_vector_store.query.call_count
+    first_call_count = mock_vector_store.query_with_scores.call_count
 
     # Second call with identical query - should return cached result
     result2 = await workflow.run(query=query, max_retries=3)
-    second_call_count = mock_vector_store.query.call_count
+    second_call_count = mock_vector_store.query_with_scores.call_count
 
     # Verify cached result was returned (vector store not called again)
     assert second_call_count == first_call_count, "Cached query should not call vector store again"
@@ -89,10 +94,10 @@ async def test_different_queries_are_not_cached_together(
 
     # Execute two different queries
     await workflow.run(query="What is FastAPI?", max_retries=3)
-    call_count_after_first = mock_vector_store.query.call_count
+    call_count_after_first = mock_vector_store.query_with_scores.call_count
 
     await workflow.run(query="What is Pydantic AI?", max_retries=3)
-    call_count_after_second = mock_vector_store.query.call_count
+    call_count_after_second = mock_vector_store.query_with_scores.call_count
 
     # Verify both queries executed (vector store called for both)
     assert call_count_after_second > call_count_after_first, (
@@ -120,11 +125,11 @@ async def test_cache_respects_max_retries_parameter(
 
     # First call with max_retries=3
     await workflow.run(query=query, max_retries=3)
-    call_count_after_first = mock_vector_store.query.call_count
+    call_count_after_first = mock_vector_store.query_with_scores.call_count
 
     # Second call with max_retries=5 (different parameter)
     await workflow.run(query=query, max_retries=5)
-    call_count_after_second = mock_vector_store.query.call_count
+    call_count_after_second = mock_vector_store.query_with_scores.call_count
 
     # Verify second call executed (not cached due to different max_retries)
     assert call_count_after_second > call_count_after_first, (
@@ -156,9 +161,9 @@ async def test_cache_has_size_limit(
 
     # The first query should have been evicted due to LRU
     # Executing it again should call the vector store
-    call_count_before = mock_vector_store.query.call_count
+    call_count_before = mock_vector_store.query_with_scores.call_count
     await workflow.run(query="Query 0", max_retries=3)
-    call_count_after = mock_vector_store.query.call_count
+    call_count_after = mock_vector_store.query_with_scores.call_count
 
     assert call_count_after > call_count_before, (
         "LRU eviction should remove oldest entry when cache is full"

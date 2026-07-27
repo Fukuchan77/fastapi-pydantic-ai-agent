@@ -14,6 +14,8 @@ from app.models.rag import IngestResponse
 from app.models.rag import RAGQueryRequest
 from app.models.rag import RAGQueryResponse
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
+from app.workflows.exceptions import DanglingCitationError
+from app.workflows.exceptions import EmptyCitationError
 
 
 # Create router for RAG endpoints
@@ -84,6 +86,12 @@ async def query(
             status_code=504,
             detail="RAG workflow timed out. Please try again with a simpler query.",
         ) from e
+    except (EmptyCitationError, DanglingCitationError) as e:
+        # The generated answer could not be grounded in the retrieved context.
+        raise HTTPException(
+            status_code=502,
+            detail="Generated answer could not be grounded in retrieved context.",
+        ) from e
 
     # Extract result data from StopEvent
     result_data = result
@@ -93,4 +101,5 @@ async def query(
         answer=result_data["answer"],
         context_found=result_data["context_found"],
         search_count=result_data["search_count"],
+        citations=result_data.get("citations", []),
     )
