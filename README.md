@@ -206,24 +206,31 @@ curl -X POST http://localhost:8000/v1/agent/stream \
 **Response Stream:**
 
 ```
- {"type": "delta", "content": "Code"}
-data: {"type": "delta", "content": " flows"}
- {"type": "delta", "content": " like"}
- {"type": "delta", "content": " water,\n"}
- {"type": "delta", "content": "Types"}
- {"type": "delta", "content": " guide"}
- {"type": "delta", "content": " the"}
- {"type": "delta", "content": " way"}
- {"type": "delta", "content": " forward"}
- {"type": "done", "content": ""}
+event: step_started
+data: {"type":"step_started"}
+
+event: token
+data: {"type":"token","content":"Code"}
+
+event: token
+data: {"type":"token","content":" flows"}
+
+event: token
+data: {"type":"token","content":" like water,\n"}
+
+event: completed
+data: {"type":"completed"}
+
 ```
 
 **Features:**
 
 - Server-Sent Events (SSE) with `text/event-stream` media type
-- Token-by-token streaming via Pydantic AI's [`run_stream()`](app/agents/chat_agent.py)
-- Pluggable adapters (extend [`StreamAdapter`](app/api/v1/agent.py) Protocol for Vercel AI or AG-UI formats)
-- Conversation history saved after stream completes
+- Typed 5-event discriminated union — `step_started` / `tool_called` / `token` / `completed` / `error` — where the SSE `event:` name equals the JSON `type` discriminator; see [`app/patterns/sse.py`](app/patterns/sse.py)
+- Node-level streaming via Pydantic AI's [`Agent.iter()`](app/api/v1/_stream.py), so tool calls surface as `tool_called` events alongside `token` deltas
+- Stream lifecycle hardening ([`app/api/v1/_stream.py`](app/api/v1/_stream.py)): `sse_max_events` cap, client-disconnect detection, `sse_send_timeout` per event, and idle heartbeat comments every `sse_heartbeat_interval` seconds
+- `Cache-Control: no-cache` and `X-Accel-Buffering: no` response headers so reverse proxies don't buffer the stream
+- Conversation history saved before the terminal `completed` event (a save failure yields a terminal `error` event instead)
 
 ## 🏗️ Project Structure
 
@@ -238,7 +245,11 @@ app/
 │   └── v1/
 │       ├── router.py           # Aggregates v1 sub-routers
 │       ├── agent.py            # POST /v1/agent/chat, /v1/agent/stream
+│       ├── _stream.py          # SSE event-source generator + lifecycle hardening
 │       └── rag.py              # POST /v1/rag/query, /v1/rag/ingest
+│
+├── patterns/                   # Reusable, protocol-agnostic wire-format patterns
+│   └── sse.py                  # Typed 5-event SSE union + to_sse()/parse_sse_events()
 │
 ├── agents/                     # Pydantic AI agent layer
 │   ├── deps.py                 # AgentDeps dataclass, dependency factories
@@ -250,7 +261,7 @@ app/
 │   └── corrective_rag.py       # CorrectiveRAGWorkflow (steps)
 │
 ├── models/                     # Request/Response Pydantic schemas
-│   ├── agent.py                # ChatRequest, ChatResponse, StreamEvent
+│   ├── agent.py                # ChatRequest, ChatResponse
 │   ├── rag.py                  # RAGQueryRequest, RAGQueryResponse, IngestRequest
 │   └── errors.py               # ErrorResponse, structured error models
 │
@@ -381,28 +392,15 @@ class RedisSessionStore:
 app.state.session_store = RedisSessionStore()
 ```
 
-### Custom Stream Adapter
+### SSE Wire Contract
 
-Implement [`StreamAdapter`](app/api/v1/agent.py) Protocol:
-
-```python
-class VercelAIAdapter:
-    def format_event(self, event_type: str, content: str) -> str:
-        # Vercel AI SDK format
-        return f"0:{json.dumps({'type': event_type, 'content': content})}\n"
-
-    def format_done(self) -> str:
-        return "d:{}\n"
-
-    def format_error(self, message: str) -> str:
-        return f"3:{json.dumps({'error': message})}\n"
-
-# Use in route handler
-@router.post("/agent/stream")
-async def stream_agent(...):
-    adapter = VercelAIAdapter()  # Replace DefaultSSEAdapter
-    ...
-```
+The `/v1/agent/stream` wire format is a fixed typed contract, not a pluggable
+adapter: [`app/patterns/sse.py`](app/patterns/sse.py) defines the 5-event
+discriminated union (`StepStarted` / `ToolCalled` / `Token` / `Completed` /
+`Error`) and the `to_sse()`/`parse_sse_events()` codec. To emit a different
+wire format (e.g. Vercel AI Data Stream or AG-UI), change `to_sse()` — the
+stream lifecycle logic in [`app/api/v1/_stream.py`](app/api/v1/_stream.py)
+is decoupled from the codec and does not need to change.
 
 ## 🏛️ Architecture
 
@@ -418,7 +416,6 @@ async def stream_agent(...):
 
 - `VectorStore` Protocol — swap TF-IDF for Chroma, pgvector, or custom backends
 - `SessionStore` Protocol — replace in-memory with Redis or database-backed stores
-- `StreamAdapter` Protocol — support multiple SSE formats without changing agent logic
 
 **Zero Lock-In Design**
 

@@ -7,6 +7,7 @@ This guide covers production deployment considerations for the fastapi-pydantic-
 - [Reverse Proxy Configuration](#reverse-proxy-configuration)
   - [Request Size Limits](#request-size-limits)
   - [Nginx](#nginx)
+  - [SSE Streaming Considerations](#sse-streaming-considerations)
   - [Apache](#apache)
   - [AWS Application Load Balancer (ALB)](#aws-application-load-balancer-alb)
   - [Cloudflare](#cloudflare)
@@ -121,6 +122,16 @@ TRUSTED_PROXIES=["127.0.0.1", "10.0.0.0/8"]  # Adjust to your Nginx server IPs
 ```
 
 This ensures the application correctly extracts the real client IP from `X-Forwarded-For` headers for rate limiting.
+
+---
+
+#### SSE Streaming Considerations
+
+`POST /v1/agent/stream` sends the [typed SSE contract](../README.md#pattern-3-sse-streaming) (`event:`/`data:` frames of `step_started`/`tool_called`/`token`/`completed`/`error`). The application already sets `Cache-Control: no-cache` and `X-Accel-Buffering: no` on the response, but the reverse proxy must not undo that:
+
+- Keep `proxy_buffering off;` on the `/v1/` location (shown above) — buffering defeats streaming even with `X-Accel-Buffering: no` on some proxy configurations.
+- Set `proxy_read_timeout` to at least `sse_send_timeout` (default 60s). The application emits an idle heartbeat comment every `sse_heartbeat_interval` seconds (default 15s) to keep the connection alive within that window; if you raise `SSE_SEND_TIMEOUT`, raise `proxy_read_timeout` (and `SSE_HEARTBEAT_INTERVAL`, which must stay ≤ `SSE_SEND_TIMEOUT`) to match.
+- A single stream is capped at `sse_max_events` events (default 1000) and aborts with a terminal `error` event if no event is produced within `sse_send_timeout` — both are configurable via `.env`.
 
 ---
 
