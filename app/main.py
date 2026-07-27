@@ -31,8 +31,9 @@ from app.middleware.request_size import RequestSizeLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.models.errors import ErrorResponse
 from app.observability import configure_logfire
-from app.stores.session_store import InMemorySessionStore
-from app.stores.vector_store import InMemoryVectorStore
+from app.stores.factory import build_session_store
+from app.stores.factory import build_vector_store
+from app.stores.factory import dry_run_stores
 
 
 logger = logging.getLogger(__name__)
@@ -244,16 +245,27 @@ def create_app(
             logger.error("Failed to initialize app.state.http_client: %s", e, exc_info=True)
             raise
 
-        # Initialize InMemoryVectorStore
-        app.state.vector_store = InMemoryVectorStore()
-        logger.info("Initialized vector store")
+        # Select and construct the vector/session stores from settings (store
+        # factory), then probe connectivity so a misconfigured external store
+        # fails startup instead of the first request.
+        try:
+            app.state.vector_store = build_vector_store(resolved_settings)
+            logger.info(
+                "Initialized vector store (backend=%s)",
+                resolved_settings.vector_store_backend,
+            )
 
-        # Initialize InMemorySessionStore with TTL
-        app.state.session_store = InMemorySessionStore()
-        logger.info(
-            "Initialized session store with TTL of %d seconds",
-            app.state.session_store.session_ttl,
-        )
+            app.state.session_store = build_session_store(resolved_settings)
+            logger.info(
+                "Initialized session store (redis_enabled=%s)",
+                resolved_settings.redis_session_store_enabled,
+            )
+
+            await dry_run_stores(app.state.vector_store, app.state.session_store)
+            logger.info("Store connectivity dry-run passed")
+        except Exception as e:
+            logger.error("Store startup dry-run failed: %s", e, exc_info=True)
+            raise
 
         # Start background cleanup task for expired sessions
         async def cleanup_loop() -> None:

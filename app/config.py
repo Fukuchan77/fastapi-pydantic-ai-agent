@@ -1,6 +1,7 @@
 """Application configuration using Pydantic Settings."""
 
 from functools import cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic import HttpUrl
@@ -399,6 +400,13 @@ class Settings(BaseSettings):
         description="Enable Redis-backed session store for multi-instance deployments. "
         "Requires redis_url to be set. If False, uses in-memory store",
     )
+    vector_store_backend: Literal["memory", "chroma", "ollama"] = Field(
+        default="memory",
+        description="Vector store backend selection: 'memory' (default, TF-IDF, no "
+        "external dependency), 'chroma' (ChromaDB embeddings), or 'ollama' "
+        "(Ollama embeddings via embedding_model/embedding_base_url). "
+        "'ollama' requires embedding_model to be set",
+    )
     cors_origins: str | list[str] = Field(
         default=["http://localhost:3000"],
         description="Allowed CORS origins (comma-separated or JSON array)",
@@ -577,6 +585,50 @@ class Settings(BaseSettings):
                 f"http_max_keepalive_connections ({self.http_max_keepalive_connections}) "
                 f"cannot exceed http_max_connections ({self.http_max_connections}). "
                 "Keepalive connections are a subset of total connections."
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_redis_session_store_requires_url(self) -> "Settings":
+        """Validate that redis_url is set whenever redis_session_store_enabled is True.
+
+        The store factory (`app/stores/factory.py`) constructs `RedisSessionStore`
+        from `redis_url` only when `redis_session_store_enabled` is true, so a
+        missing URL is a configuration error, not a runtime one.
+
+        Returns:
+            Settings: The validated settings instance.
+
+        Raises:
+            ValueError: If redis_session_store_enabled is True and redis_url is unset.
+        """
+        if self.redis_session_store_enabled and not self.redis_url:
+            raise ValueError(
+                "redis_url is required when redis_session_store_enabled is True. "
+                "Please set the REDIS_URL environment variable."
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_vector_store_backend_requires_embedding_model(self) -> "Settings":
+        """Validate that embedding_model is set whenever vector_store_backend is 'ollama'.
+
+        `OllamaEmbeddingVectorStore` requires a non-empty embedding model name at
+        construction time, so a missing value is a configuration error, not a
+        runtime one.
+
+        Returns:
+            Settings: The validated settings instance.
+
+        Raises:
+            ValueError: If vector_store_backend is 'ollama' and embedding_model is unset.
+        """
+        if self.vector_store_backend == "ollama" and not self.embedding_model:
+            raise ValueError(
+                "embedding_model is required when vector_store_backend is 'ollama'. "
+                "Please set the EMBEDDING_MODEL environment variable."
             )
 
         return self
