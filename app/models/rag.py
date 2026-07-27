@@ -53,6 +53,20 @@ class RAGQueryRequest(BaseModel):
     )
 
 
+class RetrievedHit(BaseModel):
+    """A single retrieval hit with its stable citation id and relevance score.
+
+    Attributes:
+        chunk_id: Stable document-chunk identifier of the form "source::ordinal".
+        text: The retrieved document chunk text.
+        score: Relevance score assigned by the vector store (higher is more relevant).
+    """
+
+    chunk_id: str = Field(description="Stable document-chunk identifier (source::ordinal)")
+    text: str = Field(description="Retrieved document chunk text")
+    score: float = Field(description="Relevance score assigned by the vector store")
+
+
 class RAGQueryResponse(BaseModel):
     """Response model for RAG query endpoint.
 
@@ -60,6 +74,7 @@ class RAGQueryResponse(BaseModel):
         answer: Generated answer based on retrieved context.
         context_found: Whether relevant context was found in the vector store.
         search_count: Number of search attempts performed during this query.
+        citations: Retrieved hits cited in the answer.
     """
 
     answer: str = Field(description="Generated answer based on retrieved context")
@@ -67,3 +82,7 @@ class RAGQueryResponse(BaseModel):
         description="Whether relevant context was found in the vector store"
     )
     search_count: int = Field(description="Number of search attempts performed during this query")
+    citations: list[RetrievedHit] = Field(
+        default_factory=list,
+        description="Retrieved hits cited in the answer",
+    )

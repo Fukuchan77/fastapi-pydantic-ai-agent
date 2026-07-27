@@ -12,6 +12,8 @@ from typing import Protocol
 
 import httpx
 
+from app.models.rag import RetrievedHit
+
 
 class VectorStore(Protocol):
     """Protocol defining the vector store interface for RAG operations.
@@ -37,6 +39,23 @@ class VectorStore(Protocol):
 
         Returns:
             List of document chunks ranked by relevance score (highest first).
+            Returns empty list if no documents are stored.
+        """
+        ...
+
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[RetrievedHit]:
+        """Retrieve top-k most relevant chunks with stable citation ids and scores.
+
+        Additive counterpart to `query()` that surfaces the data citations need
+        (a stable `chunk_id` and the relevance `score`) without changing the
+        legacy `query()` contract.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+
+        Returns:
+            List of RetrievedHit ranked by relevance score (highest first).
             Returns empty list if no documents are stored.
         """
         ...
@@ -94,6 +113,7 @@ class InMemoryVectorStore:
     MAX_TOP_K: int = 1000
     MAX_QUERY_LENGTH: int = 10000
     MAX_QUERY_TOKENS: int = 10000
+    SOURCE: str = "memory"
 
     def __init__(
         self,
@@ -113,6 +133,8 @@ class InMemoryVectorStore:
         """
         self._documents: list[str] = []
         self._doc_tokens: list[list[str]] = []
+        self._ordinals: list[int] = []  # Stable per-document ordinal (survives FIFO eviction)
+        self._next_ordinal: int = 0
         self._idf_cache: dict[str, float] | None = None
         self._memory_usage: int = 0  # Track approximate memory usage in bytes
         self.max_documents = max_documents
@@ -147,6 +169,8 @@ class InMemoryVectorStore:
             self._documents.append(chunk)
             tokens = self._tokenize(chunk)
             self._doc_tokens.append(tokens)
+            self._ordinals.append(self._next_ordinal)
+            self._next_ordinal += 1
             # Estimate memory: document string + tokenized list
             self._memory_usage += self._estimate_memory(chunk, tokens)
 
@@ -179,6 +203,55 @@ class InMemoryVectorStore:
 
         Raises:
             ValueError: If top_k is less than 1 or greater than 1000.
+        """
+        scored = self._top_k_scored_indices(query, top_k)
+        return [self._documents[idx] for idx, _score in scored]
+
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[RetrievedHit]:
+        """Retrieve top-k most relevant chunks with stable citation ids and scores.
+
+        Uses the same TF-IDF cosine similarity ranking as `query()`.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+                Must be at least 1 and cannot exceed 1000.
+
+        Returns:
+            List of up to top_k RetrievedHit, ranked by TF-IDF cosine similarity
+            score (highest first). Returns empty list if corpus is empty or
+            query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1 or greater than 1000.
+        """
+        scored = self._top_k_scored_indices(query, top_k)
+        return [
+            RetrievedHit(
+                chunk_id=f"{self.SOURCE}::{self._ordinals[idx]:04d}",
+                text=self._documents[idx],
+                score=score,
+            )
+            for idx, score in scored
+        ]
+
+    def _top_k_scored_indices(self, query: str, top_k: int) -> list[tuple[int, float]]:
+        """Score every stored document against `query` and return the top-k matches.
+
+        Shared ranking logic behind `query()` and `query_with_scores()` so both
+        expose identical results.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of (document index, similarity score) tuples, sorted by score
+            descending and truncated to top_k. Empty if corpus or query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1 or greater than 1000, the query
+                string exceeds MAX_QUERY_LENGTH, or the query has too many tokens.
         """
         # Validate top_k parameter
         if top_k < 1:
@@ -226,9 +299,7 @@ class InMemoryVectorStore:
 
         # Sort by score (descending) and take top-k
         scores.sort(key=lambda x: x[1], reverse=True)
-        top_indices = [idx for idx, score in scores[:top_k]]
-
-        return [self._documents[idx] for idx in top_indices]
+        return scores[:top_k]
 
     async def clear(self) -> None:
         """Remove all documents from the store.
@@ -237,6 +308,8 @@ class InMemoryVectorStore:
         """
         self._documents.clear()
         self._doc_tokens.clear()
+        self._ordinals.clear()
+        self._next_ordinal = 0
         self._idf_cache = None
         self._memory_usage = 0
 
@@ -297,6 +370,7 @@ class InMemoryVectorStore:
         # Remove from front of lists (oldest documents)
         self._documents = self._documents[num_to_evict:]
         self._doc_tokens = self._doc_tokens[num_to_evict:]
+        self._ordinals = self._ordinals[num_to_evict:]
 
         # Ensure memory usage doesn't go negative due to estimation errors
         self._memory_usage = max(0, self._memory_usage)
@@ -456,6 +530,12 @@ class ChromaVectorStore:
         self.collection_name = collection_name
         self.embedding_model = embedding_model
         self.persist_directory = persist_directory
+        # Maps each Chroma document id (uuid) to a stable per-document ordinal,
+        # assigned in insertion order. Process-local: not persisted alongside
+        # the Chroma collection itself, since deriving it from collection.count()
+        # would reintroduce the counter-based race the UUID ids above avoid.
+        self._id_to_ordinal: dict[str, int] = {}
+        self._next_ordinal: int = 0
 
         # Initialize Chroma client (in-memory or persistent)
         if persist_directory:
@@ -490,6 +570,9 @@ class ChromaVectorStore:
         # in multi-process deployments with shared persistent Chroma DB.
         # UUID-based IDs eliminate collisions that occur with counter-based IDs.
         ids = [str(uuid.uuid4()) for _ in chunks]
+        for doc_id in ids:
+            self._id_to_ordinal[doc_id] = self._next_ordinal
+            self._next_ordinal += 1
 
         # Wrap synchronous Chroma operation in executor to prevent blocking event loop
         # Use get_running_loop() instead of deprecated get_event_loop()
@@ -548,6 +631,55 @@ class ChromaVectorStore:
             return results["documents"][0]
         return []
 
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[RetrievedHit]:
+        """Retrieve top-k most relevant chunks with stable citation ids and scores.
+
+        Uses the same embedding-based similarity ranking as `query()`.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+
+        Returns:
+            List of up to top_k RetrievedHit, ranked by embedding similarity
+            (highest first). Returns empty list if corpus is empty or query
+            is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1.
+        """
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+        loop = asyncio.get_running_loop()
+        count = await loop.run_in_executor(None, self._collection.count)
+
+        if not query.strip() or count == 0:
+            return []
+
+        results = await loop.run_in_executor(
+            None,
+            lambda: self._collection.query(
+                query_texts=[query],
+                n_results=min(top_k, count),
+            ),
+        )
+
+        ids = results["ids"][0] if results["ids"] else []
+        documents = results["documents"][0] if results["documents"] else []
+        distances = results["distances"][0] if results.get("distances") else []
+
+        return [
+            RetrievedHit(
+                chunk_id=f"{self.collection_name}::{self._id_to_ordinal[doc_id]:04d}",
+                text=text,
+                # Chroma returns a distance (lower = more relevant); negate so
+                # higher score means more relevant, matching the other backends.
+                score=-distance,
+            )
+            for doc_id, text, distance in zip(ids, documents, distances, strict=True)
+        ]
+
     async def clear(self) -> None:
         """Remove all documents from the store.
 
@@ -573,6 +705,8 @@ class ChromaVectorStore:
             ),
         )
         self._collection = new_collection
+        self._id_to_ordinal = {}
+        self._next_ordinal = 0
 
     async def close(self) -> None:
         """Close the vector store and release any resources.
@@ -614,6 +748,7 @@ class OllamaEmbeddingVectorStore:
 
     DEFAULT_BASE_URL: str = "http://localhost:11434/v1"
     DEFAULT_TIMEOUT: float = 30.0
+    SOURCE: str = "ollama"
 
     def __init__(
         self,
@@ -700,24 +835,66 @@ class OllamaEmbeddingVectorStore:
         Raises:
             ValueError: If top_k is less than 1.
         """
-        # Validate top_k parameter
+        scored = await self._top_k_scored_indices(query, top_k)
+        return [self._documents[idx] for idx, _score in scored]
+
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[RetrievedHit]:
+        """Retrieve top-k most relevant chunks with stable citation ids and scores.
+
+        Uses the same embedding cosine similarity ranking as `query()`. Since
+        documents are only ever appended (no eviction), a document's position
+        in `_documents` is a stable ordinal for its lifetime in the store.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return. Defaults to 5.
+
+        Returns:
+            List of up to top_k RetrievedHit, ranked by embedding cosine
+            similarity (highest first). Returns empty list if corpus is empty
+            or query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1.
+        """
+        scored = await self._top_k_scored_indices(query, top_k)
+        return [
+            RetrievedHit(
+                chunk_id=f"{self.SOURCE}::{idx:04d}",
+                text=self._documents[idx],
+                score=score,
+            )
+            for idx, score in scored
+        ]
+
+    async def _top_k_scored_indices(self, query: str, top_k: int) -> list[tuple[int, float]]:
+        """Score every stored document against `query` and return the top-k matches.
+
+        Shared ranking logic behind `query()` and `query_with_scores()` so both
+        expose identical results.
+
+        Args:
+            query: The search query string.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of (document index, cosine similarity) tuples, sorted by score
+            descending and truncated to top_k. Empty if corpus or query is empty.
+
+        Raises:
+            ValueError: If top_k is less than 1.
+        """
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
 
-        # Return empty list for empty query or empty corpus
         if not query.strip() or not self._documents:
             return []
 
-        # Generate query embedding
         query_embedding = (await self._embed([query]))[0]
-
-        # Calculate cosine similarity scores
         scores = [_cosine_similarity(query_embedding, emb) for emb in self._embeddings]
-
-        # Get top_k indices sorted by score (descending)
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
 
-        return [self._documents[i] for i in top_indices]
+        return [(idx, scores[idx]) for idx in top_indices]
 
     async def clear(self) -> None:
         """Remove all documents and embeddings from the store."""
