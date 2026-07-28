@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
 
+from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
 from app.api.v1._stream import event_source
@@ -89,15 +90,9 @@ async def chat(
         if isinstance(p, ToolCallPart)
     )
 
-    # Extract reply from result - handle both str output and Pydantic model output
-    # When output_type is a Pydantic model with 'reply' field, use result.data.reply
-    # Otherwise use result.output directly (str or other simple types)
-    if hasattr(result, "data") and hasattr(result.data, "reply"):
-        reply = result.data.reply
-    else:
-        # FunctionModel and simple str outputs use result.output
-        # Simplified - all Python objects have __str__, so no need for conditional
-        reply = str(result.output)
+    # NativeOutput-capable models (Req 10.2) produce a ChatOutput instance;
+    # other models produce plain str (Req 10.3) - see build_chat_agent().
+    reply = result.output.reply if isinstance(result.output, ChatOutput) else str(result.output)
 
     return ChatResponse(
         reply=reply,

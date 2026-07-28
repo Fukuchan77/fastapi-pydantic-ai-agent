@@ -22,6 +22,7 @@ from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import Settings
 from app.config import get_settings
+from app.llm.factory import build_fallback_model
 from app.logging_config import configure_logging
 from app.middleware.cors import CORSMiddleware
 from app.middleware.rate_limit import add_rate_limiting
@@ -176,8 +177,9 @@ def create_app(
     Args:
         settings: Application settings. Resolved via `get_settings()` when
             omitted (used by the production `uvicorn app.main:app` entrypoint).
-        model: LLM model for the chat agent. Forwarded to `build_chat_agent()`;
-            when `None`, the chat agent builds its own model from `settings`.
+        model: LLM model for the chat agent. Forwarded to `build_chat_agent()`
+            as-is; when `None`, an eager `FallbackModel` chain is built from
+            `settings` during lifespan startup instead (Req 10.1).
 
     Returns:
         Configured FastAPI application instance.
@@ -302,8 +304,18 @@ def create_app(
         # Create and store the cleanup task
         app.state.cleanup_task = asyncio.create_task(cleanup_loop())
 
-        # Initialize chat agent, forwarding the injected model (if any)
-        app.state.chat_agent = build_chat_agent(model=model, settings=resolved_settings)
+        # Build the FallbackModel chain eagerly so a misconfigured provider
+        # chain fails startup instead of the first request (Req 10.1). A
+        # test-injected `model` override bypasses this entirely, matching the
+        # existing store/session-store test-isolation contract.
+        try:
+            resolved_model = model if model is not None else build_fallback_model(resolved_settings)
+        except Exception as e:
+            logger.error("Failed to build LLM fallback model chain: %s", e, exc_info=True)
+            raise
+
+        # Initialize chat agent, forwarding the resolved model
+        app.state.chat_agent = build_chat_agent(model=resolved_model, settings=resolved_settings)
         logger.info("Initialized chat agent")
 
         # Configure Logfire observability

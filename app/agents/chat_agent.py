@@ -1,13 +1,33 @@
 """Chat agent factory and tool registration."""
 
+from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic_ai import Agent
+from pydantic_ai import NativeOutput
 from pydantic_ai import RunContext
 from pydantic_ai.models import Model
+from pydantic_ai.models import infer_model
 from pydantic_ai_litellm import LiteLLMModel
 
 from app.agents.deps import AgentDeps
 from app.config import Settings
 from app.config import get_settings
+from app.llm.factory import supports_native_output
+
+
+class ChatOutput(BaseModel):
+    """Structured chat reply.
+
+    Used as the `NativeOutput` schema when the active model profile reports
+    `supports_json_schema_output` (Req 10.2).
+
+    Attributes:
+        reply: The agent's response to the user message.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reply: str
 
 
 def build_model(settings: Settings) -> Model:
@@ -82,12 +102,13 @@ async def _build_system_prompt(ctx: RunContext[AgentDeps]) -> str:
 def build_chat_agent(
     model: Model | str | None = None,
     settings: Settings | None = None,
-) -> Agent[AgentDeps, str]:
+) -> Agent[AgentDeps, str | ChatOutput]:
     """Build a Pydantic AI chat agent with tool-calling capabilities.
 
     This factory creates an Agent instance configured with:
     - AgentDeps for dependency injection into tools
-    - str as the output type (simple text responses)
+    - str output when the model's profile doesn't support JSON-schema output,
+      or NativeOutput(ChatOutput) when it does (Req 10.2/10.3)
     - Configurable output retries for validation failures
     - Dynamic system prompt builder
     - Registered mock tools (when enabled in non-production environments)
@@ -101,7 +122,7 @@ def build_chat_agent(
         settings: Optional settings to use. If None, loads from environment.
 
     Returns:
-        Configured Agent[AgentDeps, str] instance ready for use.
+        Configured Agent[AgentDeps, str | ChatOutput] instance ready for use.
 
     Example:
         >>> # Build with default settings
@@ -115,11 +136,16 @@ def build_chat_agent(
     """
     settings = settings or get_settings()
     resolved_model = model if model is not None else build_model(settings)
+    output_type: type[str] | NativeOutput[ChatOutput] = (
+        NativeOutput[ChatOutput](ChatOutput)
+        if supports_native_output(infer_model(resolved_model))
+        else str
+    )
 
-    agent: Agent[AgentDeps, str] = Agent(
+    agent: Agent[AgentDeps, str | ChatOutput] = Agent(
         model=resolved_model,
         deps_type=AgentDeps,
-        output_type=str,
+        output_type=output_type,
         output_retries=settings.max_output_retries,
     )
 

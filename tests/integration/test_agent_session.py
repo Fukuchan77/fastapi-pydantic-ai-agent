@@ -11,6 +11,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.profiles import ModelProfile
 
 from app.agents.chat_agent import build_chat_agent
 from app.agents.deps import AgentDeps
@@ -36,7 +37,13 @@ def session_store() -> InMemorySessionStore:
 
 @pytest.fixture
 def mock_llm() -> FunctionModel:
-    """Provide FunctionModel that returns predictable responses."""
+    """Provide FunctionModel that returns predictable responses.
+
+    `mock_response` returns plain text, not JSON matching `ChatOutput` - an
+    explicit `supports_json_schema_output=False` profile keeps this fixture
+    on the plain-output path (Req 10.3) regardless of `FunctionModel`'s own
+    default profile (which reports `True`).
+    """
 
     def mock_response(messages: list, info: AgentInfo) -> ModelResponse:
         """Mock LLM that echoes the user message with context."""
@@ -54,7 +61,7 @@ def mock_llm() -> FunctionModel:
         else:
             return ModelResponse(parts=[TextPart(content="Hello!")])
 
-    return FunctionModel(mock_response)
+    return FunctionModel(mock_response, profile=ModelProfile(supports_json_schema_output=False))
 
 
 class TestAgentSessionPersistence:

@@ -22,6 +22,7 @@ from typing import runtime_checkable
 
 from fastapi import Request
 from pydantic_ai import Agent
+from pydantic_ai import NativeOutput
 from pydantic_ai.messages import FunctionToolCallEvent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import PartDeltaEvent
@@ -29,6 +30,7 @@ from pydantic_ai.messages import PartStartEvent
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import TextPartDelta
 
+from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
 from app.config import Settings
 from app.models.agent import ChatRequest
@@ -75,7 +77,7 @@ def _summarize_tool_args(args: str | dict[str, object] | None) -> str:
 
 
 async def _agent_event_stream(
-    chat_agent: Agent[AgentDeps, str],
+    chat_agent: Agent[AgentDeps, str | ChatOutput],
     chat_request: ChatRequest,
     deps: AgentDeps,
     history: Sequence[ModelMessage],
@@ -86,6 +88,12 @@ async def _agent_event_stream(
     -> `Token`; `FunctionToolCallEvent` -> `ToolCalled`; the `End` node -> session
     save (if a session_id was provided) followed by `Completed`.
 
+    When `chat_agent.output_type` is `NativeOutput` (Req 10.2), the model's
+    streamed text *is* the raw JSON envelope, not user-facing text - text
+    deltas are suppressed during the model-request node, and the parsed
+    `ChatOutput.reply` is emitted as a single `Token` at the `End` node
+    instead, so raw JSON never reaches the client.
+
     Args:
         chat_agent: The Pydantic AI chat agent to run.
         chat_request: The incoming chat request (message + optional session_id).
@@ -95,6 +103,8 @@ async def _agent_event_stream(
     Yields:
         Typed SSE events as the agent run progresses.
     """
+    is_native_output = isinstance(chat_agent.output_type, NativeOutput)
+
     async with chat_agent.iter(
         chat_request.message,
         deps=deps,
@@ -105,9 +115,12 @@ async def _agent_event_stream(
                 yield StepStarted()
                 async with node.stream(agent_run.ctx) as request_stream:
                     async for event in request_stream:
-                        if isinstance(event, PartStartEvent) and isinstance(
-                            event.part, TextPart
-                        ):
+                        if is_native_output:
+                            # The streamed text is the raw JSON envelope, not
+                            # user-facing text - drain without emitting; the
+                            # parsed reply is emitted once at the End node.
+                            continue
+                        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
                             if event.part.content:
                                 yield Token(content=event.part.content)
                         elif (
@@ -125,6 +138,10 @@ async def _agent_event_stream(
                                 args_summary=_summarize_tool_args(event.part.args),
                             )
             elif Agent.is_end_node(node):
+                if is_native_output:
+                    final_output = node.data.output
+                    if isinstance(final_output, ChatOutput) and final_output.reply:
+                        yield Token(content=final_output.reply)
                 if chat_request.session_id:
                     try:
                         await deps.session_store.save_history(
@@ -268,7 +285,7 @@ async def _run_with_lifecycle_guards(
 
 async def event_source(
     request: Request,
-    chat_agent: Agent[AgentDeps, str],
+    chat_agent: Agent[AgentDeps, str | ChatOutput],
     chat_request: ChatRequest,
     deps: AgentDeps,
     settings: Settings,

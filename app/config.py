@@ -12,6 +12,45 @@ from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
 
+_ALLOWED_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "groq"]
+
+
+def _validate_provider_model_id(v: str, field_name: str) -> str:
+    """Validate a single "provider:model" identifier.
+
+    Shared by `llm_model` and each entry of `llm_fallback_models`.
+
+    Args:
+        v: The "provider:model" identifier to validate.
+        field_name: The Settings field name, used in error messages.
+
+    Returns:
+        str: The validated identifier with a lowercase-normalized provider.
+
+    Raises:
+        ValueError: If the format is invalid or the provider is not allowed.
+    """
+    if ":" not in v:
+        raise ValueError(f"{field_name} must follow 'provider:model' format, got: {v}")
+
+    parts = v.split(":", 1)
+    provider = parts[0].lower()
+    model = parts[1] if len(parts) > 1 else ""
+
+    if not provider:
+        raise ValueError(
+            f"{field_name} provider cannot be empty. Must be one of {_ALLOWED_LLM_PROVIDERS}"
+        )
+    if not model:
+        raise ValueError(f"{field_name} model name cannot be empty. Format: 'provider:model'")
+    if provider not in _ALLOWED_LLM_PROVIDERS:
+        raise ValueError(
+            f"{field_name} provider must be one of {_ALLOWED_LLM_PROVIDERS}, got: {provider}"
+        )
+
+    return f"{provider}:{model}"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables.
 
@@ -133,35 +172,7 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If format is invalid or provider is not allowed
         """
-        allowed_providers = ["openai", "anthropic", "ollama", "groq"]
-
-        # Check if colon exists
-        if ":" not in v:
-            raise ValueError(f"llm_model must follow 'provider:model' format, got: {v}")
-
-        # Split into provider and model
-        parts = v.split(":", 1)
-        provider = parts[0].lower()  # Normalize to lowercase for case-insensitive matching
-        model = parts[1] if len(parts) > 1 else ""
-
-        # Check provider is not empty
-        if not provider:
-            raise ValueError(
-                f"llm_model provider cannot be empty. Must be one of {allowed_providers}"
-            )
-
-        # Check model name is not empty
-        if not model:
-            raise ValueError("llm_model model name cannot be empty. Format: 'provider:model'")
-
-        # Check provider is in allowed list
-        if provider not in allowed_providers:
-            raise ValueError(
-                f"llm_model provider must be one of {allowed_providers}, got: {provider}"
-            )
-
-        # Return normalized llm_model with lowercase provider
-        return f"{provider}:{model}"
+        return _validate_provider_model_id(v, "llm_model")
 
     # Optional fields
     llm_api_key: SecretStr | None = Field(
@@ -259,6 +270,61 @@ class Settings(BaseSettings):
             )
 
         return v
+
+    llm_fallback_models: str | list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional 'provider:model' identifiers tried in order if llm_model's "
+            "provider fails (comma-separated or JSON array)"
+        ),
+    )
+
+    @field_validator("llm_fallback_models", mode="before")
+    @classmethod
+    def parse_llm_fallback_models(cls, v: str | list[str]) -> list[str]:
+        """Parse llm_fallback_models from string or list, mirroring parse_cors_origins.
+
+        Args:
+            v: The llm_fallback_models value to parse
+
+        Returns:
+            list[str]: Parsed list of "provider:model" identifiers
+        """
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            import json
+
+            v_stripped = v.strip()
+            if not v_stripped:
+                return []
+            if v_stripped.startswith("["):
+                try:
+                    parsed = json.loads(v_stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            if "," in v:
+                return [model_id.strip() for model_id in v.split(",")]
+            return [v.strip()]
+        return v
+
+    @field_validator("llm_fallback_models")
+    @classmethod
+    def validate_llm_fallback_models_format(cls, v: list[str]) -> list[str]:
+        """Validate each llm_fallback_models entry follows 'provider:model' format.
+
+        Args:
+            v: The parsed llm_fallback_models list to validate
+
+        Returns:
+            list[str]: The validated list with lowercase-normalized providers
+
+        Raises:
+            ValueError: If any entry's format is invalid or provider is not allowed
+        """
+        return [_validate_provider_model_id(model_id, "llm_fallback_models") for model_id in v]
 
     embedding_model: str | None = Field(
         default=None,

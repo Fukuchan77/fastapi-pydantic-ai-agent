@@ -12,6 +12,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.profiles import ModelProfile
 
 from app.config import Settings
 
@@ -221,10 +222,19 @@ async def simple_llm_stream_function(messages: list, agent_info: AgentInfo):
 def test_model() -> FunctionModel:
     """Provide a FunctionModel for testing without real LLM calls.
 
+    `simple_llm_function`/`simple_llm_stream_function` return plain text, not
+    JSON matching `ChatOutput` - an explicit `supports_json_schema_output=False`
+    profile keeps this fixture on the plain-output path (Req 10.3) regardless
+    of `FunctionModel`'s own default profile (which reports `True`).
+
     Returns:
         FunctionModel configured with simple_llm_function and stream support.
     """
-    return FunctionModel(simple_llm_function, stream_function=simple_llm_stream_function)
+    return FunctionModel(
+        simple_llm_function,
+        stream_function=simple_llm_stream_function,
+        profile=ModelProfile(supports_json_schema_output=False),
+    )
 
 
 def build_test_settings(**overrides: object) -> Settings:

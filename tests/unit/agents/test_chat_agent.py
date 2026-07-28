@@ -9,6 +9,7 @@ from pydantic_ai import Agent
 from pydantic_ai import RunContext
 from pydantic_ai.models.test import TestModel
 
+from app.agents.chat_agent import ChatOutput
 from app.agents.chat_agent import _build_system_prompt
 from app.agents.chat_agent import build_chat_agent
 from app.agents.chat_agent import build_model
@@ -313,3 +314,30 @@ class TestAgentIntegration:
             # just verify it's properly constructed)
             assert isinstance(agent, Agent)
             assert agent is not None
+
+
+class TestNativeOutputGating:
+    """Task 7 (Req 10.2/10.3): conditional NativeOutput via the model profile gate."""
+
+    def test_plain_output_when_model_does_not_support_json_schema(self) -> None:
+        """TestModel's default profile reports False, so output stays plain str."""
+        agent = build_chat_agent(model=TestModel())
+
+        assert agent.output_type is str
+
+    def test_native_output_when_model_supports_json_schema(self) -> None:
+        """A model whose profile reports True gets wrapped in NativeOutput(ChatOutput)."""
+        from pydantic_ai import NativeOutput
+        from pydantic_ai.profiles import ModelProfile
+
+        model = TestModel(profile=ModelProfile(supports_json_schema_output=True))
+        agent = build_chat_agent(model=model)
+
+        assert isinstance(agent.output_type, NativeOutput)
+        assert agent.output_type.outputs is ChatOutput
+
+    def test_chat_output_schema_has_reply_field(self) -> None:
+        """ChatOutput is the minimal schema used for native structured output."""
+        output = ChatOutput(reply="hello")
+
+        assert output.reply == "hello"
