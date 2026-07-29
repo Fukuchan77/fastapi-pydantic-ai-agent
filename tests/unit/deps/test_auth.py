@@ -6,6 +6,8 @@ from fastapi import HTTPException
 from app.config import Settings
 from app.deps.auth import verify_api_key
 from app.models.errors import ErrorResponse
+from app.security.principal import Principal
+from app.security.principal import derive_principal_id
 
 
 class TestVerifyApiKey:
@@ -68,8 +70,8 @@ class TestVerifyApiKey:
         # Act
         result = await verify_api_key(api_key="correct-secret-key", settings=settings)
 
-        # Assert - dependency should return None when successful
-        assert result is None
+        # Assert - dependency should return the authenticated Principal (Req 11.1)
+        assert result == Principal(id=derive_principal_id("correct-secret-key"))
 
     @pytest.mark.asyncio
     async def test_empty_string_api_key_raises_401(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,7 +105,7 @@ class TestVerifyApiKey:
 
         # Correct case should succeed
         result = await verify_api_key(api_key="TestKey123456789", settings=settings)
-        assert result is None
+        assert result == Principal(id=derive_principal_id("TestKey123456789"))
 
     @pytest.mark.asyncio
     async def test_error_response_has_correct_structure(

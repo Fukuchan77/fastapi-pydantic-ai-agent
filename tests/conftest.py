@@ -24,6 +24,8 @@ from app.config import Settings
 # depend on this.
 if "API_KEY" not in os.environ:
     os.environ["API_KEY"] = "test-api-key-12345"
+if "SESSION_SIGNING_KEY" not in os.environ:
+    os.environ["SESSION_SIGNING_KEY"] = "test-session-signing-key-1234567890"
 if "LLM_MODEL" not in os.environ:
     os.environ["LLM_MODEL"] = "openai:gpt-4"
 if "LLM_API_KEY" not in os.environ:
@@ -93,6 +95,7 @@ def test_env(monkeypatch):
     Fixed misleading comment - the fixture DOES set LLM_API_KEY.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("SESSION_SIGNING_KEY", "test-session-signing-key-1234567890")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
     monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")  # Set for most tests
     # Disable Logfire in tests
@@ -252,6 +255,7 @@ def build_test_settings(**overrides: object) -> Settings:
     """
     defaults: dict[str, object] = {
         "api_key": "test-api-key-12345",
+        "session_signing_key": "test-session-signing-key-1234567890",
         "llm_model": "openai:gpt-4",
         "llm_api_key": "test-llm-key-12345",
     }

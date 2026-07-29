@@ -26,8 +26,12 @@ from app.agents.deps import get_agent_deps
 from app.agents.guardrails import run_guarded
 from app.api.v1._stream import event_source
 from app.deps.auth import verify_api_key
+from app.middleware.rate_limit import enforce_llm_rate_limit
 from app.models.agent import ChatRequest
 from app.models.agent import ChatResponse
+from app.security.principal import Principal
+from app.services.session_service import authorize_session
+from app.services.session_service import start_session
 
 
 logger = logging.getLogger(__name__)
@@ -38,42 +42,53 @@ _HEARTBEAT_COMMENT = ": heartbeat\n\n"
 router = APIRouter(tags=["agent"])
 
 
-@router.post("/agent/chat", response_model=ChatResponse)
+@router.post(
+    "/agent/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(enforce_llm_rate_limit)],
+)
 async def chat(
-    request: ChatRequest,
-    req: Request,
+    chat_request: ChatRequest,
+    request: Request,
     deps: AgentDeps = Depends(get_agent_deps),  # noqa: B008
-    _: None = Depends(verify_api_key),
+    principal: Principal = Depends(verify_api_key),  # noqa: B008
 ) -> ChatResponse:
     """Handle chat requests with the Pydantic AI agent.
 
-    This endpoint loads session history if a session_id is provided, runs the
-    agent with the user's message under `run_guarded` (Req 4.1: native
-    `UsageLimits`; Req 4.4-4.6: tool allow-list/approval/budget checks), saves
-    the updated history on a completed run, and returns the agent's response.
-    The whole request is bounded by `chat_request_timeout` (Req 4.2): a
-    timeout aborts with a 504 rather than hanging indefinitely.
+    Issues a server-side session_id bound to the caller when none is
+    presented, or authorizes an existing one before loading history - a
+    session_id bound to a different principal is rejected with 403
+    (Req 11.1/11.2). Runs the agent with the user's message under
+    `run_guarded` (Req 4.1: native `UsageLimits`; Req 4.4-4.6: tool
+    allow-list/approval/budget checks), saves the updated history on a
+    completed run, and returns the agent's response. The whole request is
+    bounded by `chat_request_timeout` (Req 4.2): a timeout aborts with a 504
+    rather than hanging indefinitely.
 
     Args:
-        request: ChatRequest with message and optional session_id.
-        req: FastAPI Request object for accessing app.state.
+        chat_request: ChatRequest with message and optional session_id.
+        request: FastAPI Request object for accessing app.state.
         deps: AgentDeps with session_store and other dependencies.
-        _: Authentication dependency (validates X-API-Key header).
+        principal: Authenticated caller (validates X-API-Key header, Req 11.1/11.2).
 
     Returns:
         ChatResponse with the agent's reply, session_id, tool call count,
         stop reason, and audit trail.
 
     Raises:
-        HTTPException: 504 if the request exceeds `chat_request_timeout`.
+        HTTPException: 403 if session_id belongs to another principal; 504 if
+            the request exceeds `chat_request_timeout`.
     """
-    # Load session history if session_id provided
-    history = []
-    if request.session_id:
-        history = await deps.session_store.get_history(request.session_id)
+    if chat_request.session_id:
+        await authorize_session(principal, chat_request.session_id, deps.settings)
+        session_id = chat_request.session_id
+        history = await deps.session_store.get_history(session_id)
+    else:
+        session_id = await start_session(principal, deps.settings)
+        history = []
 
     # Get the chat agent from app.state
-    chat_agent = req.app.state.chat_agent
+    chat_agent = request.app.state.chat_agent
     settings = deps.settings
     limits = UsageLimits(
         request_limit=settings.usage_request_limit,
@@ -84,7 +99,7 @@ async def chat(
         guarded = await asyncio.wait_for(
             run_guarded(
                 chat_agent,
-                request.message,
+                chat_request.message,
                 deps=deps,
                 message_history=history,
                 limits=limits,
@@ -98,9 +113,9 @@ async def chat(
     # Save updated message history back to session store, only for a
     # completed turn - a refused/denied/budget-blocked turn has no new
     # messages to persist and must not overwrite existing history.
-    if request.session_id and guarded.stop_reason == "completed":
+    if guarded.stop_reason == "completed":
         await deps.session_store.save_history(
-            request.session_id,
+            session_id,
             guarded.messages,
         )
 
@@ -124,7 +139,7 @@ async def chat(
 
     return ChatResponse(
         reply=reply,
-        session_id=request.session_id,
+        session_id=session_id,
         tool_calls_made=tool_calls_made,
         stop_reason=guarded.stop_reason,
         audit=guarded.audit,
@@ -168,32 +183,45 @@ async def _with_heartbeat(
             next_task.cancel()
 
 
-@router.post("/agent/stream")
+@router.post(
+    "/agent/stream",
+    dependencies=[Depends(enforce_llm_rate_limit)],
+)
 async def stream_agent(
-    request: ChatRequest,
-    req: Request,
+    chat_request: ChatRequest,
+    request: Request,
     deps: AgentDeps = Depends(get_agent_deps),  # noqa: B008
-    _: None = Depends(verify_api_key),
+    principal: Principal = Depends(verify_api_key),  # noqa: B008
 ) -> StreamingResponse:
     """Stream chat responses from the Pydantic AI agent via Server-Sent Events.
 
     Emits the typed 5-event union (`step_started`/`tool_called`/`token`/
     `completed`/`error`) defined in `app.patterns.sse`. Session history is
     loaded and saved by the event source in `app.api.v1._stream`; this route
-    only wires headers and the idle heartbeat.
+    only wires headers and the idle heartbeat. Unlike `/agent/chat`, this
+    endpoint has no wire channel to mint and return a new session_id (the
+    SSE contract carries no such field), so it only authorizes an existing
+    session_id (403 on cross-principal access, Req 11.2) and otherwise runs
+    statelessly, exactly as before.
 
     Args:
-        request: ChatRequest with message and optional session_id.
-        req: FastAPI Request object for accessing app.state.
+        chat_request: ChatRequest with message and optional session_id.
+        request: FastAPI Request object for accessing app.state.
         deps: AgentDeps with session_store and other dependencies.
-        _: Authentication dependency (validates X-API-Key header).
+        principal: Authenticated caller (validates X-API-Key header, Req 11.2).
 
     Returns:
         StreamingResponse with text/event-stream media type.
+
+    Raises:
+        HTTPException: 403 if session_id belongs to another principal.
     """
-    settings = req.app.state.settings
-    chat_agent = req.app.state.chat_agent
-    wire_stream = event_source(req, chat_agent, request, deps, settings)
+    if chat_request.session_id:
+        await authorize_session(principal, chat_request.session_id, deps.settings)
+
+    settings = request.app.state.settings
+    chat_agent = request.app.state.chat_agent
+    wire_stream = event_source(request, chat_agent, chat_request, deps, settings)
     return StreamingResponse(
         _with_heartbeat(wire_stream, settings.sse_heartbeat_interval),
         media_type="text/event-stream",

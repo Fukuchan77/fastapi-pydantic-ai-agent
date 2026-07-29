@@ -21,6 +21,9 @@ from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 
 from app.main import app
+from app.security.principal import Principal
+from app.security.principal import derive_principal_id
+from app.services.session_service import start_session
 from tests.conftest import build_test_settings
 
 
@@ -80,13 +83,14 @@ class TestChatEndpoint:
                 assert response.status_code == 200
                 data = response.json()
                 assert data["reply"] == "Hello! How can I help you?"
-                assert data["session_id"] is None
+                # Server mints and returns a session_id for a new conversation (Req 11.1)
+                assert isinstance(data["session_id"], str)
                 assert data["tool_calls_made"] == 0
                 assert data["stop_reason"] == "completed"
                 assert data["audit"] == []
 
-                # Verify session store was not called since no session_id
-                mock_session_store.save_history.assert_not_called()
+                # A completed turn always persists history under the minted session_id
+                mock_session_store.save_history.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_chat_with_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,6 +101,12 @@ class TestChatEndpoint:
         monkeypatch.setenv("API_KEY", "test-api-key-12345")
         monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
         monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
+
+        # Session ids are now server-signed (Req 11.1) - mint a real one bound
+        # to the same principal/signing key this request will authenticate as.
+        settings = build_test_settings()
+        principal = Principal(id=derive_principal_id("test-api-key-12345"))
+        session_id = await start_session(principal, settings)
 
         # Mock existing history
         existing_history = [
@@ -130,7 +140,7 @@ class TestChatEndpoint:
             with (
                 patch.object(app.state, "chat_agent", mock_agent, create=True),
                 patch.object(app.state, "http_client", AsyncMock(), create=True),
-                patch.object(app.state, "settings", build_test_settings(), create=True),
+                patch.object(app.state, "settings", settings, create=True),
                 patch.object(app.state, "session_store", mock_session_store, create=True),
             ):
                 client = TestClient(app)
@@ -139,7 +149,7 @@ class TestChatEndpoint:
                     "/v1/agent/chat",
                     json={
                         "message": "Current message",
-                        "session_id": "test-session-123",
+                        "session_id": session_id,
                     },
                     headers={"X-API-Key": "test-api-key-12345"},
                 )
@@ -147,10 +157,10 @@ class TestChatEndpoint:
                 assert response.status_code == 200
                 data = response.json()
                 assert data["reply"] == "Response to current message"
-                assert data["session_id"] == "test-session-123"
+                assert data["session_id"] == session_id
 
                 # Verify session history was loaded and saved
-                mock_session_store.get_history.assert_called_once_with("test-session-123")
+                mock_session_store.get_history.assert_called_once_with(session_id)
                 mock_session_store.save_history.assert_called_once()
 
     @pytest.mark.asyncio

@@ -76,8 +76,19 @@ class TestAgentStreamEndpoint:
         client: AsyncClient,
         auth_headers: dict[str, str],
     ) -> None:
-        """A session_id round-trips across two stream requests without error."""
-        session_id = "test-stream-session-456"
+        """A server-issued session_id round-trips across two stream requests without error.
+
+        Session ids are now server-issued (Req 11.1); the stream endpoint only
+        authorizes an existing one (Req 11.2), so this mints one via
+        /v1/agent/chat first rather than supplying an arbitrary client string.
+        """
+        chat_response = await client.post(
+            "/v1/agent/chat",
+            json={"message": "Start a session"},
+            headers=auth_headers,
+        )
+        assert chat_response.status_code == 200
+        session_id = chat_response.json()["session_id"]
 
         async with client.stream(
             "POST",

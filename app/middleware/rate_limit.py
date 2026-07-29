@@ -4,12 +4,15 @@ import time
 from collections.abc import Callable
 from collections.abc import Sequence
 
+import limits
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
+from slowapi.wrappers import Limit as SlowApiLimit
 
+from app.config import Settings
 from app.config import get_settings
 from app.models.errors import ErrorResponse
 
@@ -60,6 +63,7 @@ def add_rate_limiting(
     app: FastAPI,
     default_limits: Sequence[str] | None = None,
     key_func: Callable[[Request], str] | None = None,
+    storage_uri: str | None = None,
 ) -> Limiter:
     """Add rate limiting to FastAPI application using slowapi.
 
@@ -72,6 +76,9 @@ def add_rate_limiting(
             (e.g., ["5/minute", "100/hour"])
         key_func: Function to extract client identifier from request
             (default: get_client_identifier)
+        storage_uri: Storage backend URI (e.g. a Redis URL) so limits are
+            shared across processes (Req 11.4). `None` uses in-memory
+            storage, suitable for single-instance/development deployments.
 
     Returns:
         Limiter: Configured slowapi Limiter instance
@@ -90,11 +97,15 @@ def add_rate_limiting(
     if default_limits is None:
         default_limits = ["60/minute"]
 
-    # Create limiter instance
+    # Create limiter instance. in_memory_fallback_enabled=True means a
+    # configured storage_uri that becomes unreachable degrades to in-memory
+    # storage (with a warning) instead of failing every request.
     limiter = Limiter(
         key_func=key_func,
         default_limits=list(default_limits),
         headers_enabled=True,
+        storage_uri=storage_uri,
+        in_memory_fallback_enabled=True,
     )
 
     # Store limiter in app state for access via dependencies
@@ -154,31 +165,31 @@ def add_rate_limiting(
     return limiter
 
 
-# FastAPI dependency function for rate limiting
-# This is used as Depends() in route handlers to enforce rate limiting
-async def rate_limit_dependency(request: Request) -> None:
-    """FastAPI dependency that enforces rate limiting on the route.
+async def enforce_llm_rate_limit(request: Request) -> None:
+    """Apply the stricter, configurable per-route limit to LLM-invoking endpoints (Req 11.3).
 
-    **Note:** Reserved for future per-route rate limiting. Currently using
-    global SlowAPIMiddleware for rate limiting across all routes.
+    Used as a route `dependencies=[Depends(enforce_llm_rate_limit)]` entry on
+    `chat`/`stream_agent` (app/api/v1/agent.py) and `query` (app/api/v1/rag.py).
 
-    This dependency uses the limiter stored in app.state to check and enforce
-    rate limits. It should be added to protected routes via Depends().
+    Deliberately reuses `request.app.state.limiter` - the same per-app
+    `Limiter`/storage `add_rate_limiting()` already wires to Redis when
+    configured (Req 11.4) - rather than a second, independently-configured
+    limiter, so this stricter check and the global default check share one
+    consistent, correctly per-app-scoped storage backend.
 
     Args:
-        request: FastAPI request object
+        request: FastAPI request object.
 
     Raises:
-        RateLimitExceeded: If the rate limit is exceeded
-
-    Example:
-        ```python
-        @router.post("/protected")
-        async def protected_route(_: None = Depends(rate_limit_dependency)):
-            return {"status": "ok"}
-        ```
+        RateLimitExceeded: If `settings.llm_rate_limit` is exceeded; handled
+            by the same exception handler `add_rate_limiting()` registers.
     """
     limiter: Limiter = request.app.state.limiter
-    # Call the limiter's hit method to check and record this request
-    # This will raise RateLimitExceeded if limit is exceeded
-    await limiter.hit(limiter.default_limits[0], request)
+    settings: Settings = request.app.state.settings
+    item = limits.parse(settings.llm_rate_limit)
+    identifier = get_client_identifier(request)
+
+    if not limiter.limiter.hit(item, identifier):
+        raise RateLimitExceeded(
+            SlowApiLimit(item, get_client_identifier, None, False, None, None, None, 1, False)
+        )

@@ -11,6 +11,8 @@ from app.config import Settings
 from app.config import get_settings
 from app.middleware.request_id import request_id_var
 from app.models.errors import ErrorResponse
+from app.security.principal import Principal
+from app.security.principal import derive_principal_id
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,7 @@ api_key_header = APIKeyHeader(
 async def verify_api_key(
     api_key: str | None = Depends(api_key_header),
     settings: Settings = Depends(get_settings),  # noqa: B008
-) -> None:
+) -> Principal:
     """Verify X-API-Key header matches configured API key.
 
     This dependency should be applied at the router level to protect endpoints
@@ -43,7 +45,7 @@ async def verify_api_key(
         settings: Application settings containing the expected API key
 
     Returns:
-        None: Dependency succeeds silently when authentication passes
+        Principal: The authenticated caller, derived from the API key (Req 11.1).
 
     Raises:
         HTTPException: 401 Unauthorized if key is missing or invalid
@@ -71,3 +73,5 @@ async def verify_api_key(
             status_code=401,
             detail=ErrorResponse(message="Unauthorized", code="UNAUTHORIZED").model_dump(),
         )
+
+    return Principal(id=derive_principal_id(api_key))

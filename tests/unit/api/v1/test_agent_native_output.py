@@ -24,6 +24,8 @@ from app.agents.deps import get_agent_deps
 from app.agents.guardrails import AuditTrail
 from app.api.v1.agent import router
 from app.deps.auth import verify_api_key
+from app.middleware.rate_limit import enforce_llm_rate_limit
+from app.security.principal import Principal
 from tests.conftest import build_test_settings
 
 
@@ -45,7 +47,8 @@ def _build_app(mock_agent_deps: AgentDeps, chat_agent: object) -> FastAPI:
     app.state.chat_agent = chat_agent
     app.state.settings = build_test_settings()
     app.dependency_overrides[get_agent_deps] = lambda: mock_agent_deps
-    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: Principal(id="test-principal")
+    app.dependency_overrides[enforce_llm_rate_limit] = lambda: None
     return app
 
 

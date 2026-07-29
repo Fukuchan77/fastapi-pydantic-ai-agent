@@ -12,8 +12,10 @@ class ChatRequest(BaseModel):
 
     Attributes:
         message: User message to send to the agent (1-32000 chars).
-        session_id: Optional session ID for conversation continuity.
-            If None, a stateless single-turn conversation is performed.
+        session_id: Server-issued session ID from a previous response, for
+            conversation continuity. If omitted, the server mints a new one
+            (Req 11.1). Presenting a session_id bound to another principal
+            is rejected with 403 (Req 11.2).
     """
 
     message: str = Field(
@@ -24,7 +26,9 @@ class ChatRequest(BaseModel):
     )
     session_id: str | None = Field(
         default=None,
-        description="Session ID for conversation continuity. If omitted, stateless.",
+        description="Session ID for conversation continuity. If omitted, the "
+        "server issues a new one; presenting another principal's session_id "
+        "is rejected with 403.",
     )
 
 
@@ -33,13 +37,15 @@ class ChatResponse(BaseModel):
 
     Attributes:
         reply: Agent's response to the user message.
-        session_id: Session ID if session was used, None for stateless conversations.
+        session_id: The server-issued session ID for this conversation - the
+            minted id for a new conversation, or the same id echoed back
+            when continuing one (Req 11.1).
         tool_calls_made: Number of tool calls executed during this conversation turn.
     """
 
     reply: str = Field(description="Agent's response to the user message")
     session_id: str | None = Field(
-        description="Session ID if session was used, None for stateless conversations"
+        description="Server-issued session ID for this conversation (Req 11.1)"
     )
     tool_calls_made: int = Field(
         description="Number of tool calls executed during this conversation turn"

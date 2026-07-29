@@ -80,7 +80,6 @@ class TestSessionIdValidation:
             "session@id",  # @ not allowed
             "session id",  # space not allowed
             "session/id",  # / not allowed
-            "session.id",  # . not allowed
             "session#id",  # # not allowed
             "session$id",  # $ not allowed
         ]
@@ -97,7 +96,6 @@ class TestSessionIdValidation:
             "session@id",
             "session id",
             "session/id",
-            "session.id",
             "session#id",
             "session$id",
         ]
@@ -112,7 +110,6 @@ class TestSessionIdValidation:
             "session@id",
             "session id",
             "session/id",
-            "session.id",
             "session#id",
             "session$id",
         ]
@@ -136,6 +133,9 @@ class TestSessionIdValidation:
             "123",  # Numeric only
             "_",  # Underscore only
             "-",  # Hyphen only
+            # Dots are allowed - server-issued session ids (Req 11.1) use the
+            # signed "{principal.id}.{token}.{signature}" format.
+            "a1b2c3d4e5f6a7b8.dQw4w9WgXcQ-abc123.f6e5d4c3b2a1a7b8",
         ]
         for valid_id in valid_ids:
             # Should not raise any exception

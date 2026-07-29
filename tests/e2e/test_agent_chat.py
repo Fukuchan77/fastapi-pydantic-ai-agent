@@ -52,41 +52,52 @@ class TestAgentChatEndpoint:
         client: AsyncClient,
         auth_headers: dict[str, str],
     ) -> None:
-        """Chat endpoint should handle session_id for conversation history."""
-        # Arrange: Request with session_id
-        session_id = "test-session-123"
-        request_data = {
-            "message": "Remember my name is Alice",
-            "session_id": session_id,
-        }
+        """Chat endpoint should handle session_id for conversation history.
 
-        # Act: First request with session_id
+        Session ids are now server-issued (Req 11.1) - the first request omits
+        session_id and the server mints one, which the second request reuses
+        to continue the conversation.
+        """
+        # Act: First request with no session_id - server mints one
         response1 = await client.post(
             "/v1/agent/chat",
-            json=request_data,
+            json={"message": "Remember my name is Alice"},
             headers=auth_headers,
         )
 
-        # Assert: First response should succeed
+        # Assert: First response should succeed and carry a minted session_id
         assert response1.status_code == 200
         data1 = response1.json()
-        assert data1["session_id"] == session_id, "Should return same session_id"
+        session_id = data1["session_id"]
+        assert isinstance(session_id, str)
+        assert session_id
 
-        # Act: Second request with same session_id
-        request_data2 = {
-            "message": "What is my name?",
-            "session_id": session_id,
-        }
+        # Act: Second request with the server-issued session_id
         response2 = await client.post(
             "/v1/agent/chat",
-            json=request_data2,
+            json={"message": "What is my name?", "session_id": session_id},
             headers=auth_headers,
         )
 
-        # Assert: Second response should succeed
+        # Assert: Second response should succeed and echo the same session_id
         assert response2.status_code == 200
         data2 = response2.json()
         assert data2["session_id"] == session_id, "Should return same session_id"
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_rejects_foreign_session_id(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Presenting a client-supplied (unsigned) session_id is rejected with 403 (Req 11.2)."""
+        response = await client.post(
+            "/v1/agent/chat",
+            json={"message": "Hello", "session_id": "test-session-123"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 403
 
     @pytest.mark.asyncio
     async def test_chat_endpoint_without_session_id(
@@ -94,7 +105,7 @@ class TestAgentChatEndpoint:
         client: AsyncClient,
         auth_headers: dict[str, str],
     ) -> None:
-        """Chat endpoint should work without session_id."""
+        """Chat endpoint should mint a new session_id when none is provided (Req 11.1)."""
         # Arrange: Request without session_id
         request_data = {"message": "Hello"}
 
@@ -105,10 +116,11 @@ class TestAgentChatEndpoint:
             headers=auth_headers,
         )
 
-        # Assert: Should succeed
+        # Assert: Should succeed and mint a new session_id
         assert response.status_code == 200
         data = response.json()
-        assert data["session_id"] is None, "session_id should be null when not provided"
+        assert isinstance(data["session_id"], str), "server should mint a session_id"
+        assert data["session_id"], "minted session_id should not be empty"
 
     @pytest.mark.asyncio
     async def test_chat_endpoint_validates_message_length(

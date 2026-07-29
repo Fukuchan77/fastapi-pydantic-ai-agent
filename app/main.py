@@ -382,8 +382,15 @@ def create_app(
     # but set a very high limit (1000/minute) that effectively exempts them in practice.
     # Trade-off: Health checks get rate limited, but at such a high threshold they won't
     # be affected.
-    add_rate_limiting(app, default_limits=["1000/minute"])
-    logger.info("Initialized rate limiting (1000/minute) - applied globally via middleware")
+    add_rate_limiting(
+        app,
+        default_limits=["1000/minute"],
+        storage_uri=resolved_settings.redis_url,
+    )
+    logger.info(
+        "Initialized rate limiting (1000/minute default, storage=%s)",
+        "redis" if resolved_settings.redis_url else "memory",
+    )
 
     # Add SlowAPIMiddleware to enforce rate limiting on all routes
     app.add_middleware(SlowAPIMiddleware)  # type: ignore[arg-type]

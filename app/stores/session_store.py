@@ -128,7 +128,7 @@ class InMemorySessionStore:
         # Store-level lock to protect metadata operations (LRU eviction, lock cleanup)
         self._store_lock: asyncio.Lock = asyncio.Lock()
         # Compile regex pattern for session_id validation (alphanumeric, underscore, hyphen only)
-        self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+        self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
         self.max_messages = max_messages
         self.session_ttl = session_ttl
         self.max_sessions = max_sessions
@@ -258,7 +258,7 @@ class InMemorySessionStore:
 
         Raises:
             ValueError: If session_id is empty, exceeds 256 characters,
-                or contains characters outside [a-zA-Z0-9_-].
+                or contains characters outside [a-zA-Z0-9_.-].
         """
         if not session_id:
             raise ValueError("session_id cannot be empty")
@@ -375,7 +375,7 @@ class RedisSessionStore:
         self.session_ttl = session_ttl
         self.key_prefix = key_prefix
         # Compile regex pattern for session_id validation
-        self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+        self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
     async def get_history(self, session_id: str) -> list[ModelMessage]:
         """Retrieve message history for a session from Redis.
@@ -483,7 +483,7 @@ class RedisSessionStore:
 
         Raises:
             ValueError: If session_id is empty, exceeds 256 characters,
-                or contains characters outside [a-zA-Z0-9_-].
+                or contains characters outside [a-zA-Z0-9_.-].
         """
         if not session_id:
             raise ValueError("session_id cannot be empty")

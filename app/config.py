@@ -66,6 +66,7 @@ class Settings(BaseSettings):
 
     Required fields:
         api_key: API key for X-API-Key authentication (16+ characters)
+        session_signing_key: Secret key for signing server-issued session ids (16+ characters)
         llm_model: LLM model identifier in "provider:model" format
             (e.g., "openai:gpt-4o", "anthropic:claude-3-5-sonnet-20241022")
 
@@ -151,6 +152,61 @@ class Settings(BaseSettings):
         if len(v_stripped) < 16:
             raise ValueError(
                 f"api_key must be at least 16 characters long for security. "
+                f"Current length: {len(v_stripped)}"
+            )
+
+        return v
+
+    session_signing_key: SecretStr = Field(
+        ...,
+        description="Secret key used to HMAC-sign server-issued session ids, binding "
+        "them to the authenticated principal (Req 11.1/11.2)",
+    )
+
+    @field_validator("session_signing_key")
+    @classmethod
+    def validate_session_signing_key_strength(cls, v: SecretStr) -> SecretStr:
+        """Validate session_signing_key is not a placeholder and meets minimum strength.
+
+        A weak signing key would let an attacker forge session ids and defeat
+        the IDOR protection Req 11.1/11.2 depends on, so this uses the same
+        strength rule as `api_key` rather than merely requiring non-empty.
+
+        Args:
+            v: The session_signing_key value to validate.
+
+        Returns:
+            SecretStr: The validated session_signing_key value.
+
+        Raises:
+            ValueError: If session_signing_key is a placeholder or too weak.
+        """
+        v_str = v.get_secret_value()
+        v_stripped = v_str.strip()
+
+        if not v_stripped:
+            raise ValueError("session_signing_key cannot be empty or whitespace only")
+
+        placeholders = {
+            "your-api-key-here",
+            "changeme",
+            "change-me",
+            "test-key",
+            "example",
+            "replace-me",
+            "insert-key-here",
+            "api-key-here",
+        }
+
+        if v_stripped.lower() in placeholders:
+            raise ValueError(
+                "session_signing_key appears to be a placeholder value. "
+                "Please set a strong signing key with at least 16 characters."
+            )
+
+        if len(v_stripped) < 16:
+            raise ValueError(
+                f"session_signing_key must be at least 16 characters long for security. "
                 f"Current length: {len(v_stripped)}"
             )
 
@@ -408,6 +464,35 @@ class Settings(BaseSettings):
         default=[],
         description="List of trusted proxy IP addresses for X-Forwarded-For validation",
     )
+    llm_rate_limit: str = Field(
+        default="30/minute",
+        description="Rate limit string (e.g. '30/minute') applied per-route to "
+        "LLM-invoking endpoints (chat, stream, RAG query), stricter than the "
+        "global 1000/minute default (Req 11.3)",
+    )
+
+    @field_validator("llm_rate_limit")
+    @classmethod
+    def validate_llm_rate_limit_format(cls, v: str) -> str:
+        """Validate llm_rate_limit follows the '<count>/<period>' format slowapi expects.
+
+        Args:
+            v: The llm_rate_limit value to validate.
+
+        Returns:
+            str: The validated llm_rate_limit value.
+
+        Raises:
+            ValueError: If the format doesn't match '<int>/<second|minute|hour|day>'.
+        """
+        import re
+
+        if not re.fullmatch(r"\d+/(second|minute|hour|day)", v):
+            raise ValueError(
+                f"llm_rate_limit must follow '<count>/<second|minute|hour|day>' format, got: {v}"
+            )
+        return v
+
     http_retry_max_attempts: int = Field(
         default=3,
         ge=1,
