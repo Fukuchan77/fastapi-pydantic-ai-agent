@@ -73,6 +73,17 @@ server {
 
 #### Advanced Configuration with Rate Limiting
 
+The application enforces its own rate limits independently of any reverse-proxy
+configuration below: a global `1000/minute` default (`app/middleware/rate_limit.py`),
+and a stricter, configurable per-route limit on LLM-invoking endpoints (`POST
+/v1/agent/chat`, `/v1/agent/stream`, `/v1/rag/query`) via the `LLM_RATE_LIMIT`
+setting (default `30/minute`, Req 11.3). When `REDIS_URL` is configured, the
+global limit's storage is Redis-backed so it is shared across replicas (Req
+11.4); the stricter per-route limit currently stays in-memory per process (a
+documented trade-off, see `app/middleware/rate_limit.py`'s `enforce_llm_rate_limit`
+docstring). Nginx-level `limit_req` below is a defense-in-depth layer in front
+of these, not a replacement for them.
+
 ```nginx
 # Define rate limiting zone (outside server block)
 limit_req_zone $binary_remote_addr zone=api_limit:10m rate=60r/m;
@@ -297,9 +308,25 @@ TRUSTED_PROXIES=["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.3
 # Use secrets management
 docker run -d \
   -e API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)" \
+  -e SESSION_SIGNING_KEY="$(aws secretsmanager get-secret-value --secret-id session-signing-key --query SecretString --output text)" \
   -e LLM_API_KEY="$(aws secretsmanager get-secret-value --secret-id llm-key --query SecretString --output text)" \
   fastapi-pydantic-ai-agent:latest
 ```
+
+### Session Ownership
+
+`session_id` is server-issued, not client-supplied (Req 11.1/11.2): `POST
+/v1/agent/chat` mints one (signed `{principal}.{token}.{signature}`, HMAC'd
+with `SESSION_SIGNING_KEY`) when the request omits `session_id`, and rejects
+a request presenting a `session_id` bound to a different API key with `403`.
+`POST /v1/agent/stream` only authorizes an existing `session_id` this way
+(the SSE wire contract has no field to mint and return a new one); omit it
+there for a stateless, single-turn stream. `SESSION_SIGNING_KEY` must be a
+strong secret (16+ characters, same strength rule as `API_KEY`) - a weak or
+shared-guessable key would let an attacker forge another principal's
+`session_id` and defeat the ownership check entirely. Rotate it like
+`API_KEY` (see API Key Rotation above); rotating it invalidates all
+outstanding session ids, so plan rotations during low-traffic windows.
 
 ### HTTPS Enforcement
 

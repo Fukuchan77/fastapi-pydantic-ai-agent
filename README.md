@@ -108,13 +108,15 @@ All `/v1/` endpoints require the `X-API-Key` header. Replace `your-api-key-here`
 
 #### Standard Request/Response
 
+`session_id` is server-issued, not client-supplied: omit it to start a new
+conversation, and the server mints one bound to your API key and returns it.
+
 ```bash
 curl -X POST http://localhost:8000/v1/agent/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{
-    "message": "What is the weather like today?",
-    "session_id": "user-123"
+    "message": "What is the weather like today?"
   }'
 ```
 
@@ -123,14 +125,18 @@ curl -X POST http://localhost:8000/v1/agent/chat \
 ```json
 {
   "reply": "I checked the weather using my search tool. Currently it's 72°F and sunny.",
-  "session_id": "user-123",
+  "session_id": "3f1a9c2b8e4d6f01.dQw4w9WgXcQ-1a2b3c.7e6d5c4b3a291807",
   "tool_calls_made": 1
 }
 ```
 
+Present that same `session_id` on a later request to continue the
+conversation - the server echoes it back on success. Presenting a
+`session_id` minted for a different API key is rejected with `403`.
+
 **Features:**
 
-- Conversation history maintained per `session_id`
+- Conversation history maintained per server-issued `session_id` (Req 11.1/11.2)
 - Agent can call registered tools (e.g., `mock_web_search`)
 - Tool invocations are counted and returned
 - Type-safe dependency injection via [`AgentDeps`](app/agents/deps.py)
@@ -199,9 +205,14 @@ curl -X POST http://localhost:8000/v1/agent/stream \
   -N \
   -d '{
     "message": "Write a haiku about Python",
-    "session_id": "user-123"
+    "session_id": "3f1a9c2b8e4d6f01.dQw4w9WgXcQ-1a2b3c.7e6d5c4b3a291807"
   }'
 ```
+
+Unlike `/v1/agent/chat`, this endpoint has no response field to mint and
+return a *new* `session_id` - only present one already issued by
+`/v1/agent/chat` (a foreign `session_id` is rejected with `403`); omit it for
+a stateless, single-turn stream.
 
 **Response Stream:**
 
