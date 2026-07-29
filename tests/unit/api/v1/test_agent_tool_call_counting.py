@@ -19,6 +19,7 @@ from pydantic_ai.messages import UserPromptPart
 
 from app.deps.auth import verify_api_key
 from app.main import app
+from tests.conftest import build_test_settings
 
 
 class TestToolCallCounting:
@@ -86,7 +87,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)
@@ -156,7 +157,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)
@@ -215,7 +216,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)

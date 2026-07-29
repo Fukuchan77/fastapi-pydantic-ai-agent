@@ -20,6 +20,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
+from app.agents.guardrails import AuditTrail
 from app.api.v1.agent import router
 from app.deps.auth import verify_api_key
 from tests.conftest import build_test_settings
@@ -32,6 +33,8 @@ def mock_agent_deps() -> AgentDeps:
     deps.session_store = MagicMock()
     deps.session_store.get_history = AsyncMock(return_value=[])
     deps.session_store.save_history = AsyncMock()
+    deps.settings = build_test_settings()
+    deps.audit = AuditTrail()
     return deps
 
 
@@ -46,9 +49,7 @@ def _build_app(mock_agent_deps: AgentDeps, chat_agent: Agent[AgentDeps, str]) ->
 
 
 def _failing_agent() -> Agent[AgentDeps, str]:
-    async def _raise_runtime_error(
-        messages: list, agent_info: AgentInfo
-    ) -> AsyncIterator[str]:
+    async def _raise_runtime_error(messages: list, agent_info: AgentInfo) -> AsyncIterator[str]:
         raise RuntimeError("LLM API failure")
         yield ""  # pragma: no cover
 

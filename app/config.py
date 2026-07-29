@@ -438,6 +438,27 @@ class Settings(BaseSettings):
         le=300,
         description="Timeout in seconds for individual LLM agent execution (evaluation/synthesis)",
     )
+    chat_request_timeout: int = Field(
+        default=60,
+        ge=5,
+        le=300,
+        description="Timeout in seconds for the whole POST /v1/agent/chat request; "
+        "aborts via asyncio.wait_for rather than hanging indefinitely",
+    )
+    usage_request_limit: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum number of model requests allowed per guarded agent run "
+        "(pydantic-ai UsageLimits.request_limit)",
+    )
+    usage_total_tokens_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum total tokens (input+output) allowed per guarded agent run; "
+        "also gates the pre-tool-call budget check before any tool executes. "
+        "None disables both checks",
+    )
     rag_workflow_timeout: int = Field(
         default=60,
         ge=5,

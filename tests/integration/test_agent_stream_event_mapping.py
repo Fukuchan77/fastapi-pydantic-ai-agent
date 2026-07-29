@@ -61,7 +61,10 @@ class TestTextOnlyRun:
         chat_request = ChatRequest(message="Hi")
 
         events = [
-            e async for e in _agent_event_stream(agent, chat_request, deps, history=[])
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
         ]
 
         assert events[0] == StepStarted()
@@ -80,7 +83,12 @@ class TestTextOnlyRun:
         deps = _build_agent_deps()
         chat_request = ChatRequest(message="Hi")
 
-        [e async for e in _agent_event_stream(agent, chat_request, deps, history=[])]
+        [
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
+        ]
 
         assert await deps.session_store.get_history("anything") == []
 
@@ -129,7 +137,10 @@ class TestToolCallRun:
         chat_request = ChatRequest(message="What's the weather in Paris?")
 
         events = [
-            e async for e in _agent_event_stream(agent, chat_request, deps, history=[])
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
         ]
 
         step_started_count = sum(1 for e in events if isinstance(e, StepStarted))
@@ -160,7 +171,10 @@ class TestSessionSaveBeforeCompleted:
         chat_request = ChatRequest(message="Hi", session_id="sess-1")
 
         events = [
-            e async for e in _agent_event_stream(agent, chat_request, deps, history=[])
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
         ]
 
         assert events[-1] == Completed()
@@ -172,9 +186,7 @@ class TestSessionSaveBeforeCompleted:
         """A save_history() failure yields a terminal Error, never a Completed event."""
 
         class _FailingSessionStore(InMemorySessionStore):
-            async def save_history(
-                self, session_id: str, messages: list[ModelMessage]
-            ) -> None:
+            async def save_history(self, session_id: str, messages: list[ModelMessage]) -> None:
                 raise ValueError("Too many messages")
 
         agent: Agent[AgentDeps, str] = Agent(
@@ -190,7 +202,10 @@ class TestSessionSaveBeforeCompleted:
         chat_request = ChatRequest(message="Hi", session_id="sess-1")
 
         events = [
-            e async for e in _agent_event_stream(agent, chat_request, deps, history=[])
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
         ]
 
         assert events[-1] == Error(message="Failed to save session")

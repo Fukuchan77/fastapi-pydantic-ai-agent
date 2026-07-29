@@ -1,10 +1,12 @@
 """Agent dependencies - RunContext dependencies for Pydantic AI agents."""
 
 from dataclasses import dataclass
+from dataclasses import field
 
 import httpx
 from fastapi import Request
 
+from app.agents.guardrails import AuditTrail
 from app.config import Settings
 from app.stores.session_store import SessionStore
 
@@ -20,11 +22,18 @@ class AgentDeps:
         http_client: Shared async HTTP client for external API calls.
         settings: Application configuration settings.
         session_store: Session history persistence backend.
+        principal: Stable identifier of the calling principal, for audit
+            attribution (Req 4.7). `None` until session ownership (Req 11)
+            resolves a real principal per request.
+        audit: Sink refused/denied/budget-blocked tool attempts are recorded
+            to by `run_guarded()` (Req 4.7).
     """
 
     http_client: httpx.AsyncClient
     settings: Settings
     session_store: SessionStore
+    principal: str | None = None
+    audit: AuditTrail = field(default_factory=AuditTrail)
 
 
 async def get_agent_deps(request: Request) -> AgentDeps:

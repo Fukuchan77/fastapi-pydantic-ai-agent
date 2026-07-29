@@ -21,6 +21,7 @@ from pydantic_ai.profiles import ModelProfile
 from app.agents.chat_agent import build_chat_agent
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
+from app.agents.guardrails import AuditTrail
 from app.api.v1.agent import router
 from app.deps.auth import verify_api_key
 from tests.conftest import build_test_settings
@@ -33,6 +34,8 @@ def mock_agent_deps() -> AgentDeps:
     deps.session_store = MagicMock()
     deps.session_store.get_history = AsyncMock(return_value=[])
     deps.session_store.save_history = AsyncMock()
+    deps.settings = build_test_settings()
+    deps.audit = AuditTrail()
     return deps
 
 

@@ -23,6 +23,8 @@ from typing import runtime_checkable
 from fastapi import Request
 from pydantic_ai import Agent
 from pydantic_ai import NativeOutput
+from pydantic_ai import UsageLimitExceeded
+from pydantic_ai import UsageLimits
 from pydantic_ai.messages import FunctionToolCallEvent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import PartDeltaEvent
@@ -32,6 +34,9 @@ from pydantic_ai.messages import TextPartDelta
 
 from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
+from app.agents.guardrails import GuardrailStopError
+from app.agents.guardrails import build_guarded_toolset
+from app.agents.guardrails import classify_usage_limit_exceeded
 from app.config import Settings
 from app.models.agent import ChatRequest
 from app.patterns.sse import Completed
@@ -81,6 +86,7 @@ async def _agent_event_stream(
     chat_request: ChatRequest,
     deps: AgentDeps,
     history: Sequence[ModelMessage],
+    settings: Settings,
 ) -> AsyncGenerator[SSEEvent]:
     """Drive `Agent.iter()` and map pydantic-ai's graph nodes/events onto the typed SSE union.
 
@@ -94,77 +100,99 @@ async def _agent_event_stream(
     `ChatOutput.reply` is emitted as a single `Token` at the `End` node
     instead, so raw JSON never reaches the client.
 
+    The run is wrapped in the same guardrails as the non-streaming chat path
+    (Req 4.1: native `UsageLimits`; Req 4.4-4.6: tool allow-list/approval/
+    budget checks) via `build_guarded_toolset`/`agent.override`. A
+    `GuardrailStopError`/`UsageLimitExceeded` raised here propagates out of this
+    generator and is turned into a terminal `Error` SSE event by
+    `_run_with_lifecycle_guards`.
+
     Args:
         chat_agent: The Pydantic AI chat agent to run.
         chat_request: The incoming chat request (message + optional session_id).
         deps: Agent dependencies (session store, settings, http client).
         history: Prior conversation history to seed the run with.
+        settings: Application settings (usage_request_limit/usage_total_tokens_limit).
 
     Yields:
         Typed SSE events as the agent run progresses.
     """
     is_native_output = isinstance(chat_agent.output_type, NativeOutput)
 
-    async with chat_agent.iter(
-        chat_request.message,
-        deps=deps,
-        message_history=list(history),
-    ) as agent_run:
-        async for node in agent_run:
-            if Agent.is_model_request_node(node):
-                yield StepStarted()
-                async with node.stream(agent_run.ctx) as request_stream:
-                    async for event in request_stream:
-                        if is_native_output:
-                            # The streamed text is the raw JSON envelope, not
-                            # user-facing text - drain without emitting; the
-                            # parsed reply is emitted once at the End node.
-                            continue
-                        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                            if event.part.content:
-                                yield Token(content=event.part.content)
-                        elif (
-                            isinstance(event, PartDeltaEvent)
-                            and isinstance(event.delta, TextPartDelta)
-                            and event.delta.content_delta
-                        ):
-                            yield Token(content=event.delta.content_delta)
-            elif Agent.is_call_tools_node(node):
-                async with node.stream(agent_run.ctx) as handle_stream:
-                    async for event in handle_stream:
-                        if isinstance(event, FunctionToolCallEvent):
-                            yield ToolCalled(
-                                name=event.part.tool_name,
-                                args_summary=_summarize_tool_args(event.part.args),
+    limits = UsageLimits(
+        request_limit=settings.usage_request_limit,
+        total_tokens_limit=settings.usage_total_tokens_limit,
+    )
+    guarded_toolset = build_guarded_toolset(chat_agent, limits=limits, audit=deps.audit)
+
+    # See `run_guarded`'s docstring: `override(toolsets=...)` alone does not
+    # replace tools registered via `@agent.tool` - `tools=[]` empties that
+    # slot while `guarded_toolset` (which already wraps a snapshot of the
+    # original combined toolsets) is installed as the sole toolset.
+    with chat_agent.override(tools=[], toolsets=[guarded_toolset]):
+        async with chat_agent.iter(
+            chat_request.message,
+            deps=deps,
+            message_history=list(history),
+            usage_limits=limits,
+        ) as agent_run:
+            async for node in agent_run:
+                if Agent.is_model_request_node(node):
+                    yield StepStarted()
+                    async with node.stream(agent_run.ctx) as request_stream:
+                        async for event in request_stream:
+                            if is_native_output:
+                                # The streamed text is the raw JSON envelope, not
+                                # user-facing text - drain without emitting; the
+                                # parsed reply is emitted once at the End node.
+                                continue
+                            is_text_start = isinstance(event, PartStartEvent) and isinstance(
+                                event.part, TextPart
                             )
-            elif Agent.is_end_node(node):
-                if is_native_output:
-                    final_output = node.data.output
-                    if isinstance(final_output, ChatOutput) and final_output.reply:
-                        yield Token(content=final_output.reply)
-                if chat_request.session_id:
-                    try:
-                        await deps.session_store.save_history(
-                            chat_request.session_id,
-                            agent_run.all_messages(),
-                        )
-                    except ValueError as e:
-                        logger.warning(
-                            "Failed to save session history for session %s: %s",
-                            chat_request.session_id,
-                            e,
-                        )
-                        yield Error(message="Failed to save session")
-                        return
-                    except Exception:
-                        logger.error(
-                            "Unexpected error saving session history for session %s",
-                            chat_request.session_id,
-                            exc_info=True,
-                        )
-                        yield Error(message="Failed to save session")
-                        return
-                yield Completed()
+                            if is_text_start and event.part.content:
+                                yield Token(content=event.part.content)
+                            elif (
+                                isinstance(event, PartDeltaEvent)
+                                and isinstance(event.delta, TextPartDelta)
+                                and event.delta.content_delta
+                            ):
+                                yield Token(content=event.delta.content_delta)
+                elif Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as handle_stream:
+                        async for event in handle_stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                yield ToolCalled(
+                                    name=event.part.tool_name,
+                                    args_summary=_summarize_tool_args(event.part.args),
+                                )
+                elif Agent.is_end_node(node):
+                    if is_native_output:
+                        final_output = node.data.output
+                        if isinstance(final_output, ChatOutput) and final_output.reply:
+                            yield Token(content=final_output.reply)
+                    if chat_request.session_id:
+                        try:
+                            await deps.session_store.save_history(
+                                chat_request.session_id,
+                                agent_run.all_messages(),
+                            )
+                        except ValueError as e:
+                            logger.warning(
+                                "Failed to save session history for session %s: %s",
+                                chat_request.session_id,
+                                e,
+                            )
+                            yield Error(message="Failed to save session")
+                            return
+                        except Exception:
+                            logger.error(
+                                "Unexpected error saving session history for session %s",
+                                chat_request.session_id,
+                                exc_info=True,
+                            )
+                            yield Error(message="Failed to save session")
+                            return
+                    yield Completed()
 
 
 _QUEUE_DONE = object()
@@ -255,12 +283,20 @@ async def _run_with_lifecycle_guards(
                     raise asyncio.CancelledError
                 exc = producer.exception()
                 if exc is not None:
-                    logger.error(
-                        "Unexpected error in agent stream",
-                        exc_info=exc,
-                        extra={"message_length": message_length},
-                    )
-                    yield to_sse(Error(message="An unexpected error occurred"))
+                    if isinstance(exc, GuardrailStopError):
+                        logger.warning("Agent stream tool call refused: %s", exc.stop_reason)
+                        yield to_sse(Error(message=f"Tool call refused: {exc.stop_reason}"))
+                    elif isinstance(exc, UsageLimitExceeded):
+                        stop_reason = classify_usage_limit_exceeded(exc)
+                        logger.warning("Agent stream usage limit exceeded: %s", stop_reason)
+                        yield to_sse(Error(message=f"Usage limit exceeded: {stop_reason}"))
+                    else:
+                        logger.error(
+                            "Unexpected error in agent stream",
+                            exc_info=exc,
+                            extra={"message_length": message_length},
+                        )
+                        yield to_sse(Error(message="An unexpected error occurred"))
                 return
             event_count += 1
             yield to_sse(item)  # type: ignore[arg-type]
@@ -306,7 +342,7 @@ async def event_source(
     if chat_request.session_id:
         history = await deps.session_store.get_history(chat_request.session_id)
 
-    agen = _agent_event_stream(chat_agent, chat_request, deps, history)
+    agen = _agent_event_stream(chat_agent, chat_request, deps, history, settings)
     async for wire in _run_with_lifecycle_guards(
         request,
         agen,

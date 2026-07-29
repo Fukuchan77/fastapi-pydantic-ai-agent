@@ -3,6 +3,9 @@
 from pydantic import BaseModel
 from pydantic import Field
 
+from app.agents.guardrails import AuditRecord
+from app.agents.guardrails import StopReason
+
 
 class ChatRequest(BaseModel):
     """Request model for chat endpoint.
@@ -40,4 +43,13 @@ class ChatResponse(BaseModel):
     )
     tool_calls_made: int = Field(
         description="Number of tool calls executed during this conversation turn"
+    )
+    stop_reason: StopReason = Field(
+        default="completed",
+        description="Why the guarded agent run stopped (Req 4.3)",
+    )
+    audit: list[AuditRecord] = Field(
+        default_factory=list,
+        description="Refused, denied, or budget-blocked tool attempts recorded during "
+        "this turn (Req 4.7)",
     )

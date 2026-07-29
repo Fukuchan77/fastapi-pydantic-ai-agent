@@ -13,14 +13,17 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import StreamingResponse
+from pydantic_ai import UsageLimits
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
 
 from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
 from app.agents.deps import get_agent_deps
+from app.agents.guardrails import run_guarded
 from app.api.v1._stream import event_source
 from app.deps.auth import verify_api_key
 from app.models.agent import ChatRequest
@@ -44,9 +47,12 @@ async def chat(
 ) -> ChatResponse:
     """Handle chat requests with the Pydantic AI agent.
 
-    This endpoint loads session history if a session_id is provided,
-    runs the agent with the user's message, saves the updated history,
-    and returns the agent's response.
+    This endpoint loads session history if a session_id is provided, runs the
+    agent with the user's message under `run_guarded` (Req 4.1: native
+    `UsageLimits`; Req 4.4-4.6: tool allow-list/approval/budget checks), saves
+    the updated history on a completed run, and returns the agent's response.
+    The whole request is bounded by `chat_request_timeout` (Req 4.2): a
+    timeout aborts with a 504 rather than hanging indefinitely.
 
     Args:
         request: ChatRequest with message and optional session_id.
@@ -55,7 +61,11 @@ async def chat(
         _: Authentication dependency (validates X-API-Key header).
 
     Returns:
-        ChatResponse with the agent's reply, session_id, and tool call count.
+        ChatResponse with the agent's reply, session_id, tool call count,
+        stop reason, and audit trail.
+
+    Raises:
+        HTTPException: 504 if the request exceeds `chat_request_timeout`.
     """
     # Load session history if session_id provided
     history = []
@@ -64,40 +74,60 @@ async def chat(
 
     # Get the chat agent from app.state
     chat_agent = req.app.state.chat_agent
-
-    # Run the agent with message and history
-    result = await chat_agent.run(
-        request.message,
-        deps=deps,
-        message_history=history,
+    settings = deps.settings
+    limits = UsageLimits(
+        request_limit=settings.usage_request_limit,
+        total_tokens_limit=settings.usage_total_tokens_limit,
     )
 
-    # Save updated message history back to session store
-    if request.session_id:
+    try:
+        guarded = await asyncio.wait_for(
+            run_guarded(
+                chat_agent,
+                request.message,
+                deps=deps,
+                message_history=history,
+                limits=limits,
+                audit=deps.audit,
+            ),
+            timeout=settings.chat_request_timeout,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Chat request timed out") from exc
+
+    # Save updated message history back to session store, only for a
+    # completed turn - a refused/denied/budget-blocked turn has no new
+    # messages to persist and must not overwrite existing history.
+    if request.session_id and guarded.stop_reason == "completed":
         await deps.session_store.save_history(
             request.session_id,
-            result.all_messages(),
+            guarded.messages,
         )
 
-    # Return response
-    # Count tool calls from message history
     # Count ToolCallPart instances in ModelResponse messages
     tool_calls_made = sum(
         1
-        for m in result.all_messages()
+        for m in guarded.messages
         if isinstance(m, ModelResponse)
         for p in m.parts
         if isinstance(p, ToolCallPart)
     )
 
-    # NativeOutput-capable models (Req 10.2) produce a ChatOutput instance;
-    # other models produce plain str (Req 10.3) - see build_chat_agent().
-    reply = result.output.reply if isinstance(result.output, ChatOutput) else str(result.output)
+    if guarded.stop_reason != "completed":
+        reply = f"Request stopped: {guarded.stop_reason}"
+    else:
+        # NativeOutput-capable models (Req 10.2) produce a ChatOutput instance;
+        # other models produce plain str (Req 10.3) - see build_chat_agent().
+        reply = (
+            guarded.output.reply if isinstance(guarded.output, ChatOutput) else str(guarded.output)
+        )
 
     return ChatResponse(
         reply=reply,
         session_id=request.session_id,
         tool_calls_made=tool_calls_made,
+        stop_reason=guarded.stop_reason,
+        audit=guarded.audit,
     )
 
 

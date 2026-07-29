@@ -6,6 +6,7 @@ endpoint's typed SSE contract is covered in tests/e2e/test_agent_stream.py
 and tests/integration/test_agent_stream_event_mapping.py.
 """
 
+import asyncio
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 
 from app.main import app
+from tests.conftest import build_test_settings
 
 
 class TestChatEndpoint:
@@ -64,7 +66,7 @@ class TestChatEndpoint:
             with (
                 patch.object(app.state, "chat_agent", mock_agent, create=True),
                 patch.object(app.state, "http_client", AsyncMock(), create=True),
-                patch.object(app.state, "settings", MagicMock(), create=True),
+                patch.object(app.state, "settings", build_test_settings(), create=True),
                 patch.object(app.state, "session_store", mock_session_store, create=True),
             ):
                 client = TestClient(app)
@@ -80,6 +82,8 @@ class TestChatEndpoint:
                 assert data["reply"] == "Hello! How can I help you?"
                 assert data["session_id"] is None
                 assert data["tool_calls_made"] == 0
+                assert data["stop_reason"] == "completed"
+                assert data["audit"] == []
 
                 # Verify session store was not called since no session_id
                 mock_session_store.save_history.assert_not_called()
@@ -126,7 +130,7 @@ class TestChatEndpoint:
             with (
                 patch.object(app.state, "chat_agent", mock_agent, create=True),
                 patch.object(app.state, "http_client", AsyncMock(), create=True),
-                patch.object(app.state, "settings", MagicMock(), create=True),
+                patch.object(app.state, "settings", build_test_settings(), create=True),
                 patch.object(app.state, "session_store", mock_session_store, create=True),
             ):
                 client = TestClient(app)
@@ -194,7 +198,7 @@ class TestChatEndpoint:
             with (
                 patch.object(app.state, "chat_agent", mock_agent, create=True),
                 patch.object(app.state, "http_client", AsyncMock(), create=True),
-                patch.object(app.state, "settings", MagicMock(), create=True),
+                patch.object(app.state, "settings", build_test_settings(), create=True),
                 patch.object(app.state, "session_store", mock_session_store, create=True),
             ):
                 client = TestClient(app)
@@ -210,4 +214,47 @@ class TestChatEndpoint:
                 # Should count 2 tool-call messages
                 assert data["tool_calls_made"] == 2
 
+    @pytest.mark.asyncio
+    async def test_chat_timeout_returns_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that exceeding chat_request_timeout aborts with a 504 (Req 4.2)."""
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
 
+        async def _slow_run(*args: object, **kwargs: object) -> MagicMock:
+            await asyncio.sleep(1)
+            return MagicMock()
+
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(side_effect=_slow_run)
+
+        mock_session_store = AsyncMock()
+        mock_session_store.get_history = AsyncMock(return_value=[])
+
+        # chat_request_timeout has a ge=5 floor; assigning directly bypasses
+        # that validation to keep this test fast (Settings isn't frozen and
+        # doesn't validate on assignment).
+        settings = build_test_settings()
+        settings.chat_request_timeout = 0.05
+
+        with patch("app.api.v1.agent.get_agent_deps") as mock_get_deps:
+            mock_deps = MagicMock()
+            mock_deps.session_store = mock_session_store
+            mock_get_deps.side_effect = AsyncMock(return_value=mock_deps)
+
+            with (
+                patch.object(app.state, "chat_agent", mock_agent, create=True),
+                patch.object(app.state, "http_client", AsyncMock(), create=True),
+                patch.object(app.state, "settings", settings, create=True),
+                patch.object(app.state, "session_store", mock_session_store, create=True),
+            ):
+                client = TestClient(app)
+
+                response = client.post(
+                    "/v1/agent/chat",
+                    json={"message": "Hi"},
+                    headers={"X-API-Key": "test-api-key-12345"},
+                )
+
+                assert response.status_code == 504
+                mock_session_store.save_history.assert_not_called()

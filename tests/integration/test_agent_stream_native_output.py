@@ -58,7 +58,12 @@ class TestNativeOutputStreamDoesNotLeakJson:
         deps = _build_agent_deps()
         chat_request = ChatRequest(message="Hi")
 
-        events = [e async for e in _agent_event_stream(agent, chat_request, deps, history=[])]
+        events = [
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
+        ]
 
         tokens = [e for e in events if isinstance(e, Token)]
         assert tokens == [Token(content="Hello, world")]
@@ -77,7 +82,12 @@ class TestNativeOutputStreamDoesNotLeakJson:
         deps = _build_agent_deps()
         chat_request = ChatRequest(message="Hi")
 
-        events = [e async for e in _agent_event_stream(agent, chat_request, deps, history=[])]
+        events = [
+            e
+            async for e in _agent_event_stream(
+                agent, chat_request, deps, history=[], settings=deps.settings
+            )
+        ]
 
         tokens = [e for e in events if isinstance(e, Token)]
         assert all('"reply"' not in t.content and "{" not in t.content for t in tokens)
