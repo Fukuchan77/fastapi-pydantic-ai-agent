@@ -2,6 +2,8 @@
 
 import os
 from collections.abc import AsyncIterator
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -15,6 +17,7 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.profiles import ModelProfile
 
 from app.config import Settings
+from tests.support.hermetic import block_network
 
 
 # Some test modules still import the module-level `app.main.app` singleton
@@ -32,6 +35,25 @@ if "LLM_API_KEY" not in os.environ:
     os.environ["LLM_API_KEY"] = "test-llm-key-12345"
 
 from app.main import create_app
+
+
+_UNIT_TESTS_ROOT = Path(__file__).resolve().parent / "unit"
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_unit_network(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Block real network egress for tests under `tests/unit/` (Req 9.1-9.3).
+
+    Scoped to the unit tier only via the test file's own path: integration,
+    e2e, benchmark, and local tests intentionally exercise real stores/
+    providers (Redis, Chroma, Ollama) and must not be blocked.
+    """
+    if _UNIT_TESTS_ROOT not in request.node.path.parents:
+        yield
+        return
+
+    with block_network():
+        yield
 
 
 @pytest.fixture(autouse=True)
