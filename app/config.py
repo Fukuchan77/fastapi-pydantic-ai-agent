@@ -744,6 +744,13 @@ class Settings(BaseSettings):
         default="fastapi-pydantic-ai-agent",
         description="Service name for Logfire traces",
     )
+    log_sensitive_payloads: bool = Field(
+        default=False,
+        description=(
+            "Disable Logfire scrubbing of prompt/tool_input/tool_output payloads "
+            "(for local debugging only; emits an audit warning when enabled)"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_cloud_provider_api_key(self) -> "Settings":

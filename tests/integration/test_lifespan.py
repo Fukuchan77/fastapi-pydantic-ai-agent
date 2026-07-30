@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from logfire import ScrubbingOptions
 from pydantic_ai.models.test import TestModel
 
 from app.config import Settings
@@ -113,6 +114,7 @@ class TestLifespanManagement:
             mock_logfire_configure.assert_called_once_with(
                 token="test-logfire-token",  # noqa: S106
                 service_name="fastapi-pydantic-ai-agent",
+                scrubbing=ScrubbingOptions(extra_patterns=["prompt", "tool_input", "tool_output"]),
             )
             # Verify logfire.instrument_pydantic_ai was called
             mock_instrument_pydantic.assert_called_once()
