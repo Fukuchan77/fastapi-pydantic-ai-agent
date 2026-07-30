@@ -1,0 +1,14 @@
+# Req 12.2: automated dependency updates for the Python dependency tree
+# (managed via uv/uv.lock) and the pinned GitHub Actions used in the CI
+# workflows (Req 1.1's SHA-pinning convention needs a way to stay current).
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

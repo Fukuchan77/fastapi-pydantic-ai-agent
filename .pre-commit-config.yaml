@@ -1,0 +1,17 @@
+# Pre-commit hooks: secret scanning (gitleaks) and dependency vulnerability
+# audit (pip-audit). Req 12.1 (both hooks present), Req 12.4 (gitleaks blocks
+# the commit when it detects a secret in staged changes).
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: pip-audit
+        name: pip-audit (dependency vulnerability audit)
+        entry: mise run audit
+        language: system
+        pass_filenames: false
+        always_run: true
