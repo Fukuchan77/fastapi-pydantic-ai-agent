@@ -38,16 +38,16 @@ description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
 run = "uv run pip-audit"
 
 [tasks.evals]
-description = "Run the offline evals suite (placeholder until task 13.2 implements the real runner)"
-run = "echo 'evals: no-op placeholder (see task 13.2)'"
+description = "Run the offline evals suite against the golden dataset (Req 6.5); pre-push only, never on GitHub Actions"
+run = "uv run python -m evals.runner"
 
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
-run = ["uv run ruff check app/ tests/", "uv run ty check app/"]
+run = ["uv run ruff check app/ evals/ tests/", "uv run ty check app/ evals/"]
 
 [tasks.format]
 description = "Run ruff formatter"
-run = "uv run ruff format app/ tests/"
+run = "uv run ruff format app/ evals/ tests/"
 
 [tasks.build]
 description = "Build Docker image"

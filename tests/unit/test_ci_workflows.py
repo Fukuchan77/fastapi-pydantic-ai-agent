@@ -165,7 +165,8 @@ def test_mise_test_ci_task_covers_only_unit_integration_e2e() -> None:
     assert "--cov=app" in run
 
 
-def test_mise_evals_task_placeholder_exists() -> None:
-    """AC 1.6 (placeholder): `mise run evals` exists as a no-op until task 13.2."""
+def test_mise_evals_task_runs_the_real_runner() -> None:
+    """AC 1.6: `mise run evals` invokes the real golden-set runner (Task 13.2)."""
     config = tomllib.loads(MISE_TOML.read_text())
     assert "evals" in config["tasks"]
+    assert "evals.runner" in config["tasks"]["evals"]["run"]

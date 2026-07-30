@@ -1,0 +1,163 @@
+"""Tests for the two-axis LLM-judge grader (Task 13.1, Req 6.1-6.4)."""
+
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.models.function import FunctionModel
+
+from evals.graders import Axis
+from evals.graders import LLMJudge
+from evals.graders import Rating
+from evals.graders import TwoAxisResult
+from evals.graders import aggregate_ratings
+from evals.graders import grade_case
+
+
+class TestRating:
+    """Req 6.2/6.3: 1-5 or Unknown score, with a required rationale."""
+
+    @pytest.mark.parametrize("score", [1, 2, 3, 4, 5, "Unknown"])
+    def test_accepts_valid_scores(self, score: int | str) -> None:
+        """Every value in the closed 1-5-or-Unknown vocabulary validates."""
+        rating = Rating(score=score, rationale="Because.")
+        assert rating.score == score
+
+    @pytest.mark.parametrize("score", [0, 6, -1, "unknown", "unrated"])
+    def test_rejects_invalid_scores(self, score: object) -> None:
+        """Values outside the closed vocabulary are rejected."""
+        with pytest.raises(ValidationError):
+            Rating(score=score, rationale="Because.")  # type: ignore[arg-type]
+
+    def test_requires_rationale(self) -> None:
+        """A rationale is mandatory for every rating (Req 6.3)."""
+        with pytest.raises(ValidationError):
+            Rating(score=3)  # type: ignore[call-arg]
+
+    def test_rejects_empty_rationale(self) -> None:
+        """An empty-string rationale does not satisfy the "required" contract."""
+        with pytest.raises(ValidationError):
+            Rating(score=3, rationale="")
+
+
+class _RecordingJudge:
+    """A duck-typed `Judge[T]` that records every `grade()` call.
+
+    Deliberately does not inherit from `evals.graders.Judge` - Req 6.4 only
+    requires structural conformance, not a concrete base class.
+    """
+
+    def __init__(self, ratings: dict[Axis, Rating]) -> None:
+        self.ratings = ratings
+        self.calls: list[tuple[Axis, Any, str]] = []
+
+    async def grade(self, axis: Axis, case: Any, agent_output: str) -> Rating:
+        """Record the call and return the pre-configured rating for `axis`."""
+        self.calls.append((axis, case, agent_output))
+        return self.ratings[axis]
+
+
+class TestGradeCase:
+    """Req 6.1/6.4: two-axis grading via an injected judge."""
+
+    @pytest.mark.asyncio
+    async def test_grades_both_axes_via_injected_judge(self) -> None:
+        """Both axes are graded, each with the judge's per-axis rating."""
+        judge = _RecordingJudge(
+            {
+                "outcome": Rating(score=5, rationale="Fully correct."),
+                "behavior": Rating(score=2, rationale="Called an unneeded tool."),
+            }
+        )
+
+        result = await grade_case(judge, case="golden-case-1", agent_output="The answer is 42.")
+
+        assert isinstance(result, TwoAxisResult)
+        assert result.outcome.score == 5
+        assert result.behavior.score == 2
+        assert {call[0] for call in judge.calls} == {"outcome", "behavior"}
+        assert all(call[1] == "golden-case-1" for call in judge.calls)
+        assert all(call[2] == "The answer is 42." for call in judge.calls)
+
+    @pytest.mark.asyncio
+    async def test_accepts_any_structurally_conforming_judge(self) -> None:
+        """A plain object with an async `grade()` method is injectable (Req 6.4)."""
+
+        class MinimalJudge:
+            async def grade(self, axis: Axis, case: Any, agent_output: str) -> Rating:
+                return Rating(score="Unknown", rationale=f"No opinion on {axis}.")
+
+        result = await grade_case(MinimalJudge(), case=object(), agent_output="anything")
+
+        assert result.outcome.score == "Unknown"
+        assert result.behavior.score == "Unknown"
+
+
+class TestAggregateRatings:
+    """Req 6.2: aggregate scores exclude `Unknown` ratings."""
+
+    def test_excludes_unknown_from_average(self) -> None:
+        """`Unknown` ratings are dropped before averaging."""
+        ratings = [
+            Rating(score=4, rationale="Good."),
+            Rating(score="Unknown", rationale="Could not tell."),
+            Rating(score=2, rationale="Missed a detail."),
+        ]
+        assert aggregate_ratings(ratings) == pytest.approx(3.0)
+
+    def test_returns_none_when_every_rating_is_unknown(self) -> None:
+        """An all-`Unknown` sequence aggregates to `None`, not zero."""
+        ratings = [Rating(score="Unknown", rationale="N/A") for _ in range(3)]
+        assert aggregate_ratings(ratings) is None
+
+    def test_returns_none_for_empty_sequence(self) -> None:
+        """No ratings at all also aggregates to `None`."""
+        assert aggregate_ratings([]) is None
+
+    def test_single_numeric_rating(self) -> None:
+        """A single numeric rating aggregates to itself."""
+        assert aggregate_ratings([Rating(score=3, rationale="Adequate.")]) == pytest.approx(3.0)
+
+
+class TestLLMJudge:
+    """The default `Judge[T]` implementation, backed by a pydantic-ai `Agent`."""
+
+    @pytest.mark.asyncio
+    async def test_grade_returns_parsed_rating(self) -> None:
+        """A structured tool-call response is parsed into a `Rating`."""
+
+        def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            tool_name = info.output_tools[0].name
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=tool_name, args={"score": 4, "rationale": "Solid."})]
+            )
+
+        judge: LLMJudge[str] = LLMJudge(FunctionModel(respond))
+
+        rating = await judge.grade("outcome", "some-case", "The agent's answer.")
+
+        assert rating == Rating(score=4, rationale="Solid.")
+
+    @pytest.mark.asyncio
+    async def test_grade_prompt_mentions_the_requested_axis(self) -> None:
+        """The judge's prompt distinguishes outcome grading from behavior grading."""
+        captured_prompts: list[str] = []
+
+        def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            captured_prompts.append(str(messages[-1].parts[-1].content))  # type: ignore[union-attr]
+            tool_name = info.output_tools[0].name
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=tool_name, args={"score": 3, "rationale": "Ok."})]
+            )
+
+        judge: LLMJudge[str] = LLMJudge(FunctionModel(respond))
+
+        await judge.grade("outcome", "case", "output text")
+        await judge.grade("behavior", "case", "output text")
+
+        assert "outcome" in captured_prompts[0].lower()
+        assert "behavior" in captured_prompts[1].lower()

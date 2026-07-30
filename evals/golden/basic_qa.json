@@ -1,0 +1,17 @@
+[
+  {
+    "id": "capital-of-france",
+    "prompt": "What is the capital of France?",
+    "expected": "The answer should state that Paris is the capital of France."
+  },
+  {
+    "id": "arithmetic-addition",
+    "prompt": "What is 12 plus 30?",
+    "expected": "The answer should state the sum is 42."
+  },
+  {
+    "id": "largest-planet",
+    "prompt": "Which planet in our solar system is the largest?",
+    "expected": "The answer should state that Jupiter is the largest planet."
+  }
+]
