@@ -1,6 +1,7 @@
-# Pre-commit hooks: secret scanning (gitleaks) and dependency vulnerability
-# audit (pip-audit). Req 12.1 (both hooks present), Req 12.4 (gitleaks blocks
-# the commit when it detects a secret in staged changes).
+# Pre-commit hooks: secret scanning (gitleaks), dependency vulnerability audit
+# (pip-audit), and a no-hardcoded-model-id guard. Req 12.1 (both hooks
+# present), Req 12.4 (gitleaks blocks the commit when it detects a secret in
+# staged changes), Req 14.2 (no-hardcoded-model-id).
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1
@@ -15,3 +16,15 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      - id: no-hardcoded-model-id
+        name: no hardcoded LLM model id (use Settings, not a literal)
+        # Mirrors tests/unit/test_no_hardcoded_model_ids.py's pattern and its
+        # provider allow-list (app.config._ALLOWED_LLM_PROVIDERS: openai,
+        # anthropic, ollama, groq). Requires an assignment-like context
+        # (`=`/`:` right before the quoted string) so illustrative docstring
+        # mentions like `(e.g., "openai:gpt-4o")` are not false positives.
+        entry: '[:=]\s*"(openai|anthropic|ollama|groq):[A-Za-z0-9_.-]+"'
+        language: pygrep
+        types: [python]
+        files: ^(app|evals)/

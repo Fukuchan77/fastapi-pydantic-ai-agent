@@ -1,6 +1,7 @@
 """Shared pytest fixtures for all tests."""
 
 import os
+import sys
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
 from pathlib import Path
@@ -38,6 +39,54 @@ from app.main import create_app
 
 
 _UNIT_TESTS_ROOT = Path(__file__).resolve().parent / "unit"
+
+
+class LiveTestCountGuard:
+    """Counts tests that actually executed (phase `call`) this session (Req 14.3)."""
+
+    def __init__(self) -> None:
+        """Initialize the guard with a zero call count."""
+        self.call_count = 0
+
+    def record(self, when: str) -> None:
+        """Increment the count when a test report reaches the `call` phase."""
+        if when == "call":
+            self.call_count += 1
+
+    def check(self, expected: int) -> str | None:
+        """Return a failure message if `call_count` != `expected`, else `None`."""
+        if self.call_count != expected:
+            return (
+                f"EXPECT_LIVE_TESTS={expected} but {self.call_count} test(s) actually "
+                "executed (phase=call) - a gated lane may have been silently skipped"
+            )
+        return None
+
+
+_live_test_count_guard = LiveTestCountGuard()
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Feed every test report's phase into the anti-false-green guard (Req 14.3)."""
+    _live_test_count_guard.record(report.when)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail the session when `EXPECT_LIVE_TESTS` was set and the count doesn't match.
+
+    Args:
+        session: The pytest session, whose `exitstatus` this hook may override.
+        exitstatus: The exit status pytest computed before this hook ran (unused
+            here - only inspected via `session.exitstatus` when overriding it).
+    """
+    del exitstatus
+    expected_raw = os.environ.get("EXPECT_LIVE_TESTS")
+    if expected_raw is None:
+        return
+    error = _live_test_count_guard.check(int(expected_raw))
+    if error is not None:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        sys.stderr.write(f"\nEXPECT_LIVE_TESTS guard failed: {error}\n")
 
 
 @pytest.fixture(autouse=True)
