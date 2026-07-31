@@ -1,7 +1,8 @@
 # Pre-commit hooks: secret scanning (gitleaks), dependency vulnerability audit
-# (pip-audit), and a no-hardcoded-model-id guard. Req 12.1 (both hooks
-# present), Req 12.4 (gitleaks blocks the commit when it detects a secret in
-# staged changes), Req 14.2 (no-hardcoded-model-id).
+# (pip-audit), a no-hardcoded-model-id guard, and a real-tool-conventions guard
+# stub. Req 12.1 (both hooks present), Req 12.4 (gitleaks blocks the commit
+# when it detects a secret in staged changes), Req 14.2
+# (no-hardcoded-model-id), Req 15 (real-tool-conventions-guard, deferred).
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1
@@ -28,3 +29,17 @@ repos:
         language: pygrep
         types: [python]
         files: ^(app|evals)/
+
+      - id: real-tool-conventions-guard
+        name: real (non-mock) agent tool detected — review docs/tool-design-conventions.md
+        # Guard stub (Req 15, deferred): inert today because no file under
+        # app/agents/ other than tools_mock.py defines an uncommented
+        # @agent.tool-decorated function. Fires the moment one does, forcing
+        # a conscious review of the naming/pagination/response_format/
+        # lenient-parsing conventions in docs/tool-design-conventions.md
+        # before the commit is allowed through.
+        entry: '^\s*@agent\.tool\b'
+        language: pygrep
+        types: [python]
+        files: ^app/agents/
+        exclude: ^app/agents/(tools_mock|__init__)\.py$
