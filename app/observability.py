@@ -70,6 +70,4 @@ def configure_logfire(settings: Settings) -> None:
         # Always instrument Pydantic AI regardless of token (for local dev)
         logfire.instrument_pydantic_ai()
     except Exception:
-        logger.exception(
-            "Failed to initialize Logfire observability; continuing without it"
-        )
+        logger.exception("Failed to initialize Logfire observability; continuing without it")

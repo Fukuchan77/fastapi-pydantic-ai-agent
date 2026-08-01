@@ -42,6 +42,10 @@ cd fastapi-pydantic-ai-agent
 
 # Install dependencies with uv (via mise)
 mise install
+
+# Install the pre-commit git hook (secret scanning, dependency audit, and
+# repo-specific guards — blocks a commit if gitleaks detects a secret)
+mise run hooks:install
 ```
 
 ### 2. Configure Environment
@@ -372,7 +376,7 @@ The framework is designed for extensibility via Protocol-based interfaces:
 
 ### Custom Vector Store
 
-Implement [`VectorStore`](app/stores/vector_store.py) Protocol:
+Implement [`VectorStore`](app/stores/vector_store/protocol.py) Protocol:
 
 ```python
 from app.stores.vector_store import VectorStore
@@ -388,7 +392,7 @@ app.state.vector_store = ChromaVectorStore()
 
 ### Custom Session Store
 
-Implement [`SessionStore`](app/stores/session_store.py) Protocol:
+Implement [`SessionStore`](app/stores/session_store/protocol.py) Protocol:
 
 ```python
 from app.stores.session_store import SessionStore
@@ -398,6 +402,9 @@ class RedisSessionStore:
     async def get_history(self, session_id: str) -> list[ModelMessage]: ...
     async def save_history(self, session_id: str, messages: list[ModelMessage]) -> None: ...
     async def clear(self, session_id: str) -> None: ...
+    async def cleanup_expired_sessions(self) -> int: ...
+    def generate_session_id(self) -> str: ...
+    async def close(self) -> None: ...
 
 # Replace in app/main.py lifespan
 app.state.session_store = RedisSessionStore()

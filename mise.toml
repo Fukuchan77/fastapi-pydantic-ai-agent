@@ -37,6 +37,10 @@ run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --co
 description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
 run = "uv run pip-audit"
 
+[tasks."hooks:install"]
+description = "Install the pre-commit git hook (gitleaks/pip-audit/model-id/tool-conventions guards, Req 12.4)"
+run = "uv run pre-commit install"
+
 [tasks.evals]
 description = "Run the offline evals suite against the golden dataset (Req 6.5); pre-push only, never on GitHub Actions"
 run = "uv run python -m evals.runner"
