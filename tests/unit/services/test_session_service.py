@@ -98,6 +98,22 @@ async def test_authorize_session_rejects_forged_principal_segment(alice, bob, se
 
 
 @pytest.mark.asyncio
+async def test_authorize_session_rejects_non_ascii_id_with_403_not_500(alice, settings) -> None:
+    """A non-ASCII session_id is rejected with 403, not an unhandled 500.
+
+    `secrets.compare_digest()` raises `TypeError` on a non-ASCII `str` -
+    without an explicit ASCII check first, a malformed non-ASCII session_id
+    would hit that TypeError before either `compare_digest()` call below,
+    turning into an unhandled 500 instead of the 403 this function's
+    contract promises for any malformed id.
+    """
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_session(alice, "a.b.ééé", settings)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_authorize_session_rejects_wrong_signing_key(alice, settings) -> None:
     """A session_id signed with a different signing key is rejected (403)."""
     session_id = await start_session(alice, settings)

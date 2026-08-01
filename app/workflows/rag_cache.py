@@ -187,16 +187,56 @@ class ResultCacheMixin:
                         max_size=self.llm_settings.rag_cache_size,
                     )
 
-                # Resolve future and remove from pending
-                future.set_result(result)
-                del self._pending_futures[cache_key]
-
+            # Resolve future and remove from pending
+            future.set_result(result)
+            self._pending_futures.pop(cache_key, None)
             return result
 
-        except Exception as e:
-            # If workflow fails, reject future and remove from pending
-            async with self._cache_lock:
-                if cache_key in self._pending_futures:
+        except BaseException as e:
+            # Catches both `Exception` (genuine workflow failures) and
+            # `CancelledError` (raised by a timeout via
+            # asyncio.timeout/wait_for, or a client disconnect).
+            # `CancelledError` is a `BaseException`, not an `Exception`, so a
+            # plain `except Exception` never sees it - without this branch,
+            # `future` and its `_pending_futures` entry were left stuck
+            # forever, so every later request for the same query would await
+            # a future nobody would ever resolve, and time out too.
+            #
+            # This block is entirely await-free (no `async with` on
+            # `_cache_lock`), so it cannot itself be interrupted by a second
+            # cancellation and leave the entry orphaned. The dict pop/del
+            # below don't need the lock for the same reason: with no
+            # `await` between the check and the mutation, no other coroutine
+            # can be scheduled in between regardless of whether the lock is
+            # held.
+            if self._pending_futures.get(cache_key) is future:
+                del self._pending_futures[cache_key]
+
+            if not future.done():
+                if isinstance(e, Exception):
+                    # Genuine workflow failure - other requests awaiting
+                    # this future should see the same error, matching the
+                    # pre-existing behavior for non-cancellation failures.
                     future.set_exception(e)
-                    del self._pending_futures[cache_key]
+                else:
+                    # CancelledError (or any other non-Exception
+                    # BaseException): never propagate it as-is to the
+                    # shared future. A follower already awaiting this
+                    # future (thundering-herd de-dup, see the pending-future
+                    # branch above) would otherwise see a CancelledError
+                    # raised out of its OWN `run()` call, which the FastAPI
+                    # route has no chance to map to a response - Starlette
+                    # treats an unhandled CancelledError as a dropped
+                    # connection and sends nothing back at all. A
+                    # TimeoutError instead lets the follower's own
+                    # `asyncio.timeout` block (`app/api/v1/rag.py`) catch it
+                    # and return its normal 504, exactly as if it had run
+                    # the workflow itself and hit its own timeout.
+                    future.set_exception(TimeoutError("RAG leader run was cancelled; retry"))
+                # If no follower ever joined (no one is awaiting `future`),
+                # nothing consumes the exception set above - asyncio logs a
+                # spurious "exception was never retrieved" warning when the
+                # future is garbage-collected. The done-callback consumes it.
+                future.add_done_callback(lambda f: f.exception())
+
             raise

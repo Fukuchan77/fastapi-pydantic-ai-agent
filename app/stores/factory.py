@@ -21,10 +21,10 @@ from app.stores.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-# Reserved identifiers used only to probe connectivity at startup; never persisted
-# past the probe call (the vector-store probe document is cleared immediately).
+# Reserved identifier used only to probe session-store connectivity; a plain
+# read, never persisted. The vector-store probe (`OllamaEmbeddingVectorStore.ping()`)
+# needs no reserved identifier since it never touches the stored corpus.
 _DRY_RUN_SESSION_ID = "dry-run-probe"
-_DRY_RUN_DOCUMENT = "dry-run-probe"
 
 
 class StoreDryRunError(RuntimeError):
@@ -119,7 +119,13 @@ async def _dry_run_redis_session_store(store: RedisSessionStore) -> None:
 
 
 async def _dry_run_ollama_vector_store(store: OllamaEmbeddingVectorStore) -> None:
-    """Probe Ollama connectivity by embedding, then clearing, a probe document.
+    """Probe Ollama connectivity via a single non-destructive embeddings round-trip.
+
+    Uses `store.ping()` rather than `add_documents()` + `clear()`: the latter
+    would wipe the entire live corpus, which is harmless at startup (the
+    corpus is still empty) but destructive if this same probe is reused by a
+    periodic readiness check against a populated store (Req 13.1's
+    `/health/ready` does exactly that).
 
     Args:
         store: The Ollama-backed vector store to probe.
@@ -128,7 +134,6 @@ async def _dry_run_ollama_vector_store(store: OllamaEmbeddingVectorStore) -> Non
         StoreDryRunError: If the embeddings round-trip fails.
     """
     try:
-        await store.add_documents([_DRY_RUN_DOCUMENT])
-        await store.clear()
+        await store.ping()
     except Exception as exc:
         raise StoreDryRunError(f"Ollama vector store dry-run failed: {exc}") from exc

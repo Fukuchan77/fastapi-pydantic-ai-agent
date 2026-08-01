@@ -38,6 +38,85 @@ class LLMCallMixin(PromptBuildingMixin):
     _eval_agent: Agent[None, str]
     _synth_agent: Agent[None, str]
 
+    async def _run_agent_with_retry(
+        self,
+        agent: Agent[None, str],
+        prompt: str,
+        *,
+        op_name: str,
+        fallback: str,
+    ) -> str:
+        """Run an LLM agent with timeout-then-no-retry, transient-then-backoff policy.
+
+        Shared by `_evaluate_relevance` and `_synthesize_answer`, which need the
+        identical retry policy and differ only in the agent, prompt, and the
+        value to fall back to on failure.
+
+        Args:
+            agent: Pre-initialized pydantic-ai agent to run.
+            prompt: Full prompt to send to the agent.
+            op_name: Human-readable operation name for log messages (e.g. "evaluation").
+            fallback: Value returned on timeout, permanent error, or retry exhaustion.
+
+        Returns:
+            str: The agent's stripped output, or `fallback` on failure.
+        """
+        max_retries = self.llm_settings.llm_retry_max_attempts
+        base_delay = self.llm_settings.llm_retry_base_delay
+
+        for attempt in range(max_retries):
+            try:
+                # Wrap agent execution with timeout to prevent indefinite hangs
+                result = await asyncio.wait_for(
+                    agent.run(prompt),
+                    timeout=self.llm_settings.llm_agent_timeout,
+                )
+                return result.output.strip()
+
+            except TimeoutError:
+                # asyncio.TimeoutError indicates the LLM is consistently too slow,
+                # not a transient failure. Return the fallback immediately (no retries).
+                logger.error(
+                    "LLM %s timed out after %ds (attempt %d/%d): LLM is too slow, not retrying",
+                    op_name,
+                    self.llm_settings.llm_agent_timeout,
+                    attempt + 1,
+                    max_retries,
+                )
+                return fallback
+
+            except Exception as e:
+                # Use explicit error classification from RAGWorkflowError
+                is_transient = RAGWorkflowError.is_error_transient(e)
+
+                if attempt < max_retries - 1 and is_transient:
+                    # Exponential backoff with jitter to prevent thundering herd
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+                    logger.warning(
+                        "Transient error in LLM %s (attempt %d/%d), retrying in %.1fs: %s",
+                        op_name,
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Permanent error or max retries exhausted
+                    error_type = "transient" if is_transient else "permanent"
+                    logger.error(
+                        "LLM %s failed after %d attempts (%s error): %s",
+                        op_name,
+                        attempt + 1,
+                        error_type,
+                        e,
+                        exc_info=True,
+                    )
+                    return fallback
+
+        # Fallback (should not reach here: loop always returns within the try/except)
+        return fallback
+
     async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
         """Evaluate relevance of retrieved chunks using LLM.
 
@@ -74,69 +153,25 @@ Respond with exactly one word:
 
 Response:"""
 
-        # Retry logic with exponential backoff for transient errors
-        # Use configurable retry parameters from settings
-        max_retries = self.llm_settings.llm_retry_max_attempts
-        base_delay = self.llm_settings.llm_retry_base_delay
-
-        for attempt in range(max_retries):
-            try:
-                # Run evaluation using pre-initialized agent with timeout
-                # Wrap agent execution with timeout to prevent indefinite hangs
-                result = await asyncio.wait_for(
-                    self._eval_agent.run(prompt),
-                    timeout=self.llm_settings.llm_agent_timeout,
-                )
-                response = result.output.strip().lower()
-
-                # Normalize response
-                if "relevant" in response:
-                    return "relevant"
-                return "insufficient"
-
-            except TimeoutError:
-                # asyncio.TimeoutError indicates the LLM is consistently too slow,
-                # not a transient failure. Return graceful fallback immediately (no retries).
-                logger.error(
-                    "LLM evaluation timed out after %ds (attempt %d/%d): "
-                    "LLM is too slow, not retrying",
-                    self.llm_settings.llm_agent_timeout,
-                    attempt + 1,
-                    max_retries,
-                )
-                return "insufficient"
-
-            except Exception as e:
-                # Use explicit error classification from RAGWorkflowError
-                is_transient = RAGWorkflowError.is_error_transient(e)
-
-                if attempt < max_retries - 1 and is_transient:
-                    # Exponential backoff with jitter for transient errors
-                    # Add jitter to prevent thundering herd
-                    delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
-                    logger.warning(
-                        "Transient error in LLM evaluation (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt + 1,
-                        max_retries,
-                        delay,
-                        e,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    # Permanent error or max retries exhausted
-                    error_type = "transient" if is_transient else "permanent"
-                    logger.error(
-                        "LLM evaluation failed after %d attempts (%s error): %s",
-                        attempt + 1,
-                        error_type,
-                        e,
-                        exc_info=True,
-                    )
-                    # Return "insufficient" as safe fallback (graceful error handling)
-                    return "insufficient"
-
-        # Fallback (should not reach here)
-        return "insufficient"
+        response = await self._run_agent_with_retry(
+            self._eval_agent, prompt, op_name="evaluation", fallback="insufficient"
+        )
+        normalized = response.strip().lower()
+        # The prompt asks for exactly one word, so try an exact match first -
+        # this also protects a genuinely positive verdict that happens to
+        # *mention* a negation word (e.g. "relevant, not irrelevant") from
+        # being misread by the substring fallback below.
+        if normalized in ("relevant", "insufficient"):
+            return normalized
+        # Free-form fallback: "irrelevant" and "not relevant" both contain
+        # the substring "relevant", so a naive `"relevant" in normalized`
+        # misreads the LLM's negative verdict as positive and skips the
+        # widened-retrieval retry that CRAG relies on for grounding - check
+        # negations before the plain substring check below.
+        negations = ("insufficient", "irrelevant", "not relevant")
+        if any(term in normalized for term in negations):
+            return "insufficient"
+        return "relevant" if "relevant" in normalized else "insufficient"
 
     async def _synthesize_answer(self, hits: list[RetrievedHit], query: str) -> str:
         """Synthesize final answer from relevant hits using LLM.
@@ -172,70 +207,10 @@ Response:"""
         )
         prompt += "\n\nAnswer:"
 
-        # Retry logic with exponential backoff for transient errors
-        # Use configurable retry parameters from settings
-        max_retries = self.llm_settings.llm_retry_max_attempts
-        base_delay = self.llm_settings.llm_retry_base_delay
-
-        for attempt in range(max_retries):
-            try:
-                # Generate answer using pre-initialized agent with timeout
-                # Wrap agent execution with timeout to prevent indefinite hangs
-                result = await asyncio.wait_for(
-                    self._synth_agent.run(prompt),
-                    timeout=self.llm_settings.llm_agent_timeout,
-                )
-                return result.output.strip()
-
-            except TimeoutError:
-                # asyncio.TimeoutError indicates the LLM is consistently too slow,
-                # not a transient failure. Return graceful error message immediately (no retries).
-                logger.error(
-                    "LLM synthesis timed out after %ds (attempt %d/%d): "
-                    "LLM is too slow, not retrying",
-                    self.llm_settings.llm_agent_timeout,
-                    attempt + 1,
-                    max_retries,
-                )
-                return (
-                    "I encountered an error while processing your question. "
-                    "Please try again or rephrase your question."
-                )
-
-            except Exception as e:
-                # Use explicit error classification from RAGWorkflowError
-                is_transient = RAGWorkflowError.is_error_transient(e)
-
-                if attempt < max_retries - 1 and is_transient:
-                    # Exponential backoff with jitter for transient errors
-                    # Add jitter to prevent thundering herd
-                    delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
-                    logger.warning(
-                        "Transient error in LLM synthesis (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt + 1,
-                        max_retries,
-                        delay,
-                        e,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    # Permanent error or max retries exhausted
-                    error_type = "transient" if is_transient else "permanent"
-                    logger.error(
-                        "LLM synthesis failed after %d attempts (%s error): %s",
-                        attempt + 1,
-                        error_type,
-                        e,
-                        exc_info=True,
-                    )
-                    # Return graceful error message (graceful error handling)
-                    return (
-                        "I encountered an error while processing your question. "
-                        "Please try again or rephrase your question."
-                    )
-
-        # Fallback (should not reach here)
-        return (
+        fallback = (
             "I encountered an error while processing your question. "
             "Please try again or rephrase your question."
+        )
+        return await self._run_agent_with_retry(
+            self._synth_agent, prompt, op_name="synthesis", fallback=fallback
         )

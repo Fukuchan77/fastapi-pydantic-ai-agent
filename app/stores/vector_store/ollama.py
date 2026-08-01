@@ -189,6 +189,21 @@ class OllamaEmbeddingVectorStore:
         self._documents.clear()
         self._embeddings.clear()
 
+    async def ping(self) -> None:
+        """Probe Ollama connectivity without mutating the stored corpus.
+
+        Calls the embeddings API directly and discards the result, so a
+        connectivity check (startup dry-run or a periodic readiness probe)
+        can never wipe live `add_documents()` data. Callers must not use
+        `add_documents()` + `clear()` as a probe substitute - `clear()`
+        removes the entire corpus, not just a probe document.
+
+        Raises:
+            httpx.HTTPStatusError: If the API request fails.
+            ValueError: If the response is malformed.
+        """
+        await self._embed(["ping"])
+
     async def close(self) -> None:
         """Close the HTTP client if it was created internally.
 

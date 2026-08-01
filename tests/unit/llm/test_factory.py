@@ -15,6 +15,7 @@ from pydantic_ai.profiles import ModelProfile
 
 from app.config import Settings
 from app.llm.factory import build_fallback_model
+from app.llm.factory import settings_for_model_id
 from app.llm.factory import supports_native_output
 
 
@@ -62,6 +63,65 @@ class TestBuildFallbackModel:
             pytest.raises(RuntimeError, match="boom"),
         ):
             build_fallback_model(settings)
+
+    def test_cross_provider_fallback_does_not_inherit_llm_base_url(self) -> None:
+        """A fallback on a different provider must not reuse the primary's base_url.
+
+        `llm_base_url` is provider-specific (e.g. a self-hosted LiteLLM proxy) -
+        carrying it over unmodified would point the fallback's (different-
+        provider) client at the wrong endpoint.
+        """
+        settings = _build_settings(
+            llm_model="ollama:granite3.3",
+            llm_base_url="http://localhost:11434",
+            llm_fallback_models=["anthropic:claude-3-5-sonnet-20241022"],
+        )
+
+        model = build_fallback_model(settings)
+
+        fallback = model.models[1]
+        assert fallback.model_name == "anthropic/claude-3-5-sonnet-20241022"
+        assert fallback.settings is None or "litellm_api_base" not in fallback.settings
+
+    def test_same_provider_fallback_keeps_llm_base_url(self) -> None:
+        """A fallback on the SAME provider as the primary should keep the shared base_url."""
+        settings = _build_settings(
+            llm_model="ollama:granite3.3",
+            llm_base_url="http://localhost:11434",
+            llm_fallback_models=["ollama:llama3.1"],
+        )
+
+        model = build_fallback_model(settings)
+
+        fallback = model.models[1]
+        assert fallback.settings is not None
+        assert fallback.settings["litellm_api_base"] == "http://localhost:11434/"
+
+
+class TestSettingsForModelId:
+    """settings_for_model_id() clears llm_base_url only across a provider change."""
+
+    def test_clears_base_url_when_provider_differs(self) -> None:
+        """A different provider's model_id must not inherit the primary's base_url."""
+        settings = _build_settings(
+            llm_model="ollama:granite3.3", llm_base_url="http://localhost:11434"
+        )
+
+        derived = settings_for_model_id(settings, "anthropic:claude-3-5-sonnet-20241022")
+
+        assert derived.llm_model == "anthropic:claude-3-5-sonnet-20241022"
+        assert derived.llm_base_url is None
+
+    def test_keeps_base_url_when_provider_matches(self) -> None:
+        """A same-provider model_id keeps the shared base_url (e.g. two local Ollama models)."""
+        settings = _build_settings(
+            llm_model="ollama:granite3.3", llm_base_url="http://localhost:11434"
+        )
+
+        derived = settings_for_model_id(settings, "ollama:llama3.1")
+
+        assert derived.llm_model == "ollama:llama3.1"
+        assert str(derived.llm_base_url) == "http://localhost:11434/"
 
 
 class TestSupportsNativeOutput:

@@ -417,6 +417,20 @@ def test_cors_origins_wildcard_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cors_origins == ["*"]
 
 
+def test_cors_origins_rejects_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A string starting with '[' that isn't valid JSON must fail loudly, not silently."""
+    monkeypatch.setenv("API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("LLM_MODEL", "ollama:llama2")
+    monkeypatch.setenv("CORS_ORIGINS", "[https://app.example.com")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="not valid JSON"):
+        Settings()
+
+
+
+
 def test_http_timeout_within_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that http_timeout accepts values up to 120 seconds."""
     monkeypatch.setenv("API_KEY", "test-api-key-12345")

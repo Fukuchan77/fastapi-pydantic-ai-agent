@@ -200,10 +200,16 @@ class LLMSettingsMixin(BaseModel):
             if v_stripped.startswith("["):
                 try:
                     parsed = json.loads(v_stripped)
-                    if isinstance(parsed, list):
-                        return parsed
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"llm_fallback_models looks like a JSON array but is not "
+                        f"valid JSON: {v_stripped!r}"
+                    ) from exc
+                if isinstance(parsed, list):
+                    return parsed
+                raise ValueError(
+                    f"llm_fallback_models JSON value must be an array, got: {v_stripped!r}"
+                )
             if "," in v:
                 return [model_id.strip() for model_id in v.split(",")]
             return [v.strip()]
@@ -224,6 +230,34 @@ class LLMSettingsMixin(BaseModel):
             ValueError: If any entry's format is invalid or provider is not allowed
         """
         return [_validate_provider_model_id(model_id, "llm_fallback_models") for model_id in v]
+
+    judge_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional 'provider:model' identifier for the evals judge (Req 6.4). "
+            "When unset, the judge falls back to llm_model, which grades the "
+            "agent under test with itself and defeats the self-evaluation-bias "
+            "mitigation the Judge[T] protocol exists to provide."
+        ),
+    )
+
+    @field_validator("judge_model")
+    @classmethod
+    def validate_judge_model_format(cls, v: str | None) -> str | None:
+        """Validate judge_model follows 'provider:model' format when set.
+
+        Args:
+            v: The judge_model value to validate
+
+        Returns:
+            str | None: The validated judge_model value, or None
+
+        Raises:
+            ValueError: If set and the format is invalid or provider is not allowed
+        """
+        if v is None:
+            return v
+        return _validate_provider_model_id(v, "judge_model")
 
     max_output_retries: int = Field(
         default=3,
@@ -276,7 +310,18 @@ class LLMSettingsMixin(BaseModel):
         """Validate that cloud providers have llm_api_key set.
 
         Cloud providers (openai, anthropic, groq) require an API key.
-        Local providers (ollama) are exempt from this requirement.
+        Local providers (ollama) are exempt from this requirement. Checks
+        `llm_model` AND every entry of `llm_fallback_models`, since
+        `build_fallback_model()` builds each fallback via `model_copy()`
+        (which does not re-run validators) — an unauthenticated cloud
+        fallback must fail here at startup, not the first time the primary
+        model fails over to it.
+
+        `judge_model` is deliberately NOT checked here: it is read only by
+        `evals/runner.py` (never by the production API), so a misconfigured
+        judge_model must not be able to fail production `uvicorn` startup.
+        `evals/runner._build_judge_model()` performs the equivalent check
+        itself before building the judge's model.
 
         Returns:
             Self: The validated settings instance
@@ -284,17 +329,15 @@ class LLMSettingsMixin(BaseModel):
         Raises:
             ValueError: If a cloud provider is used without llm_api_key
         """
-        # Extract provider from llm_model
-        provider = self.llm_model.split(":", 1)[0]
+        cloud_providers = {p for p in _ALLOWED_LLM_PROVIDERS if p != "ollama"}
 
-        # Define cloud providers that require API key
-        cloud_providers = ["openai", "anthropic", "groq"]
-
-        # Check if this is a cloud provider without an API key
-        if provider in cloud_providers and self.llm_api_key is None:
-            raise ValueError(
-                f"llm_api_key is required when using cloud provider '{provider}'. "
-                f"Please set the LLM_API_KEY environment variable."
-            )
+        for model_id in [self.llm_model, *self.llm_fallback_models]:
+            provider = model_id.split(":", 1)[0]
+            if provider in cloud_providers and self.llm_api_key is None:
+                raise ValueError(
+                    f"llm_api_key is required when using cloud provider '{provider}' "
+                    f"(from model '{model_id}'). Please set the LLM_API_KEY "
+                    f"environment variable."
+                )
 
         return self

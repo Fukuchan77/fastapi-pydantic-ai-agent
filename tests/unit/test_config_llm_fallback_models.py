@@ -72,3 +72,26 @@ def test_llm_fallback_models_normalizes_uppercase_provider() -> None:
     settings = _build_settings(llm_fallback_models=["ANTHROPIC:claude-3-5-sonnet-20241022"])
 
     assert settings.llm_fallback_models == ["anthropic:claude-3-5-sonnet-20241022"]
+
+
+def test_llm_fallback_models_rejects_malformed_json() -> None:
+    """A string starting with '[' that isn't valid JSON must fail loudly, not silently."""
+    with pytest.raises(ValidationError, match="not valid JSON"):
+        _build_settings(llm_fallback_models="[anthropic:claude-3-5-sonnet-20241022")
+
+
+def test_llm_fallback_models_cloud_provider_without_api_key_raises() -> None:
+    """A cloud-provider fallback must be authenticated too, not just llm_model.
+
+    `build_fallback_model()` builds each fallback via `model_copy()`, which
+    does not re-run validators - an unauthenticated cloud fallback must fail
+    at Settings construction (startup), not the first time the primary model
+    fails over to it.
+    """
+    with pytest.raises(ValidationError, match=r"llm_api_key is required.*anthropic"):
+        Settings(
+            api_key="test-api-key-12345",
+            llm_model="ollama:llama3.2",
+            llm_api_key=None,
+            llm_fallback_models=["anthropic:claude-3-5-sonnet-20241022"],
+        )

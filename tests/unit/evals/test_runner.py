@@ -6,6 +6,7 @@ tests never reach a real model or the network (the unit tier's autouse
 """
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,10 @@ from evals.graders import Axis
 from evals.graders import Rating
 from evals.runner import EvalReport
 from evals.runner import GoldenCase
+from evals.runner import _build_judge_model
 from evals.runner import load_golden_cases
 from evals.runner import run_evals
+from tests.conftest import build_test_settings
 
 
 class _StubJudge:
@@ -127,3 +130,71 @@ class TestEvalReportPassed:
         """An axis with nothing numeric to score (`None`) does not fail the run."""
         report = EvalReport(results=[], outcome_aggregate=None, behavior_aggregate=None)
         assert report.passed is True
+
+
+class TestBuildJudgeModel:
+    """Req 6.4: the judge model must be independent of the agent-under-test's model.
+
+    Otherwise the judge grades with itself, defeating self-evaluation-bias mitigation.
+    """
+
+    def test_uses_judge_model_when_configured(self) -> None:
+        """An independent judge_model is used verbatim, not llm_model."""
+        settings = build_test_settings(
+            llm_model="openai:gpt-4",
+            judge_model="anthropic:claude-3-5-sonnet-20241022",
+        )
+        model = _build_judge_model(settings)
+        assert model.model_name == "anthropic/claude-3-5-sonnet-20241022"
+
+    def test_falls_back_to_llm_model_and_warns_when_unconfigured(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Without judge_model, the judge self-evaluates and this is logged loudly."""
+        settings = build_test_settings(llm_model="openai:gpt-4", judge_model=None)
+        with caplog.at_level(logging.WARNING, logger="evals.runner"):
+            model = _build_judge_model(settings)
+        assert model.model_name == "openai/gpt-4"
+        assert any("AUDIT" in record.message for record in caplog.records)
+
+    def test_cross_provider_judge_model_does_not_inherit_llm_base_url(self) -> None:
+        """A judge_model on a different provider must not reuse llm_model's base_url.
+
+        `llm_base_url` is provider-specific (e.g. a self-hosted LiteLLM proxy
+        or Azure OpenAI endpoint) - carrying it over unmodified would point
+        the judge's (different-provider) client at the wrong endpoint.
+        """
+        settings = build_test_settings(
+            llm_model="ollama:granite3.3",
+            llm_base_url="http://localhost:11434",
+            judge_model="anthropic:claude-3-5-sonnet-20241022",
+        )
+        model = _build_judge_model(settings)
+        assert model.model_name == "anthropic/claude-3-5-sonnet-20241022"
+        assert model.settings is None or "litellm_api_base" not in model.settings
+
+    def test_same_provider_judge_model_keeps_llm_base_url(self) -> None:
+        """A judge_model on the SAME provider as llm_model should keep the shared base_url."""
+        settings = build_test_settings(
+            llm_model="ollama:granite3.3",
+            llm_base_url="http://localhost:11434",
+            judge_model="ollama:llama3.1",
+        )
+        model = _build_judge_model(settings)
+        assert model.settings is not None
+        assert model.settings["litellm_api_base"] == "http://localhost:11434/"
+
+    def test_cloud_judge_model_without_llm_api_key_raises(self) -> None:
+        """A cloud judge_model with no llm_api_key must fail loudly, not build unauthenticated.
+
+        This check lives in `_build_judge_model`, not `Settings`, so a
+        misconfigured judge_model (evals-only) can never fail production
+        `uvicorn` startup (which never reads judge_model).
+        """
+        settings = build_test_settings(
+            llm_model="ollama:granite3.3",
+            llm_api_key=None,
+            judge_model="anthropic:claude-3-5-sonnet-20241022",
+        )
+        with pytest.raises(ValueError, match=r"(?i)llm_api_key.*anthropic"):
+            _build_judge_model(settings)

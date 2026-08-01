@@ -102,9 +102,14 @@ class InMemorySessionStore:
         """
         self._validate_session_id(session_id)
         self._validate_messages(messages)
-        # Update last access time
-        self._last_access[session_id] = time.time()
         async with self._locks.setdefault(session_id, asyncio.Lock()):
+            # Update last access time inside the lock, same as get_history: a
+            # concurrent clear()/cleanup_expired_sessions() holding this lock
+            # could otherwise pop _store+_last_access between an unlocked
+            # _last_access write and the lock acquisition below, leaving a
+            # _store entry with no _last_access entry — invisible to both LRU
+            # eviction and TTL cleanup (permanent leak).
+            self._last_access[session_id] = time.time()
             self._store[session_id] = list(messages)
 
         # Perform LRU eviction AFTER releasing current session lock
@@ -250,3 +255,11 @@ class InMemorySessionStore:
             (e.g., "550e8400-e29b-41d4-a716-446655440000").
         """
         return str(uuid.uuid4())
+
+    async def close(self) -> None:
+        """Close the session store and release any resources.
+
+        InMemorySessionStore doesn't hold external resources, so this is a no-op.
+        Implements the SessionStore Protocol interface for consistency.
+        """
+        pass

@@ -120,3 +120,54 @@ class TestLockCleanupRaceCondition:
         # Note: Lock may or may not exist depending on timing - get_history()
         # might create a new lock after clear() completes. This is OK and doesn't
         # indicate a bug. The important thing is no deadlock or corruption occurred.
+
+
+class TestSaveHistoryClearRaceCondition:
+    """Test that a concurrent clear() can't orphan save_history's _last_access write.
+
+    save_history() is blocked on the per-session lock while clear() holds it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_save_history_last_access_survives_concurrent_clear(self):
+        """A concurrent clear() must never leave a _store entry with no matching entry.
+
+        Issue: save_history() used to write `_last_access[session_id]`
+        *before* acquiring the per-session lock. If something else (e.g.
+        clear()) already held that lock at that moment, clear() could pop
+        both _store and _last_access, release the lock, and then
+        save_history() would resume and write only _store — leaving an
+        orphaned entry invisible to both LRU eviction and
+        cleanup_expired_sessions() (both iterate _last_access), i.e. a
+        permanent leak that also never expires.
+
+        Fix: _last_access is now written inside the same lock acquisition as
+        the _store write, so the two can never be split by a concurrent
+        clear().
+        """
+        store = InMemorySessionStore()
+        msg = ModelRequest(parts=[UserPromptPart(content="test")])
+        session_id = "session1"
+
+        # Simulate clear() already holding the per-session lock when
+        # save_history() is invoked.
+        lock = store._locks.setdefault(session_id, asyncio.Lock())
+        await lock.acquire()
+
+        save_task = asyncio.create_task(store.save_history(session_id, [msg]))
+        await asyncio.sleep(0.001)  # let save_history block on lock acquisition
+
+        # Perform what clear() does while holding the lock, then release —
+        # racing ahead of save_history's still-pending lock acquisition.
+        store._store.pop(session_id, None)
+        store._last_access.pop(session_id, None)
+        lock.release()
+
+        await save_task
+
+        assert session_id in store._store
+        assert session_id in store._last_access, (
+            "_store has an entry with no matching _last_access entry — "
+            "orphaned by the concurrent clear(), invisible to LRU eviction "
+            "and TTL cleanup"
+        )

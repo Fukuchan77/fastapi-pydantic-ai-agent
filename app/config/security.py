@@ -197,10 +197,14 @@ class SecuritySettingsMixin(BaseModel):
             if v_stripped.startswith("["):
                 try:
                     parsed = json.loads(v_stripped)
-                    if isinstance(parsed, list):
-                        return parsed
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"cors_origins looks like a JSON array but is not valid "
+                        f"JSON: {v_stripped!r}"
+                    ) from exc
+                if isinstance(parsed, list):
+                    return parsed
+                raise ValueError(f"cors_origins JSON value must be an array, got: {v_stripped!r}")
             # Parse as comma-separated string
             if "," in v:
                 return [origin.strip() for origin in v.split(",")]

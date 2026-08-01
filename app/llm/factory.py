@@ -13,6 +13,39 @@ from pydantic_ai.models.fallback import FallbackModel
 from app.config import Settings
 
 
+def settings_for_model_id(settings: Settings, model_id: str) -> Settings:
+    """Return a `settings` copy for building a *different* model than `llm_model`.
+
+    Shared by `build_fallback_model()` (each fallback) and
+    `evals.runner._build_judge_model()` (an independent judge model):
+    both build a model other than `settings.llm_model` via
+    `settings.model_copy(update={"llm_model": ...})`, which does not
+    re-run validators.
+
+    `llm_base_url` is provider-specific (e.g. an Azure OpenAI endpoint or a
+    self-hosted LiteLLM proxy) — carrying it over unmodified when `model_id`
+    names a *different* provider than `settings.llm_model` would silently
+    point that provider's client at the wrong endpoint. It is preserved only
+    when both share the same provider (e.g. two Ollama models against the
+    same local server).
+
+    Args:
+        settings: The base settings, providing `llm_model`/`llm_base_url`.
+        model_id: The "provider:model" identifier to build instead.
+
+    Returns:
+        Settings: A copy with `llm_model` set to `model_id`, and
+        `llm_base_url` cleared if `model_id`'s provider differs from
+        `settings.llm_model`'s.
+    """
+    primary_provider = settings.llm_model.split(":", 1)[0]
+    target_provider = model_id.split(":", 1)[0]
+    updates: dict[str, object] = {"llm_model": model_id}
+    if target_provider != primary_provider:
+        updates["llm_base_url"] = None
+    return settings.model_copy(update=updates)
+
+
 def build_fallback_model(settings: Settings) -> FallbackModel:
     """Build a `FallbackModel` chain from `llm_model` + `llm_fallback_models`.
 
@@ -34,7 +67,7 @@ def build_fallback_model(settings: Settings) -> FallbackModel:
 
     default_model = build_model(settings)
     fallback_models: list[Model] = [
-        build_model(settings.model_copy(update={"llm_model": model_id}))
+        build_model(settings_for_model_id(settings, model_id))
         for model_id in settings.llm_fallback_models
     ]
     return FallbackModel(default_model, *fallback_models)

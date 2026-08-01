@@ -33,9 +33,7 @@ async def test_passes_through_immediately_available_values() -> None:
 @pytest.mark.asyncio
 async def test_emits_heartbeat_while_idle_then_the_delayed_value() -> None:
     """A slow upstream value is preceded by heartbeat comments, not lost or duplicated."""
-    wires = [
-        w async for w in _with_heartbeat(_slow_then_value(0.25, "late"), interval=0.1)
-    ]
+    wires = [w async for w in _with_heartbeat(_slow_then_value(0.25, "late"), interval=0.1)]
 
     assert wires[-1] == "late"
     heartbeats = [w for w in wires[:-1]]

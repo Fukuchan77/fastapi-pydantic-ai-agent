@@ -15,12 +15,15 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel
+from pydantic_ai.models import Model
 
 from app.agents.chat_agent import ChatOutput
 from app.agents.chat_agent import build_chat_agent
 from app.agents.chat_agent import build_model
 from app.agents.deps import AgentDeps
+from app.config import Settings
 from app.config import get_settings
+from app.llm.factory import settings_for_model_id
 from app.stores.session_store import InMemorySessionStore
 from evals.graders import Judge
 from evals.graders import LLMJudge
@@ -154,6 +157,54 @@ def _log_report(report: EvalReport) -> None:
     logger.info("evals %s", "PASSED" if report.passed else "FAILED")
 
 
+_CLOUD_PROVIDERS = {"openai", "anthropic", "groq"}
+"""Providers that require `llm_api_key`; mirrors `app/config/llm.py`'s check.
+
+Kept here rather than in `Settings.validate_cloud_provider_api_key()`: that
+validator runs on every `Settings()` construction, including production
+`uvicorn` startup, which never reads `judge_model` - an evals-only
+misconfiguration (a cloud `JUDGE_MODEL` without `LLM_API_KEY`) should not be
+able to fail the production API's startup.
+"""
+
+
+def _build_judge_model(settings: Settings) -> Model:
+    """Build the judge's model, independent of the agent-under-test's when configured.
+
+    Args:
+        settings: Application settings; `judge_model` selects the judge's
+            model, mirroring how `build_fallback_model()` builds each
+            fallback via `model_copy()` (Req 6.4).
+
+    Returns:
+        Model: The judge's model - a distinct one when `judge_model` is set,
+        otherwise `llm_model` again (self-evaluation, logged loudly below).
+
+    Raises:
+        ValueError: If `judge_model` names a cloud provider and
+            `llm_api_key` is unset (there is only one configured LLM API
+            key, shared by `llm_model`/`llm_fallback_models`/`judge_model`).
+    """
+    if settings.judge_model is None:
+        logger.warning(
+            "AUDIT: judge_model is not configured - the evals judge will grade "
+            "the agent under test with its own model (%s). This defeats the "
+            "self-evaluation-bias mitigation Judge[T] exists to provide; set "
+            "JUDGE_MODEL to an independent 'provider:model' to fix.",
+            settings.llm_model,
+        )
+        return build_model(settings)
+
+    judge_provider = settings.judge_model.split(":", 1)[0]
+    if judge_provider in _CLOUD_PROVIDERS and settings.llm_api_key is None:
+        raise ValueError(
+            f"llm_api_key is required when using cloud provider '{judge_provider}' "
+            f"(from judge_model '{settings.judge_model}'). Please set the "
+            f"LLM_API_KEY environment variable."
+        )
+    return build_model(settings_for_model_id(settings, settings.judge_model))
+
+
 async def _run_against_live_agent() -> EvalReport:
     """Build the real agent-under-test and judge from settings, then run.
 
@@ -163,7 +214,7 @@ async def _run_against_live_agent() -> EvalReport:
     """
     settings = get_settings()
     agent = build_chat_agent(settings=settings)
-    judge = LLMJudge[GoldenCase](build_model(settings))
+    judge = LLMJudge[GoldenCase](_build_judge_model(settings))
     cases = load_golden_cases()
 
     async with httpx.AsyncClient() as http_client:

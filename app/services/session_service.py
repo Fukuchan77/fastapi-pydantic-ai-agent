@@ -79,6 +79,13 @@ async def authorize_session(principal: Principal, session_id: str, settings: Set
         HTTPException: 403 if `session_id` is malformed, has an invalid
             signature, or belongs to a different principal.
     """
+    # secrets.compare_digest() raises TypeError on a non-ASCII str (it only
+    # accepts ASCII str or bytes), which would otherwise turn a malformed,
+    # non-ASCII session_id into an unhandled 500 instead of the 403 this
+    # function's contract promises for any malformed id.
+    if not session_id.isascii():
+        raise _forbidden()
+
     parts = session_id.split(".")
     if len(parts) != _SESSION_ID_PARTS:
         raise _forbidden()

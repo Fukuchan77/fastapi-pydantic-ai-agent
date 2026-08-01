@@ -93,10 +93,7 @@ async def test_stops_when_client_disconnected() -> None:
     agen = _TrackingAsyncGen(_events(Token(content="never seen")))
 
     wires = [
-        w
-        async for w in _run_with_lifecycle_guards(
-            _FakeRequest(disconnected=True), agen, settings
-        )
+        w async for w in _run_with_lifecycle_guards(_FakeRequest(disconnected=True), agen, settings)
     ]
 
     assert wires == []
@@ -107,9 +104,7 @@ async def test_stops_when_client_disconnected() -> None:
 async def test_stops_producing_further_events_at_sse_max_events_cap() -> None:
     """Once sse_max_events is reached, the stream stops even if more events remain."""
     settings = build_test_settings(sse_max_events=2)
-    agen = _TrackingAsyncGen(
-        _events(Token(content="a"), Token(content="b"), Token(content="c"))
-    )
+    agen = _TrackingAsyncGen(_events(Token(content="a"), Token(content="b"), Token(content="c")))
 
     wires = [w async for w in _run_with_lifecycle_guards(_FakeRequest(), agen, settings)]
 

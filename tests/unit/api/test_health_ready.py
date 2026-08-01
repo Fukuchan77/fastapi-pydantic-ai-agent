@@ -214,9 +214,7 @@ async def test_readiness_check_llm_provider_healthy() -> None:
     """A reachable LLM provider reports 'healthy'."""
     from app.api.health import readiness_check
 
-    mock_request = _mock_request(
-        InMemorySessionStore(), InMemoryVectorStore(), TestModel()
-    )
+    mock_request = _mock_request(InMemorySessionStore(), InMemoryVectorStore(), TestModel())
 
     response = await readiness_check(mock_request)
     body = json.loads(response.body)

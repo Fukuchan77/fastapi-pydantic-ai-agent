@@ -68,3 +68,12 @@ class SessionStore(Protocol):
             (e.g., "550e8400-e29b-41d4-a716-446655440000").
         """
         ...
+
+    async def close(self) -> None:
+        """Release any resources held by the store (e.g. a connection pool).
+
+        Called during application shutdown. Implementations with no external
+        resources (e.g. in-memory) provide a no-op, matching the `VectorStore`
+        Protocol's `close()` convention.
+        """
+        ...

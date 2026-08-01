@@ -5,6 +5,8 @@ import logging
 import random
 import sys
 from collections.abc import AsyncIterator
+from collections.abc import Awaitable
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -43,6 +45,26 @@ logger = logging.getLogger(__name__)
 # Even if session_ttl is very short (e.g., 60 seconds in tests), the cleanup
 # interval should not be less than this value.
 CLEANUP_INTERVAL_MIN: int = 300  # seconds (5 minutes)
+
+
+async def _close_quietly(name: str, close: Callable[[], Awaitable[None]]) -> None:
+    """Await `close()`, logging (not raising) on failure.
+
+    Used for each independent shutdown step in `lifespan` so a failure
+    closing one resource (e.g. a Redis connection error) can never skip
+    closing the ones after it - shutdown should always attempt every step.
+    Logged at `error`, not `warning`: a close failure here means a leaked
+    connection/pool, which should be visible to alerting.
+
+    Args:
+        name: Human-readable resource name, for the log message.
+        close: Zero-argument callable returning the awaitable to close it.
+    """
+    try:
+        await close()
+        logger.info("Closed %s", name)
+    except Exception:
+        logger.error("Error closing %s during shutdown", name, exc_info=True)
 
 
 class RetryTransport(httpx.AsyncHTTPTransport):
@@ -343,15 +365,17 @@ def create_app(
             except asyncio.CancelledError:
                 logger.info("Session cleanup task successfully cancelled")
 
-        # Close vector store if it has a close() method (e.g., OllamaEmbeddingVectorStore)
-        if hasattr(app.state, "vector_store") and hasattr(app.state.vector_store, "close"):
-            await app.state.vector_store.close()
-            logger.info("Closed vector store")
+        # Each store/client is closed independently via _close_quietly(), so
+        # a failure in one (e.g. a Redis connection error) can never skip
+        # closing the ones after it.
+        if hasattr(app.state, "vector_store"):
+            await _close_quietly("vector store", app.state.vector_store.close)
 
-        # Close HTTP client during shutdown
+        if hasattr(app.state, "session_store"):
+            await _close_quietly("session store", app.state.session_store.close)
+
         if hasattr(app.state, "http_client"):
-            await app.state.http_client.aclose()
-            logger.info("Closed HTTP client")
+            await _close_quietly("HTTP client", app.state.http_client.aclose)
 
     app = FastAPI(
         title="FastAPI Pydantic AI Agent",

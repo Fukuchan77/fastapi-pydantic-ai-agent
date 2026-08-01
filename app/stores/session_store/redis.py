@@ -182,5 +182,7 @@ class RedisSessionStore:
         """Close the Redis connection.
 
         Should be called during application shutdown to properly clean up resources.
+        Uses `aclose()`, not the deprecated `close()` alias (removed in a
+        future redis-py major version).
         """
-        await self._redis.close()
+        await self._redis.aclose()

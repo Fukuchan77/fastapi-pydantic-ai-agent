@@ -106,6 +106,42 @@ def _hermetic_unit_network(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _no_dotenv_leak_into_unit_settings(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prevent a developer's local .env from leaking into unit-tier Settings() calls.
+
+    Several unit tests instantiate `Settings(...)` directly with only some
+    fields overridden (not via `build_test_settings()`, which passes every
+    field explicitly and so is unaffected either way). Without this fixture,
+    any unset field silently falls back to whatever a developer's local
+    `.env` supplies, via two independent paths that both need blocking:
+
+    1. `uv run` itself auto-loads a project-root `.env` into the *process
+       environment* before Python even starts (see `uv run --help`'s
+       `--env-file`/`--no-env-file`) - a real `os.environ` entry always wins
+       over pydantic-settings' own dotenv source, so disabling that source
+       alone would not stop this path. Deleting every Settings field's
+       default env var name (`FIELD_NAME.upper()`; no field here uses a
+       custom `alias`) from `os.environ` blocks it.
+    2. `Settings.model_config["env_file"] = ".env"` (`app/config/settings.py`)
+       is pydantic-settings' *own* dotenv reader, independent of (1) - it
+       parses the file directly rather than going through `os.environ`, so
+       even a fully clean environment would still leak through it.
+
+    Scoped to the unit tier only, matching `_hermetic_unit_network`'s
+    scoping, since integration/e2e tests build their settings the same
+    explicit way regardless.
+    """
+    if _UNIT_TESTS_ROOT not in request.node.path.parents:
+        return
+
+    for field_name in Settings.model_fields:
+        monkeypatch.delenv(field_name.upper(), raising=False)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)  # type: ignore[arg-type]
+
+
+@pytest.fixture(autouse=True)
 def clear_settings_cache():
     """Clear get_settings cache after each test to prevent pollution.
 
