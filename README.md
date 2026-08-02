@@ -214,7 +214,7 @@ curl -X POST http://localhost:8000/v1/agent/stream \
 ```
 
 Unlike `/v1/agent/chat`, this endpoint has no response field to mint and
-return a *new* `session_id` - only present one already issued by
+return a _new_ `session_id` - only present one already issued by
 `/v1/agent/chat` (a foreign `session_id` is rejected with `403`); omit it for
 a stateless, single-turn stream.
 

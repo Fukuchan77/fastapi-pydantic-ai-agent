@@ -58,7 +58,9 @@ def _wait_for_health(port: int, timeout: int = _STARTUP_TIMEOUT) -> None:
             r = httpx.get(f"http://localhost:{port}/health", timeout=2.0)
             if r.status_code == 200:
                 return
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except httpx.TransportError as e:
+            # Covers ConnectError/TimeoutException (not up yet) and
+            # RemoteProtocolError (container crashed mid-startup).
             last_error = e
         time.sleep(1)
     raise RuntimeError(
@@ -87,7 +89,9 @@ def _start_container(image_name: str, host_port: int) -> str:
             "-p",
             f"{host_port}:8000",
             "-e",
-            "API_KEY=test-docker-key",
+            "API_KEY=test-docker-key-1234567890",
+            "-e",
+            "SESSION_SIGNING_KEY=test-session-signing-key-1234567890",
             "-e",
             "LLM_MODEL=openai:gpt-4o",
             "-e",
@@ -235,7 +239,7 @@ def test_container_health_endpoint_responds(running_container: str, container_po
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "healthy"
+    assert data["status"] == "ok"
 
 
 def test_environment_variables_injected(running_container: str) -> None:
@@ -251,7 +255,7 @@ def test_environment_variables_injected(running_container: str) -> None:
     )
 
     assert result.returncode == 0
-    assert result.stdout.strip() == "test-docker-key"
+    assert result.stdout.strip() == "test-docker-key-1234567890"
 
 
 def test_virtual_environment_in_path(running_container: str) -> None:

@@ -11,6 +11,11 @@ FROM python:3.13-slim AS builder
 # Install uv package manager
 RUN pip install --no-cache-dir uv
 
+# Install build toolchain: chroma-hnswlib has no prebuilt wheel for some
+# platforms (e.g. linux/arm64) and compiles a C++ extension from sdist.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory for build
 WORKDIR /app
 
