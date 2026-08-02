@@ -1,11 +1,15 @@
 """Integration tests: `query_with_scores` on a real `ChromaVectorStore` (Req 3.3, 3.8).
 
-Uses a real Chroma in-memory client and the cached sentence-transformers
-embedding model (no network calls once the model is cached locally) - matching
-`mise run test:integration`'s "real stores" tier, per the precedent in
-`tests/integration/test_store_dry_run_startup.py` for real store construction.
-Each test uses a unique collection name to avoid cross-test pollution from
-Chroma's shared in-memory client.
+Uses a real Chroma in-memory client and the sentence-transformers embedding
+model - matching `mise run test:integration`'s "real stores" tier, per the
+precedent in `tests/integration/test_store_dry_run_startup.py` for real store
+construction. Each test uses a unique collection name to avoid cross-test
+pollution from Chroma's shared in-memory client.
+
+Gated behind `RUN_CHROMA_INTEGRATION_TESTS` (Req 13.3-13.5): the model is
+fetched from Hugging Face on first use, so this module must not run in the
+default blocking lanes on an offline or proxied machine merely because the
+model happens to be cached locally already.
 """
 
 import uuid
@@ -14,6 +18,14 @@ import pytest
 
 from app.models.rag import RetrievedHit
 from app.stores.vector_store import ChromaVectorStore
+from tests.support.chroma import CHROMA_SKIP_REASON
+from tests.support.chroma import chroma_integration_tests_enabled
+
+
+pytestmark = [
+    pytest.mark.chroma,
+    pytest.mark.skipif(not chroma_integration_tests_enabled(), reason=CHROMA_SKIP_REASON),
+]
 
 
 def _unique_collection_name() -> str:

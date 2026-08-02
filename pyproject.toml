@@ -102,6 +102,7 @@ markers = [
     "docker: marks tests that require Docker to be installed and available (skip in local dev, run in CI)",
     "benchmark: marks performance benchmark tests that measure latency, throughput, and cache hit rates",
     "ollama: requires running Ollama instance",
+    "chroma: requires RUN_CHROMA_INTEGRATION_TESTS opt-in (downloads a Hugging Face embedding model)",
 ]
 
 # ============================================================================
