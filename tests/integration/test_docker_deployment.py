@@ -10,7 +10,6 @@ Note: These tests require Docker to be installed and available.
 They will be skipped if Docker is not found in the system PATH.
 """
 
-import shutil
 import socket
 import subprocess
 import time
@@ -20,10 +19,14 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.docker import probe_docker_daemon
 
-# Check if Docker is available
-DOCKER_AVAILABLE = shutil.which("docker") is not None
-SKIP_REASON = "Docker not available - these tests run in CI with Docker"
+
+# Probe daemon reachability, not just CLI presence on PATH (Req 13.8, 13.9):
+# a machine with the CLI installed but no running daemon (e.g. Docker
+# Desktop/Rancher Desktop present but not started) must skip cleanly rather
+# than a real `docker build` call erroring out.
+DOCKER_AVAILABLE, SKIP_REASON = probe_docker_daemon()
 
 # Mark all tests in this module to require Docker
 pytestmark = [
