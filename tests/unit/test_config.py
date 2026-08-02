@@ -429,8 +429,6 @@ def test_cors_origins_rejects_malformed_json(monkeypatch: pytest.MonkeyPatch) ->
         Settings()
 
 
-
-
 def test_http_timeout_within_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that http_timeout accepts values up to 120 seconds."""
     monkeypatch.setenv("API_KEY", "test-api-key-12345")

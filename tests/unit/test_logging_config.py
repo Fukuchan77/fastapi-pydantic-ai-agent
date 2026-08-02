@@ -52,6 +52,8 @@ def test_configure_logging_with_production_env(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
     monkeypatch.setenv("LLM_API_KEY", "test-llm-key-1234567890")
     monkeypatch.setenv("APP_ENV", "production")
+    # Production forbids a wildcard host allow-list; unrelated to logging.
+    monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 
     settings = Settings()
 
@@ -75,6 +77,8 @@ def test_configure_logging_with_staging_env(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
     monkeypatch.setenv("LLM_API_KEY", "test-llm-key-1234567890")
     monkeypatch.setenv("APP_ENV", "staging")
+    # Non-development also forbids a wildcard host allow-list; unrelated to logging.
+    monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 
     settings = Settings()
 

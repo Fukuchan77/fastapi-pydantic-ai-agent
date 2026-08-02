@@ -265,6 +265,27 @@ class TestBuildChatAgent:
             # This is validated at type-check time, so just verify agent exists
             assert agent is not None
 
+    def test_build_chat_agent_wires_max_output_retries_onto_the_agent(self) -> None:
+        """settings.max_output_retries must actually reach the constructed Agent.
+
+        `build_chat_agent` passes `retries={"output": settings.max_output_retries}`
+        rather than the deprecated `output_retries=` kwarg (pydantic-ai 1.x); this
+        pins that the value survives the mapping form, not just that construction
+        doesn't raise. `_max_output_retries` is pydantic-ai's only place this
+        setting is observable post-construction - there is no public accessor.
+        """
+        with patch("app.agents.chat_agent.get_settings") as mock_settings:
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+                max_output_retries=7,
+            )
+
+            agent = build_chat_agent(model=TestModel())
+
+            assert agent._max_output_retries == 7
+
     def test_build_chat_agent_has_tools(self) -> None:
         """build_chat_agent should have tools available."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:

@@ -108,7 +108,13 @@ class ResultCacheMixin:
         # Check if caching is disabled (ttl=0)
         if self.llm_settings.rag_cache_ttl == 0:
             # Cache disabled, execute workflow directly
-            result = await super().run(query=query, max_retries=max_retries)  # type: ignore[misc]
+            # `super().run()` resolves to `Workflow.run` only at the composition
+            # site (`CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin,
+            # Workflow)`); `ResultCacheMixin` itself doesn't inherit `Workflow`; a
+            # sibling can't be declared without inheriting it directly, which
+            # would break the mixin split. Tracked as design debt (Protocol-typed
+            # mixin bases), not fixed here.
+            result = await super().run(query=query, max_retries=max_retries)  # ty: ignore[unresolved-attribute]
             return result
 
         # Generate cache key
@@ -165,7 +171,13 @@ class ResultCacheMixin:
         # Execute workflow OUTSIDE the lock to allow concurrent workflow execution
         # Only cache operations need to be protected, not the actual LLM calls
         try:
-            result = await super().run(query=query, max_retries=max_retries)  # type: ignore[misc]
+            # `super().run()` resolves to `Workflow.run` only at the composition
+            # site (`CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin,
+            # Workflow)`); `ResultCacheMixin` itself doesn't inherit `Workflow`; a
+            # sibling can't be declared without inheriting it directly, which
+            # would break the mixin split. Tracked as design debt (Protocol-typed
+            # mixin bases), not fixed here.
+            result = await super().run(query=query, max_retries=max_retries)  # ty: ignore[unresolved-attribute]
 
             # Verify result from workflow is a dict before caching
             if not isinstance(result, dict):

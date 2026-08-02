@@ -18,6 +18,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from pydantic_ai.models import Model
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agents.chat_agent import build_chat_agent
 from app.api.health import router as health_router
@@ -444,6 +445,26 @@ def create_app(
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+    )
+
+    # Add host validation LAST so it executes FIRST, ahead of even CORS.
+    #
+    # Starlette's router rebuilds redirect targets from the request's Host header
+    # and `redirect_slashes` defaults to True, so without this middleware a
+    # request to any path with a trailing slash (including unauthenticated
+    # `/health/`) returns a 307 whose Location points at a caller-supplied host.
+    # Rejecting an untrusted Host before any other middleware runs keeps that
+    # reflection - and every other Host-derived URL reconstruction - unreachable.
+    # `www_redirect` is off: its only job is bouncing `example.com` to an
+    # allow-listed `www.example.com`, and it does so by rebuilding the URL from
+    # the request scope. This is an API with no www hostname convention, so a
+    # rejected host gets a flat 400 and no Host-derived Location is ever emitted.
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=resolved_settings.allowed_hosts
+        if isinstance(resolved_settings.allowed_hosts, list)
+        else [resolved_settings.allowed_hosts],
+        www_redirect=False,
     )
 
     # Instrument FastAPI with Logfire for HTTP tracing

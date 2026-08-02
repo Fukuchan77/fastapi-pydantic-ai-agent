@@ -41,8 +41,14 @@ from app.workflows.state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
-class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):
+class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ignore[invalid-method-override]
     """Corrective RAG workflow with retry logic and result caching.
+
+    `ResultCacheMixin.run`'s signature is deliberately incompatible with
+    `Workflow.run`'s at the type level (see `rag_cache.py`'s `super().run()`
+    sites) - the mixin overrides `run` to interpose caching, not to satisfy
+    `Workflow`'s own contract independently of this composition. Tracked as
+    design debt (Protocol-typed mixin bases), not fixed here.
 
     This workflow implements Corrective RAG: after retrieval, an evaluation
     step assesses relevance. If results are insufficient and retries remain,

@@ -18,6 +18,7 @@ from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
 from collections.abc import Sequence
 from typing import Protocol
+from typing import cast
 from typing import runtime_checkable
 
 from fastapi import Request
@@ -139,7 +140,12 @@ async def _agent_event_stream(
             async for node in agent_run:
                 if Agent.is_model_request_node(node):
                     yield StepStarted()
-                    async with node.stream(agent_run.ctx) as request_stream:
+                    # pydantic-ai's graph node typing wraps the run's deps in a
+                    # `Top[...]` marker that `node.stream()` doesn't accept back;
+                    # this is pydantic-ai's own generic variance, inherent to
+                    # driving `Agent.iter()` directly rather than something this
+                    # call site can restructure.
+                    async with node.stream(agent_run.ctx) as request_stream:  # ty: ignore[invalid-argument-type]
                         async for event in request_stream:
                             if is_native_output:
                                 # The streamed text is the raw JSON envelope, not
@@ -158,7 +164,9 @@ async def _agent_event_stream(
                             ):
                                 yield Token(content=event.delta.content_delta)
                 elif Agent.is_call_tools_node(node):
-                    async with node.stream(agent_run.ctx) as handle_stream:
+                    # Same pydantic-ai `Top[...]` variance as the model-request
+                    # branch above.
+                    async with node.stream(agent_run.ctx) as handle_stream:  # ty: ignore[invalid-argument-type]
                         async for event in handle_stream:
                             if isinstance(event, FunctionToolCallEvent):
                                 yield ToolCalled(
@@ -195,12 +203,22 @@ async def _agent_event_stream(
                     yield Completed()
 
 
-_QUEUE_DONE = object()
+class _QueueDone:
+    """Unique sentinel type for the producer-done marker.
+
+    A bare `object()` sentinel types as plain `object`, which absorbs
+    `SSEEvent` in the queue's union and defeats `is`-narrowing after the
+    `item is _QUEUE_DONE` check below. A dedicated type keeps `item` narrowed
+    to `SSEEvent` in the non-sentinel branch.
+    """
+
+
+_QUEUE_DONE = _QueueDone()
 
 
 async def _drive_to_queue(
     agen: AsyncGenerator[SSEEvent],
-    queue: asyncio.Queue[SSEEvent | object],
+    queue: asyncio.Queue[SSEEvent | _QueueDone],
 ) -> None:
     """Run `agen` to completion in a single dedicated task, forwarding each event.
 
@@ -251,7 +269,7 @@ async def _run_with_lifecycle_guards(
     Yields:
         SSE wire-format strings ready to send to the client.
     """
-    queue: asyncio.Queue[SSEEvent | object] = asyncio.Queue()
+    queue: asyncio.Queue[SSEEvent | _QueueDone] = asyncio.Queue()
     producer = asyncio.ensure_future(_drive_to_queue(agen, queue))
     # Yield once so `producer` starts running (enters its try/finally) before
     # anything below can cancel it — cancelling a task that never started its
@@ -299,7 +317,12 @@ async def _run_with_lifecycle_guards(
                         yield to_sse(Error(message="An unexpected error occurred"))
                 return
             event_count += 1
-            yield to_sse(item)  # type: ignore[arg-type]
+            # `item is _QUEUE_DONE` above returns/raises on every path, so by
+            # construction `item` is always `SSEEvent` here - but that
+            # exhaustiveness spans a `while True:` loop plus nested
+            # if/elif/else/raise, which ty's flow narrowing doesn't follow.
+            # `cast` documents the invariant instead of suppressing the check.
+            yield to_sse(cast(SSEEvent, item))
             if event_count >= settings.sse_max_events:
                 logger.warning(
                     "SSE event cap (%d) reached; stopping stream",

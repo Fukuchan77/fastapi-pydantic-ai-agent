@@ -8,6 +8,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models import infer_model
 from pydantic_ai_litellm import LiteLLMModel
+from pydantic_ai_litellm import LiteLLMModelSettings
 
 from app.agents.deps import AgentDeps
 from app.config import Settings
@@ -34,8 +35,8 @@ def build_model(settings: Settings) -> Model:
     """Build a LiteLLMModel instance from settings.
 
     Converts the internal "provider:model" format to LiteLLM's "provider/model"
-    format (e.g. "openai:gpt-4o" → "openai/gpt-4o", "ollama:granite3.3:latest" →
-    "ollama/granite3.3:latest") and delegates all provider routing to LiteLLM.
+    format (e.g. "openai:gpt-4o" → "openai/gpt-4o", "ollama:granite4.1:8b" →
+    "ollama/granite4.1:8b") and delegates all provider routing to LiteLLM.
 
     API key handling:
         - Cloud providers (openai, anthropic, groq): llm_api_key is required
@@ -64,8 +65,10 @@ def build_model(settings: Settings) -> Model:
 
     api_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else None
 
-    # Build optional settings dict (litellm_api_base for custom / Ollama endpoints)
-    model_settings = {}
+    # Build optional settings dict (litellm_api_base for custom / Ollama endpoints).
+    # Typed as LiteLLMModelSettings (not a bare dict) because `litellm_api_base`
+    # is a LiteLLM-specific key absent from pydantic-ai's own `ModelSettings`.
+    model_settings: LiteLLMModelSettings = {}
     if settings.llm_base_url:
         model_settings["litellm_api_base"] = str(settings.llm_base_url)
     elif provider_name == "ollama":
@@ -79,7 +82,7 @@ def build_model(settings: Settings) -> Model:
     return LiteLLMModel(
         model_name=litellm_model_name,
         api_key=api_key,
-        settings=model_settings if model_settings else None,  # type: ignore[arg-type]
+        settings=model_settings if model_settings else None,
     )
 
 
@@ -146,7 +149,10 @@ def build_chat_agent(
         model=resolved_model,
         deps_type=AgentDeps,
         output_type=output_type,
-        output_retries=settings.max_output_retries,
+        # `output_retries=` was deprecated in pydantic-ai 1.x and removed from the
+        # typed overloads (it survives only via **_deprecated_kwargs), so the
+        # mapping form is both the supported spelling and the type-checkable one.
+        retries={"output": settings.max_output_retries},
     )
 
     # Register dynamic system prompt builder

@@ -155,6 +155,8 @@ class TestMockToolsRegistration:
         monkeypatch.setenv("LLM_API_KEY", "test-llm-key-1234567890")
         monkeypatch.setenv("APP_ENV", "staging")
         monkeypatch.setenv("ENABLE_MOCK_TOOLS", "true")
+        # Non-development also forbids a wildcard host allow-list; unrelated to mock tools.
+        monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 
         # Clear settings cache
         from app.config import get_settings
@@ -272,6 +274,8 @@ class TestMockToolsRegistration:
         monkeypatch.setenv("LLM_API_KEY", "test-llm-key-1234567890")
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("ENABLE_MOCK_TOOLS", "false")
+        # Production forbids a wildcard host allow-list; unrelated to mock tools.
+        monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 
         # Clear settings cache
         from app.config import get_settings

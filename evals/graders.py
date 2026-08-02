@@ -113,7 +113,9 @@ class LLMJudge[T]:
         self._agent = Agent[None, Rating](
             model=model,
             output_type=Rating,
-            output_retries=_JUDGE_OUTPUT_RETRIES,
+            # See app/agents/chat_agent.py: `output_retries=` is deprecated in
+            # pydantic-ai 1.x; the mapping form is the supported spelling.
+            retries={"output": _JUDGE_OUTPUT_RETRIES},
         )
 
     async def grade(self, axis: Axis, case: T, agent_output: str) -> Rating:

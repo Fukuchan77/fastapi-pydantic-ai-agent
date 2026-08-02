@@ -310,8 +310,33 @@ docker run -d \
   -e API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)" \
   -e SESSION_SIGNING_KEY="$(aws secretsmanager get-secret-value --secret-id session-signing-key --query SecretString --output text)" \
   -e LLM_API_KEY="$(aws secretsmanager get-secret-value --secret-id llm-key --query SecretString --output text)" \
+  -e ALLOWED_HOSTS="api.yourdomain.com" \
   fastapi-pydantic-ai-agent:latest
 ```
+
+### Host Header Validation
+
+`ALLOWED_HOSTS` is **required** in `staging` and `production` - `Settings`
+fails fast at startup if it's left at its `*` development default in either
+environment. Set it to the hostname(s) this deployment actually serves,
+comma-separated or as a JSON array (e.g. `api.yourdomain.com` or
+`api.yourdomain.com,*.internal.yourdomain.com` for subdomains, using
+Starlette's `*.example.com` wildcard form - not the Django-style leading dot).
+
+This exists because Starlette's router rebuilds redirect targets from the
+request's `Host` header (`redirect_slashes` defaults to on), so without a host
+allow-list any caller can make the service emit a `Location` header pointing
+at a host of their choosing - an unauthenticated open-redirect, reachable even
+on unauthenticated routes like `/health/`. `TrustedHostMiddleware` (registered
+outermost in `app/main.py`, ahead of even CORS) rejects any request whose
+`Host` isn't on the list with a flat `400` before any other middleware or
+route runs.
+
+If this deployment sits behind a reverse proxy or load balancer (see Reverse
+Proxy Configuration above), set `ALLOWED_HOSTS` to the **public** hostname
+your users connect to - not the proxy's internal address - since the proxy
+forwards the original `Host` header through unless it's configured to
+rewrite it.
 
 ### Session Ownership
 

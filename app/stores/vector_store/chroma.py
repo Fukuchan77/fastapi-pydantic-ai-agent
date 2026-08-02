@@ -70,8 +70,12 @@ class ChromaVectorStore:
         else:
             self._client = chromadb.Client()
 
-        # Initialize embedding function using sentence-transformers
-        self._embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(  # type: ignore[attr-defined]
+        # Initialize embedding function using sentence-transformers.
+        # `SentenceTransformerEmbeddingFunction` is resolved via chromadb's
+        # module-level `__getattr__` lazy-import machinery, which static analysis
+        # can't see; confirmed present at runtime (`hasattr(embedding_functions,
+        # "SentenceTransformerEmbeddingFunction")` is True on the pinned version).
+        self._embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(  # ty: ignore[unresolved-attribute]
             model_name=embedding_model
         )
 
@@ -194,7 +198,12 @@ class ChromaVectorStore:
 
         ids = results["ids"][0] if results["ids"] else []
         documents = results["documents"][0] if results["documents"] else []
-        distances = results["distances"][0] if results.get("distances") else []
+        # `distances` is an optional key in chromadb's QueryResult, unlike `ids`/
+        # `documents` above - narrow through one local instead of re-accessing via
+        # `results["distances"]` after a separate `results.get("distances")` guard,
+        # which the type checker can't correlate across two different expressions.
+        distances_value = results.get("distances")
+        distances = distances_value[0] if distances_value else []
 
         return [
             RetrievedHit(

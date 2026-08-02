@@ -1,5 +1,6 @@
 """Auth, CORS, rate-limiting, HTTP client, and SSE resource-limit settings."""
 
+import json
 from typing import Self
 
 from pydantic import BaseModel
@@ -164,6 +165,119 @@ class SecuritySettingsMixin(BaseModel):
         default=[],
         description="List of trusted proxy IP addresses for X-Forwarded-For validation",
     )
+
+    allowed_hosts: str | list[str] = Field(
+        default=["*"],
+        description="Host header values accepted by TrustedHostMiddleware "
+        "(comma-separated or JSON array). Subdomain wildcards use Starlette's "
+        "'*.example.com' form. Rejected as '*' outside development (staging "
+        "and production both), because an unvalidated Host is reflected into "
+        "redirect Location headers",
+    )
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def parse_allowed_hosts(cls, v: str | list[str]) -> list[str]:
+        """Parse allowed_hosts from a string or list.
+
+        Accepts the same shapes as `cors_origins` so both host-ish allow-lists
+        are configured identically in `.env`:
+        - JSON array string: '["api.example.com","*.internal.example.com"]'
+        - Comma-separated string: "api.example.com,*.internal.example.com"
+        - Single host string: "api.example.com"
+        - List: ["api.example.com"]
+
+        Args:
+            v: The allowed_hosts value to parse.
+
+        Returns:
+            Parsed list of host patterns.
+
+        Raises:
+            ValueError: If the value looks like a JSON array but does not parse,
+                or parses to something other than an array.
+        """
+        if isinstance(v, list):
+            # Same normalization as the comma-split path below: a blank or
+            # whitespace-only entry (e.g. from `["", "api.example.com"]`) would
+            # otherwise reach `TrustedHostMiddleware` as a literal pattern that
+            # matches an empty `Host` header, bypassing validation entirely.
+            return [host.strip() for host in v if host.strip()]
+
+        v_stripped = v.strip()
+        if v_stripped.startswith("["):
+            try:
+                parsed = json.loads(v_stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"allowed_hosts looks like a JSON array but is not valid JSON: {v_stripped!r}"
+                ) from exc
+            if not isinstance(parsed, list):
+                raise ValueError(f"allowed_hosts JSON value must be an array, got: {v_stripped!r}")
+            return [host.strip() for host in parsed if host.strip()]
+
+        return [host.strip() for host in v_stripped.split(",") if host.strip()]
+
+    @model_validator(mode="after")
+    def validate_allowed_hosts(self) -> Self:
+        """Validate the host allow-list is usable and not wildcarded outside development.
+
+        Starlette rebuilds redirect targets from the request's `Host` header
+        (`redirect_slashes` is on by default), so with `allowed_hosts=["*"]` any
+        caller can make the service emit a `Location` pointing at a host they
+        chose - an unauthenticated open-redirect primitive. Only `development`
+        keeps the permissive default; `staging` and `production` must both name
+        their hosts, matching `logging_config`'s existing treatment of staging as
+        production-like (INFO level, not DEBUG) rather than dev-like.
+
+        Pattern shape is validated here too, because `TrustedHostMiddleware`
+        matches with `host == pattern or (pattern.startswith("*") and
+        host.endswith(pattern[1:]))`. A Django-style `.example.com` therefore
+        parses fine and then silently matches nothing, locking out every request
+        - so it is rejected rather than accepted as a literal hostname. The
+        middleware's own shape checks are bare `assert`s, which `python -O`
+        strips, making this the only reliable place to catch them.
+
+        Returns:
+            Self: The validated settings instance.
+
+        Raises:
+            ValueError: If `allowed_hosts` is empty, contains "*" outside
+                development, or contains a malformed wildcard pattern.
+        """
+        hosts = self.allowed_hosts if isinstance(self.allowed_hosts, list) else [self.allowed_hosts]
+
+        if not hosts:
+            raise ValueError(
+                "allowed_hosts must not be empty; use '*' for development or name "
+                "the hostnames this service serves."
+            )
+
+        if self.app_env != "development" and "*" in hosts:
+            raise ValueError(
+                f"allowed_hosts cannot contain '*' when app_env is {self.app_env!r}. "
+                "An unvalidated Host header is reflected into redirect Location "
+                "headers. Set ALLOWED_HOSTS to the hostnames this service serves "
+                "(e.g. 'api.example.com,*.internal.example.com')."
+            )
+
+        for pattern in hosts:
+            if pattern.startswith("."):
+                raise ValueError(
+                    f"allowed_hosts pattern {pattern!r} would never match any host. "
+                    f"Starlette uses '*.example.com', not the Django-style "
+                    f"'.example.com'. Use '*{pattern}' instead."
+                )
+            is_bare_wildcard = pattern == "*"
+            is_subdomain_wildcard = pattern.startswith("*.") and len(pattern) > 2
+            is_valid_wildcard = is_bare_wildcard or is_subdomain_wildcard
+            if "*" in pattern[1:] or (pattern.startswith("*") and not is_valid_wildcard):
+                raise ValueError(
+                    f"allowed_hosts pattern {pattern!r} is not a valid wildcard. "
+                    f"Use '*' to allow any host, or '*.example.com' for subdomains."
+                )
+
+        return self
 
     cors_origins: str | list[str] = Field(
         default=["http://localhost:3000"],

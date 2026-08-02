@@ -59,6 +59,9 @@ def test_enable_mock_tools_allowed_when_false_in_production(
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
     monkeypatch.setenv("LLM_API_KEY", "sk-test-123456789")
     monkeypatch.setenv("ENABLE_MOCK_TOOLS", "false")
+    # Production also forbids a wildcard host allow-list, so name a host here to
+    # keep this test focused on the mock-tools guard.
+    monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 
     # Act: Should succeed
     settings = Settings()

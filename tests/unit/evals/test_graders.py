@@ -126,6 +126,25 @@ class TestAggregateRatings:
 class TestLLMJudge:
     """The default `Judge[T]` implementation, backed by a pydantic-ai `Agent`."""
 
+    def test_init_wires_judge_output_retries_onto_the_agent(self) -> None:
+        """`_JUDGE_OUTPUT_RETRIES` must actually reach the constructed Agent.
+
+        Pins the `retries={"output": _JUDGE_OUTPUT_RETRIES}` mapping form
+        (pydantic-ai 1.x deprecated `output_retries=`) against silently
+        regressing to `retries={}` or dropping the kwarg - both would still
+        construct successfully, so only checking the wired value catches it.
+        `_max_output_retries` is pydantic-ai's only place this is observable
+        post-construction; there is no public accessor.
+        """
+        from evals.graders import _JUDGE_OUTPUT_RETRIES
+
+        def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+            return ModelResponse(parts=[])
+
+        judge: LLMJudge[str] = LLMJudge(FunctionModel(respond))
+
+        assert judge._agent._max_output_retries == _JUDGE_OUTPUT_RETRIES
+
     @pytest.mark.asyncio
     async def test_grade_returns_parsed_rating(self) -> None:
         """A structured tool-call response is parsed into a `Rating`."""

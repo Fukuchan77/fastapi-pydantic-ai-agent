@@ -111,10 +111,16 @@ def add_rate_limiting(
     # Store limiter in app state for access via dependencies
     app.state.limiter = limiter
 
-    # Custom exception handler for rate limit exceeded
+    # Custom exception handler for rate limit exceeded.
+    #
+    # `exc` is typed `Exception`, not `RateLimitExceeded`, to match
+    # `Starlette.add_exception_handler`'s actual signature - it dispatches by
+    # the registered exception class below, but the handler type itself is
+    # not generic over it. The body only ever does a defensive `hasattr`
+    # check, so nothing here relies on the narrower type.
     async def rate_limit_exceeded_handler(
         request: Request,
-        exc: RateLimitExceeded,
+        exc: Exception,
     ) -> JSONResponse:
         """Handle rate limit exceeded exception with structured error response.
 
@@ -122,7 +128,8 @@ def add_rate_limiting(
 
         Args:
             request: The request that exceeded rate limit
-            exc: The rate limit exceeded exception
+            exc: The rate limit exceeded exception (typed `Exception`; see
+                the handler's own note on `Starlette.add_exception_handler`)
 
         Returns:
             JSONResponse: 429 response with ErrorResponse body, rate limit headers,
@@ -133,9 +140,12 @@ def add_rate_limiting(
             code="RATE_LIMIT_EXCEEDED",
         )
 
-        # Get rate limit headers from exception
+        # Get rate limit headers from exception. `isinstance` (not `hasattr`)
+        # both narrows `exc` back to `RateLimitExceeded` for the type checker and
+        # documents that `.headers` (`Mapping[str, str] | None`, inherited from
+        # Starlette's `HTTPException`) is only meaningful on that type.
         headers: dict[str, str] = {}
-        if hasattr(exc, "headers") and exc.headers:
+        if isinstance(exc, RateLimitExceeded) and exc.headers:
             headers = dict(exc.headers)
 
         # Add Retry-After header (RFC 6585, RFC 7231)
@@ -160,7 +170,7 @@ def add_rate_limiting(
         )
 
     # Register exception handler
-    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     return limiter
 

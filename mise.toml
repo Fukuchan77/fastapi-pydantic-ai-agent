@@ -35,7 +35,21 @@ run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --co
 
 [tasks.audit]
 description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
-run = "uv run pip-audit"
+# Ignored IDs are all on `starlette`, held below 1.0 (pyproject.toml) because
+# `slowapi` 0.1.10 is incompatible with starlette 1.x (see tasks.md Task 20.3).
+# Assessed in .sdd/specs/001-agent-architecture-enhancements/tasks.md Task 20.3:
+#   PYSEC-2026-161 - reachable (Host header into redirect Location), but
+#     mitigated at the app layer by TrustedHostMiddleware (app/main.py, Task
+#     20.1) regardless of the starlette version installed.
+#   PYSEC-2026-248 - unreachable: no `HTTPEndpoint` usage in this codebase.
+#   PYSEC-2026-249 - unreachable: no `request.form()` call; `python-multipart`
+#     isn't even installed (plain `fastapi`, not `fastapi[standard]`).
+#   PYSEC-2026-2280 - unreachable: no `HTTPEndpoint` usage.
+#   PYSEC-2026-2281 - unreachable: no `StaticFiles` usage; Windows-only UNC
+#     path issue besides.
+# Re-run `uv run pip-audit` (without --ignore-vuln) after any starlette bump
+# to confirm these still apply before renewing the ignore list.
+run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281"
 
 [tasks."hooks:install"]
 description = "Install the pre-commit git hook (gitleaks/pip-audit/model-id/tool-conventions guards, Req 12.4)"
