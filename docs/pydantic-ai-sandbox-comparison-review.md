@@ -16,6 +16,7 @@
 - [4. pydantic-ai-sandbox との観点別比較](#4-pydantic-ai-sandbox-との観点別比較)
 - [5. 検証結果](#5-検証結果)
 - [6. 推奨ロードマップ](#6-推奨ロードマップ)
+- [7. 追補: 001-agent-architecture-enhancements ブランチとの照合](#7-追補-001-agent-architecture-enhancements-ブランチとの照合)
 
 ---
 
@@ -411,3 +412,101 @@ request 2: timed out despite fast backend -> cache poisoned, every identical que
 2. API サーフェスロックテストを v1.70 の現行 API で先に作成し、v2 更新時の破壊を
    このテストの差分として観測する。
 3. `pydantic-ai-litellm`(v1 系依存)の v2 対応状況の確認が移行の前提条件になる点に注意。
+
+---
+
+## 7. 追補: 001-agent-architecture-enhancements ブランチとの照合
+
+追補日: 2026-08-02。本章は `origin/001-agent-architecture-enhancements`
+(HEAD `aaabdea`、本レポートのレビュー対象 `fd6ec5a` の上に 30 コミット)を
+§3 の指摘・§4 の比較観点と照合し、検証した結果である。
+
+### 7.1 総評
+
+このブランチは本レポートの P1/P2 ロードマップと pydantic-ai-sandbox の規範の
+**大部分を先行実装している**。特に H-1(RAG キャッシュの CancelledError 汚染)は
+`except BaseException` + await 不在のクリーンアップ + フォロワーへの `TimeoutError`
+伝播という模範的な修正になっており、専用回帰テスト
+(`tests/unit/workflows/test_rag_cache_cancellation.py`)も付いている。
+一方で **H-2 / H-3 / H-5 の 3 件の High と、M-3 / M-4 / M-5 / M-6(API キー側)は
+未解消のまま残っている**。
+
+### 7.2 ブランチが新たに実装したもの(sandbox 規範との対応)
+
+| ブランチの実装 | 対応する sandbox 規範 / 本レポート指摘 |
+|---|---|
+| `run_guarded()`: `UsageLimits` + ツール許可リスト + 承認フック + 監査証跡(`app/agents/guardrails.py`、toolset ラッパー方式、閉じた `StopReason` 語彙) | §4.3(H-4 解消)+ hitl レーンの承認パターン |
+| チャット経路の `chat_request_timeout` → 504(`app/api/v1/agent.py`) | §4.3(H-4 解消) |
+| ストア factory + 起動時接続 dry-run(`app/stores/factory.py`、Redis/Chroma/Ollama が設定から選択可能に) | §4.9(M-2 解消)+ fail-fast at boot |
+| `FallbackModel` チェーン + `NativeOutput` の条件付きゲート(`app/llm/factory.py`) | §4.1 / sandbox `llm/fallback.py` の規範 |
+| 型付き SSE イベント契約 + ライフサイクル保証(`app/patterns/sse.py`, `app/api/v1/_stream.py`: `sse_max_events` 上限、`is_disconnected()` ポーリング、`CancelledError` 再送出、`finally` で generator クローズ、送信タイムアウト、`Cache-Control: no-cache` / `X-Accel-Buffering: no`) | §4.4(M-8 をほぼ解消) |
+| Logfire スクラビング + fail-soft 初期化 | §4.7 の採用推奨 |
+| サーバ発行・HMAC 署名つき session_id(`app/services/session_service.py`、principal 束縛、非 ASCII ガードつき定数時間比較) | hitl レーンの「セッションをクライアントに委ねない」規範の発展形 |
+| エンドポイント別 LLM レート制限 + `storage_uri`(Redis)対応 | M-7 解消 |
+| `/health/ready` の実疎通プローブ | L-5 解消 |
+| contract-drift テスト、モデル ID ハードコード禁止テスト、`EXPECT_LIVE_TESTS` プラグイン、ファイルサイズポリシー、`block_network` fixture(unit 層のソケット遮断) | §4.8 のテスト規律(anti-false-green、ハーメチック化)|
+| 二軸 LLM ジャッジ評価基盤(`evals/graders.py` ほか) | sandbox `EVAL-GRADERS.md` の outcome/behavior 二軸 |
+| pre-commit gitleaks / pip-audit + dependabot + CI(カバレッジゲート含む) | sandbox のセキュリティ運用規範(§1 補足の脆弱性 85 件への対処経路) |
+| `create_app()` factory 化(設定をモジュール import 時でなく factory 引数で解決) | sandbox `main.py` の app factory 規範 |
+| pydantic-ai-slim を 1.70.0 → **1.107.1** に更新 | sandbox セキュリティチェックリストの「v1 系は >=1.99.0 フロア」を充足 |
+
+### 7.3 指摘の解消状況マトリクス
+
+| 指摘 | 状態 | 備考 |
+|---|---|---|
+| H-1 キャッシュ CancelledError 汚染 | ✅ 解消 | `rag_cache.py` の `except BaseException`。リーダーキャンセル時はフォロワーに `TimeoutError` を渡し 504 経路に載せる設計まで含めて適切 |
+| H-2 `app_env` 自由文字列 | ❌ 未解消 | `app/config/security.py:133` に同一コードが残存。`Literal` 化されていない |
+| H-3 ingest がキャッシュ無効化しない | ❌ 未解消 | キャッシュキーは `sha256(query\|max_retries)` のまま、ingest はキャッシュに触れない |
+| H-4 チャット経路の予算・時間上限なし | ✅ 解消 | `run_guarded` + `chat_request_timeout`。監査証跡・許可リスト・承認フックまで実装 |
+| H-5 履歴 1000 件で恒久破損 | ❌ 未解消 | `session_store/in_memory.py:210` が `ValueError` のまま。トリミングなし |
+| M-1 lifespan の try/finally | 🔶 部分 | teardown は `_close_quietly` で個別保護されたが、startup 後半(agent 構築・logfire)の失敗では yield 前例外となり teardown 自体が走らず `cleanup_task`/HTTP client がリークする構造は残る |
+| M-2 ストア設定のデッドコード | ✅ 解消 | factory + dry-run で配線 |
+| M-3 InMemoryVectorStore の CPU バウンド・無ロック | 🔶 部分 | IDF キャッシュ追加で再計算は軽減、ただしイベントループ上の同期実行と無ロック変更は残存 |
+| M-4 substring による transient 判定 | ❌ 未解消 | `exceptions.py` 同一実装。なお新規の `classify_usage_limit_exceeded`(guardrails.py)も例外メッセージ文字列で分類しており、pydantic-ai 更新でメッセージが変わると分類が壊れる同種の脆さがある |
+| M-5 エラーエンベロープ 2 系統 | ❌ 未解消 | 401/403 は `{"detail": {...}}`、413/429/500 はフラットのまま |
+| M-6 非 ASCII ヘッダで 500 | 🔶 部分 | session_id 側は `isascii()` ガードを実装(教訓は反映済み)、しかし `X-API-Key` の `compare_digest`(`deps/auth.py`)は未対策のまま |
+| M-7 レート制限のプロセスローカル | ✅ 解消 | `storage_uri` 対応 + LLM エンドポイント別制限 |
+| M-8 SSE のミドルウェア干渉・ヘッダ欠如 | 🔶 ほぼ解消 | ヘッダ・ライフサイクルは解消。`BaseHTTPMiddleware` 系スタックが SSE を包む構造自体は残る |
+| M-9 `_get_cached_model` が引数無視 | ✅ 解消 | 引数が実際のキャッシュキー兼構築入力に |
+| L-1 / L-2 / L-3 / L-4 / L-5 / L-9 | ✅ 解消 | dead `result.data` 削除、`limiter.hit` 適正化、`_last_access` ロック順序修正、Redis `aclose()` + lifespan クローズ、readiness 実疎通、重複 import 解消 |
+| L-6 workflow のモデル解決フォールバック | ❌ 未解消 | `corrective_rag.py:89` に同一コード |
+| L-7 CSP `'unsafe-inline'` / 無条件 HSTS | ❌ 未解消 | |
+| L-8 `Vary` 上書き | ❌ 未解消 | |
+| L-11 README の /health 例と実装の不一致 | ❌ 未解消 | README は `"healthy"`、実装は `"ok"` |
+| §4.8 `asyncio_mode = "auto"` | ❌ 未採用 | `block_network` fixture(ソケット遮断)は `ALLOW_MODEL_REQUESTS=False` 相当以上の保護として採用済み |
+
+### 7.4 ブランチの検証結果(2026-08-02)
+
+| コマンド | 結果 |
+|---|---|
+| `uv sync --frozen` | 成功(pydantic-ai-slim 1.107.1) |
+| `uv run ruff check app/ tests/` | All checks passed |
+| `uv run ty check app/` | All checks passed |
+| `uv run pytest tests/unit/ tests/integration/ tests/e2e/ -q` | **1113 passed, 7 failed, 1 skipped, 6 errors**(114 秒) |
+
+失敗・エラーは全て検証環境起因でコード不良ではない:
+
+- 6 errors: `test_docker_deployment.py`(Docker デーモンなし)
+- 6 failed: `test_chroma_query_with_scores.py` — `ChromaVectorStore` 構築時の
+  sentence-transformers モデルダウンロードがプロキシで 403(オフライン環境では実行不能)
+- 1 failed: `test_block_network.py::test_block_network_blocks_af_inet6_connect` —
+  IPv6 のない環境ではフィクスチャの遮断例外より先にソケット生成自体が
+  `OSError(EAFNOSUPPORT)` で失敗する
+
+ただし後 2 者は**テスト設計上の新規指摘**でもある: Chroma 統合テストは
+インターネット必須(HF ダウンロード)なのにデフォルト実行層に置かれており、
+ブランチ自身が導入した「blocking 層は決定的・オフラインのみ」という sandbox 由来の
+CI 原則と矛盾する。IPv6 テストは `socket.has_ipv6` 等での skip ガードが必要。
+
+### 7.5 残タスク(このブランチ取り込み後の優先度)
+
+1. **P1**: H-2(`app_env` の `Literal` 化)、H-3(ingest でのキャッシュ無効化)、
+   H-5(履歴上限のトリミング化)— いずれも小さい修正で、ブランチの新テスト基盤に
+   回帰テストを足しやすい。
+2. **P1**: M-6 の残り(`X-API-Key` の非 ASCII ガード。session_service に同じ対策の
+   実装例がありコピーで済む)。
+3. **P2**: Chroma 統合テストの環境ゲート化(`RUN_INTEGRATION_CHROMA=1` 等)と
+   IPv6 テストの skip ガード。M-4 の型ベース分類化(新設 `classify_usage_limit_exceeded`
+   も `UsageLimitExceeded` の属性ベース判定へ)。lifespan startup 後半の try/finally。
+4. **P3**: 残りの Low(L-6/7/8/11)と `asyncio_mode = "auto"`。v2 移行は
+   1.107.1 への更新で距離が縮まっており、§6 P3 のチェックリストが引き続き有効。
