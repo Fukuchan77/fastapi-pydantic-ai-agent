@@ -21,6 +21,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agents.chat_agent import build_chat_agent
+from app.api.errors import register_error_handlers
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import Settings
@@ -469,6 +470,10 @@ def create_app(
 
     # Instrument FastAPI with Logfire for HTTP tracing
     logfire.instrument_fastapi(app)
+
+    # Register the flat error-envelope handlers (Req 8): every HTTPException
+    # and request-validation failure renders as one flat ErrorResponse body.
+    register_error_handlers(app)
 
     # Register routers
     app.include_router(health_router)

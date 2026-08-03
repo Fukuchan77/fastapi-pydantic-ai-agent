@@ -40,6 +40,11 @@ def _sign(principal_id: str, token: str, settings: Settings) -> str:
 def _forbidden() -> HTTPException:
     """Build the 403 raised for any session_id ownership/signature failure.
 
+    `detail` is an `ErrorResponse.model_dump()` mapping, not a bare string -
+    `app/api/errors.py::http_exception_handler` reads a mapping `detail`'s
+    `message`/`code` back verbatim into the flat response body (Req 8.2), so
+    the caller must never receive a nested `{"detail": {...}}` shape.
+
     Returns:
         HTTPException: A 403 with a generic detail message (no id/key leakage).
     """

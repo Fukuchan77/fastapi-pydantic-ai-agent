@@ -74,7 +74,10 @@ async def test_dangling_citation_error_returns_502(
     response = await _query_with_raising_workflow(exc, test_model, auth_headers)
 
     assert response.status_code == 502
-    assert "detail" in response.json()
+    body = response.json()
+    assert "detail" not in body
+    assert "message" in body
+    assert body["code"] == "UPSTREAM_GROUNDING_FAILED"
 
 
 @pytest.mark.asyncio
@@ -86,4 +89,7 @@ async def test_empty_citation_error_returns_502(
     response = await _query_with_raising_workflow(exc, test_model, auth_headers)
 
     assert response.status_code == 502
-    assert "detail" in response.json()
+    body = response.json()
+    assert "detail" not in body
+    assert "message" in body
+    assert body["code"] == "UPSTREAM_GROUNDING_FAILED"

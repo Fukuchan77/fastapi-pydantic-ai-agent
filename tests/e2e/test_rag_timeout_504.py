@@ -87,6 +87,9 @@ async def test_rag_query_timeout_returns_504(auth_headers: dict[str, str]) -> No
         f"Response: {response.json()}"
     )
 
-    # Verify error message indicates timeout
+    # Verify error message indicates timeout (unified flat error envelope,
+    # Req 8.1, 8.4 - no nested 'detail' key)
     response_data = response.json()
-    assert "timed out" in response_data.get("detail", "").lower()
+    assert "detail" not in response_data
+    assert response_data["code"] == "WORKFLOW_TIMEOUT"
+    assert "timed out" in response_data.get("message", "").lower()
