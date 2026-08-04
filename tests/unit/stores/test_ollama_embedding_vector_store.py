@@ -319,4 +319,62 @@ async def test_legacy_query_contract_unchanged_after_query_with_scores_added():
 
     assert results == ["doc one"]
 
+
+# Generation content-version counter (Req 2.1, 2.2, 2.4). Boundary correction
+# for task 3.1 (`.sdd/specs/002-review-roadmap-remediation/tasks.md`): 3.1's
+# own boundary has no test file, so this section is the RED step ahead of
+# task 3.3's formal parametrized conformance widening.
+
+
+def test_generation_starts_at_zero():
+    """A freshly constructed store starts at generation 0."""
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    assert store.generation == 0
+
+
+@pytest.mark.asyncio
+async def test_generation_increments_after_successful_add():
+    """A successful add_documents() call advances generation."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(return_value=[[0.1, 0.2]])
+
+    await store.add_documents(["doc one"])
+    assert store.generation == 1
+    await store.add_documents(["doc two"])
+    assert store.generation == 2
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_increments_after_clear():
+    """A clear() call advances generation."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(return_value=[[0.1, 0.2]])
+
+    await store.add_documents(["doc one"])
+    await store.clear()
+    assert store.generation == 2
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_unchanged_on_failed_add():
+    """A failed add_documents() call (embedding API error) leaves generation unchanged."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(side_effect=ValueError("embedding API failed"))
+
+    with pytest.raises(ValueError, match="embedding API failed"):
+        await store.add_documents(["doc one"])
+    assert store.generation == 0
+
+    await store.close()
+
     await store.close()

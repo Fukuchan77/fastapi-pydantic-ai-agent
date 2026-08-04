@@ -58,6 +58,7 @@ class OllamaEmbeddingVectorStore:
         self._http_client = http_client or httpx.AsyncClient(timeout=self.DEFAULT_TIMEOUT)
         self._documents: list[str] = []
         self._embeddings: list[list[float]] = []
+        self._generation: int = 0
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:
         """Call POST /v1/embeddings and return embedding vectors.
@@ -92,6 +93,15 @@ class OllamaEmbeddingVectorStore:
 
         return [item["embedding"] for item in sorted_data]
 
+    @property
+    def generation(self) -> int:
+        """Monotonically increasing content-version counter.
+
+        Advanced after each successful `add_documents()` call and after each
+        `clear()` call; unchanged when the embedding request raises.
+        """
+        return self._generation
+
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the store with automatic embedding generation.
 
@@ -99,6 +109,7 @@ class OllamaEmbeddingVectorStore:
             chunks: List of text chunks to add. Empty list is allowed.
         """
         if not chunks:
+            self._generation += 1
             return
 
         # Generate embeddings for all chunks
@@ -107,6 +118,7 @@ class OllamaEmbeddingVectorStore:
         # Store documents and embeddings
         self._documents.extend(chunks)
         self._embeddings.extend(embeddings)
+        self._generation += 1
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
         """Retrieve top-k most relevant chunks using cosine similarity.
@@ -188,6 +200,7 @@ class OllamaEmbeddingVectorStore:
         """Remove all documents and embeddings from the store."""
         self._documents.clear()
         self._embeddings.clear()
+        self._generation += 1
 
     async def ping(self) -> None:
         """Probe Ollama connectivity without mutating the stored corpus.

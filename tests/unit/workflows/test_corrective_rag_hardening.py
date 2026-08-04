@@ -41,13 +41,40 @@ def _always_relevant(messages: list, info: AgentInfo) -> ModelResponse:
     return ModelResponse(parts=[TextPart(content="relevant")])
 
 
+def _mock_vector_store() -> AsyncMock:
+    """Build a vector-store double with a real int generation.
+
+    Task 3.2: the generation-keyed cache (task 3.4) reads store.generation
+    directly on every store CorrectiveRAGWorkflow.run() receives; an
+    unconfigured AsyncMock attribute would leak a Mock object into the
+    cache key instead of a real int.
+    """
+    store = AsyncMock()
+    store.generation = 0
+    return store
+
+
+class TestMockVectorStoreGeneration:
+    """Guard against an unconfigured Mock attribute leaking into the cache key.
+
+    Every vector-store double this module builds must carry a real int
+    generation (task 3.2), so the generation-keyed cache (task 3.4) never
+    keys on an unconfigured Mock attribute.
+    """
+
+    def test_generation_is_a_real_int(self) -> None:
+        """Guard against an unconfigured AsyncMock leaking into the cache key."""
+        vector_store = _mock_vector_store()
+        assert isinstance(vector_store.generation, int)
+
+
 class TestZeroHitsEarlyStop:
     """AC 3.1: zero hits skip the LLM entirely and terminate early."""
 
     @pytest.mark.asyncio
     async def test_zero_hits_skips_llm_and_returns_no_context(self) -> None:
         """When query_with_scores returns no hits, the LLM must never be called."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = []
 
         eval_calls = 0
@@ -79,7 +106,7 @@ class TestWidenKOnRetry:
     @pytest.mark.asyncio
     async def test_initial_search_uses_rag_initial_k(self) -> None:
         """The first search attempt should use settings.rag_initial_k."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [_hit("memory::0000", 0.9)]
 
         workflow = CorrectiveRAGWorkflow(
@@ -96,7 +123,7 @@ class TestWidenKOnRetry:
     @pytest.mark.asyncio
     async def test_retry_search_uses_rag_widened_k(self) -> None:
         """A retry search (after an insufficient grading) should use settings.rag_widened_k."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [_hit("memory::0000", 0.9)]
 
         workflow = CorrectiveRAGWorkflow(
@@ -120,7 +147,7 @@ class TestDegradedReturnAtRetryLimit:
     @pytest.mark.asyncio
     async def test_degraded_answer_synthesized_when_hits_exist_at_retry_limit(self) -> None:
         """Retries exhausted with hits present should synthesize an answer and cite them."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [
             _hit("memory::0000", 0.9, text="Relevant-ish content"),
         ]
@@ -152,7 +179,7 @@ class TestDegradedReturnAtRetryLimit:
     @pytest.mark.asyncio
     async def test_never_found_any_hits_still_uses_canned_message(self) -> None:
         """Zero hits ever (not just at the retry limit) keeps the graceful no-context message."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = []
 
         workflow = CorrectiveRAGWorkflow(
@@ -174,7 +201,7 @@ class TestDeterministicCitationOrdering:
     @pytest.mark.asyncio
     async def test_citations_are_ordered_by_score_descending(self) -> None:
         """Higher-score hits should appear first in the citations list."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [
             _hit("b::0000", 0.2),
             _hit("a::0000", 0.9),
@@ -194,7 +221,7 @@ class TestDeterministicCitationOrdering:
     @pytest.mark.asyncio
     async def test_tied_scores_break_ties_by_chunk_id_ascending(self) -> None:
         """Equal-score hits should be ordered by chunk_id ascending for stability."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [
             _hit("z::0000", 0.5),
             _hit("a::0000", 0.5),

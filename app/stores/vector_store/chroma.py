@@ -63,6 +63,7 @@ class ChromaVectorStore:
         # would reintroduce the counter-based race the UUID ids above avoid.
         self._id_to_ordinal: dict[str, int] = {}
         self._next_ordinal: int = 0
+        self._generation: int = 0
 
         # Initialize Chroma client (in-memory or persistent)
         if persist_directory:
@@ -85,6 +86,15 @@ class ChromaVectorStore:
             embedding_function=self._embedding_function,
         )
 
+    @property
+    def generation(self) -> int:
+        """Monotonically increasing content-version counter.
+
+        Advanced after each successful `add_documents()` call and after each
+        `clear()` call; unchanged when the underlying Chroma write raises.
+        """
+        return self._generation
+
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the store with automatic embedding generation.
 
@@ -95,6 +105,7 @@ class ChromaVectorStore:
             chunks: List of text chunks to add. Empty list is allowed.
         """
         if not chunks:
+            self._generation += 1
             return
 
         # Generate unique IDs using UUID4 to prevent race conditions
@@ -112,6 +123,7 @@ class ChromaVectorStore:
             None,
             lambda: self._collection.add(documents=chunks, ids=ids),
         )
+        self._generation += 1
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
         """Retrieve top-k most relevant chunks using embedding-based similarity.
@@ -243,6 +255,7 @@ class ChromaVectorStore:
         self._collection = new_collection
         self._id_to_ordinal = {}
         self._next_ordinal = 0
+        self._generation += 1
 
     async def close(self) -> None:
         """Close the vector store and release any resources.

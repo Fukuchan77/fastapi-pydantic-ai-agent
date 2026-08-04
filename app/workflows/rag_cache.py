@@ -14,6 +14,7 @@ from collections import OrderedDict
 import logfire
 
 from app.config import Settings
+from app.stores.vector_store import VectorStore
 
 
 class ResultCacheMixin:
@@ -27,6 +28,7 @@ class ResultCacheMixin:
     """
 
     llm_settings: Settings
+    vector_store: VectorStore
     _cache: OrderedDict[str, tuple[dict, float]]
     _cache_hits: int
     _cache_misses: int
@@ -34,20 +36,26 @@ class ResultCacheMixin:
     _pending_futures: dict[str, asyncio.Future[dict]]
 
     def _generate_cache_key(self, query: str, max_retries: int) -> str:
-        """Generate cache key from query and max_retries parameter.
+        """Generate cache key from query, max_retries, and the store's content version.
 
-        Cache key includes both query and max_retries because
-        the same query with different max_retries may produce different results.
+        The store's `generation` (Req 2.1/2.2) is included so an ingest - which
+        advances it - makes every pre-ingest entry miss on the next identical
+        query, without disturbing a request already in flight under the
+        pre-ingest key (Req 2.3): `run()` derives one key and reuses it for
+        both `_cache` and `_pending_futures`, so a generation bump separates
+        the two generations' keys automatically.
 
         Args:
             query: User query string.
             max_retries: Maximum retry attempts.
 
         Returns:
-            str: SHA256 hash of query + max_retries for cache key.
+            str: SHA256 hash of query + max_retries + store generation for cache key.
         """
-        # Combine query and max_retries into a single string
-        key_material = f"{query}|{max_retries}"
+        # Combine query, max_retries, and the store's content version into a
+        # single string so a post-ingest query never resolves from a
+        # pre-ingest entry.
+        key_material = f"{query}|{max_retries}|{self.vector_store.generation}"
         # Generate SHA256 hash for consistent key length
         return hashlib.sha256(key_material.encode()).hexdigest()
 

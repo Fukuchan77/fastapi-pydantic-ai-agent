@@ -30,9 +30,18 @@ class _HangingBase:
         return {"answer": "ok", "query": query}
 
 
+class _StubVectorStore:
+    """Real int `.generation`, so no double leaks a Mock into a cache key."""
+
+    @property
+    def generation(self) -> int:
+        return 0
+
+
 class _CachedWorkflow(ResultCacheMixin, _HangingBase):
     def __init__(self, settings: Settings, delay: float = 10.0) -> None:
         self.llm_settings = settings
+        self.vector_store = _StubVectorStore()
         self._cache: OrderedDict[str, tuple[dict, float]] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
@@ -112,6 +121,7 @@ class TestLeaderCancellationDoesNotDropFollower:
         class _FailingWorkflow(ResultCacheMixin, _FailingBase):
             def __init__(self, settings: Settings) -> None:
                 self.llm_settings = settings
+                self.vector_store = _StubVectorStore()
                 self._cache = OrderedDict()
                 self._cache_hits = 0
                 self._cache_misses = 0

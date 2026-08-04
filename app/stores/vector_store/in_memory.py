@@ -69,9 +69,20 @@ class InMemoryVectorStore:
         self._next_ordinal: int = 0
         self._idf_cache: dict[str, float] | None = None
         self._memory_usage: int = 0  # Track approximate memory usage in bytes
+        self._generation: int = 0
         self.max_documents = max_documents
         self.max_chunk_size = max_chunk_size
         self.max_memory_bytes = max_memory_bytes
+
+    @property
+    def generation(self) -> int:
+        """Monotonically increasing content-version counter.
+
+        Advanced after each successful `add_documents()` call and after each
+        `clear()` call; unchanged when `add_documents()` rejects an oversized
+        chunk before mutating the store.
+        """
+        return self._generation
 
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the store.
@@ -119,6 +130,7 @@ class InMemoryVectorStore:
 
         # Invalidate IDF cache since corpus changed
         self._idf_cache = None
+        self._generation += 1
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
         """Retrieve top-k most relevant chunks using TF-IDF cosine similarity.
@@ -244,6 +256,7 @@ class InMemoryVectorStore:
         self._next_ordinal = 0
         self._idf_cache = None
         self._memory_usage = 0
+        self._generation += 1
 
     async def close(self) -> None:
         """Close the vector store and release any resources.

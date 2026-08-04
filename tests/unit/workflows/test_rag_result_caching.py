@@ -22,6 +22,7 @@ def mock_vector_store():
     store.query_with_scores.return_value = [
         RetrievedHit(chunk_id="memory::0000", text="Test document chunk", score=1.0)
     ]
+    store.generation = 0
     return store
 
 
@@ -40,6 +41,51 @@ def mock_settings():
     settings.rag_initial_k = 2
     settings.rag_widened_k = 4
     return settings
+
+
+@pytest.mark.asyncio
+async def test_mock_vector_store_generation_is_a_real_int(mock_vector_store):
+    """Guard against an unconfigured AsyncMock attribute leaking into the cache key.
+
+    Task 3.2: the generation-keyed cache (task 3.4) reads store.generation
+    directly. An unconfigured AsyncMock attribute would leak a Mock object
+    into the cache key instead of a real int.
+    """
+    assert isinstance(mock_vector_store.generation, int)
+
+
+@pytest.mark.asyncio
+async def test_cache_key_changes_when_store_generation_advances(
+    mock_vector_store,
+    mock_settings,
+):
+    """Task 3.4: the cache key must include the store's content version.
+
+    An identical query/max_retries pair must miss the cache once the store's
+    generation has advanced (an ingest happened) - see Requirement 2.3. Before
+    task 3.4, the key was derived from query+max_retries only, so this second
+    call would incorrectly return the pre-ingest cached result.
+    """
+    workflow = CorrectiveRAGWorkflow(
+        vector_store=mock_vector_store,
+        llm_settings=mock_settings,
+        llm_model=TestModel(),
+    )
+
+    query = "What is FastAPI?"
+
+    await workflow.run(query=query, max_retries=3)
+    call_count_after_first = mock_vector_store.query_with_scores.call_count
+
+    # Simulate a completed ingest: the store's generation advances.
+    mock_vector_store.generation = 1
+
+    await workflow.run(query=query, max_retries=3)
+    call_count_after_second = mock_vector_store.query_with_scores.call_count
+
+    assert call_count_after_second > call_count_after_first, (
+        "A generation bump must miss the pre-ingest cache entry"
+    )
 
 
 @pytest.mark.asyncio

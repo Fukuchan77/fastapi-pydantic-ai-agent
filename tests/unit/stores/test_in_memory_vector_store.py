@@ -79,6 +79,47 @@ class TestAddDocuments:
         with pytest.raises(ValueError, match="Document chunk too large"):
             await store.add_documents([large_chunk])
 
+
+class TestGeneration:
+    """Test the `generation` content-version counter (Req 2.1, 2.2, 2.4).
+
+    Boundary correction for task 3.1
+    (`.sdd/specs/002-review-roadmap-remediation/tasks.md`): 3.1's own
+    boundary has no test file, so this class is the RED step ahead of task
+    3.3's formal parametrized conformance widening.
+    """
+
+    def test_generation_starts_at_zero(self) -> None:
+        """A freshly constructed store starts at generation 0."""
+        store = InMemoryVectorStore()
+        assert store.generation == 0
+
+    @pytest.mark.asyncio
+    async def test_generation_increments_after_successful_add(self) -> None:
+        """A successful add_documents() call advances generation."""
+        store = InMemoryVectorStore()
+        await store.add_documents(["First document"])
+        assert store.generation == 1
+        await store.add_documents(["Second document"])
+        assert store.generation == 2
+
+    @pytest.mark.asyncio
+    async def test_generation_increments_after_clear(self) -> None:
+        """A clear() call advances generation."""
+        store = InMemoryVectorStore()
+        await store.add_documents(["First document"])
+        await store.clear()
+        assert store.generation == 2
+
+    @pytest.mark.asyncio
+    async def test_generation_unchanged_on_failed_add(self) -> None:
+        """A rejected add_documents() call (oversized chunk) leaves generation unchanged."""
+        store = InMemoryVectorStore(max_chunk_size=100)
+        large_chunk = "x" * 101
+        with pytest.raises(ValueError, match="Document chunk too large"):
+            await store.add_documents([large_chunk])
+        assert store.generation == 0
+
     @pytest.mark.asyncio
     async def test_add_chunk_at_max_size_boundary(self) -> None:
         """Store accepts chunks exactly at max_chunk_size."""

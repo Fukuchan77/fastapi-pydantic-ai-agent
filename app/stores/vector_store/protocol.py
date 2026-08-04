@@ -12,6 +12,18 @@ class VectorStore(Protocol):
     and store clearing capabilities.
     """
 
+    @property
+    def generation(self) -> int:
+        """Monotonically increasing content-version counter.
+
+        Incremented by the implementation after each successful
+        `add_documents()` call and after each `clear()` call, so a consumer
+        can key a cache on "which content set is this" without inspecting
+        store contents directly. Left unchanged when either operation raises.
+        Read-only: callers must never assign to this member.
+        """
+        ...
+
     async def add_documents(self, chunks: list[str]) -> None:
         """Add document chunks to the vector store.
 

@@ -26,6 +26,10 @@ class MockVectorStore:
         """Mock query."""
         return []
 
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[Any]:
+        """Mock query_with_scores."""
+        return []
+
     async def clear(self) -> None:
         """Mock clear."""
         pass
@@ -33,6 +37,25 @@ class MockVectorStore:
     async def close(self) -> None:
         """Mock close."""
         pass
+
+    @property
+    def generation(self) -> int:
+        """Real int content version, so no double leaks a Mock into a cache key."""
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_mock_vector_store_exposes_real_generation_and_scored_query() -> None:
+    """Guard against a hand-written double missing generation/query_with_scores.
+
+    Task 3.2: the generation-keyed RAG cache (task 3.4) reads store.generation
+    and calls query_with_scores() on every store CorrectiveRAGWorkflow.run()
+    receives. A hand-written double missing either would leak an
+    AttributeError-shaped gap into that path instead of a real int.
+    """
+    store = MockVectorStore()
+    assert isinstance(store.generation, int)
+    assert await store.query_with_scores("q") == []
 
 
 @pytest.fixture

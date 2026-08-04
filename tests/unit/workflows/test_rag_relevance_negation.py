@@ -32,13 +32,41 @@ def _says_not_relevant(messages: list, info: AgentInfo) -> ModelResponse:
     return ModelResponse(parts=[TextPart(content="The chunks are not relevant to the query.")])
 
 
+def _mock_vector_store() -> AsyncMock:
+    """Build a vector-store double with a real int generation.
+
+    Task 3.2: the generation-keyed cache (task 3.4) reads store.generation
+    directly on every store CorrectiveRAGWorkflow.run() receives; an
+    unconfigured AsyncMock attribute would leak a Mock object into the
+    cache key instead of a real int.
+    """
+    store = AsyncMock()
+    store.generation = 0
+    return store
+
+
+class TestMockVectorStoreGeneration:
+    """Guard against an unconfigured Mock attribute leaking into the cache key.
+
+    Both inline vector-store doubles in this module must carry a real int
+    generation (task 3.2), so the generation-keyed cache (task 3.4) never
+    keys on an unconfigured Mock attribute — this file's two stores exercise
+    the same cached run() path CorrectiveRAGWorkflow uses.
+    """
+
+    def test_generation_is_a_real_int(self) -> None:
+        """Guard against an unconfigured AsyncMock leaking into the cache key."""
+        vector_store = _mock_vector_store()
+        assert isinstance(vector_store.generation, int)
+
+
 class TestNegativeVerdictTriggersRetry:
     """A negative verdict ("irrelevant"/"not relevant") must retry, not skip."""
 
     @pytest.mark.asyncio
     async def test_irrelevant_verdict_widens_retrieval(self) -> None:
         """The verdict "irrelevant" contains "relevant" but must count as insufficient."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [_hit("memory::0000", 0.9)]
 
         workflow = CorrectiveRAGWorkflow(
@@ -58,7 +86,7 @@ class TestNegativeVerdictTriggersRetry:
     @pytest.mark.asyncio
     async def test_not_relevant_verdict_widens_retrieval(self) -> None:
         """A free-form "not relevant" sentence must also count as insufficient."""
-        vector_store = AsyncMock()
+        vector_store = _mock_vector_store()
         vector_store.query_with_scores.return_value = [_hit("memory::0000", 0.9)]
 
         workflow = CorrectiveRAGWorkflow(
