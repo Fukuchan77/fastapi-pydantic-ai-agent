@@ -9,6 +9,8 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
+from pydantic_ai import RunUsage
+from pydantic_ai import UsageLimitExceeded
 
 from app.api.v1._stream import _run_with_lifecycle_guards
 from app.patterns.sse import Completed
@@ -173,3 +175,50 @@ async def test_no_events_emitted_after_error() -> None:
 
     assert len(wires) == 1
     assert "error" in wires[0]
+
+
+class TestUsageLimitExceededDetail:
+    """Req 9.4: a UsageLimitExceeded reports the observed usage snapshot when given one.
+
+    `usage` is plumbed in from the caller (`event_source`) rather than owned
+    here, so these tests exercise the message-formatting contract directly
+    against a scripted `RunUsage`, decoupled from a real Agent run.
+    """
+
+    @pytest.mark.asyncio
+    async def test_error_message_includes_the_usage_snapshot_when_usage_is_given(self) -> None:
+        """The terminal Error message reports requests/tool_calls/total_tokens."""
+        settings = build_test_settings()
+        agen = _TrackingAsyncGen(
+            _raises(UsageLimitExceeded("The next request would exceed the request_limit of 1"))
+        )
+        usage = RunUsage(requests=3, tool_calls=1, input_tokens=40, output_tokens=10)
+
+        wires = [
+            w
+            async for w in _run_with_lifecycle_guards(
+                _FakeRequest(), agen, settings, usage=usage
+            )
+        ]
+
+        parsed = parse_sse_events("".join(wires))
+        assert len(parsed) == 1
+        error = parsed[0]
+        assert isinstance(error, Error)
+        assert "max_iterations" in error.message
+        assert "requests=3" in error.message
+        assert "tool_calls=1" in error.message
+        assert "total_tokens=50" in error.message
+
+    @pytest.mark.asyncio
+    async def test_error_message_omits_the_snapshot_when_no_usage_is_given(self) -> None:
+        """Without a usage object, the message stays the plain stop-reason text."""
+        settings = build_test_settings()
+        agen = _TrackingAsyncGen(
+            _raises(UsageLimitExceeded("Exceeded the total_tokens_limit of 10"))
+        )
+
+        wires = [w async for w in _run_with_lifecycle_guards(_FakeRequest(), agen, settings)]
+
+        parsed = parse_sse_events("".join(wires))
+        assert parsed == [Error(message="Usage limit exceeded: budget_exceeded")]

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai import CombinedToolset
 from pydantic_ai import RunContext
+from pydantic_ai import RunUsage
 from pydantic_ai import UsageLimitExceeded
 from pydantic_ai import UsageLimits
 from pydantic_ai.messages import ModelMessage
@@ -46,7 +47,13 @@ _ARGS_SUMMARY_MAX_LEN = 200
 
 
 class AuditRecord(BaseModel):
-    """A single refused, denied, or budget-blocked tool-call attempt (Req 4.7)."""
+    """A single refused, denied, or budget-blocked attempt (Req 4.7).
+
+    `tool_name` is empty for a native `UsageLimitExceeded` stop (Req 9.6):
+    the request-count/tool-call-count/token-count check that raised fires
+    before any specific tool call is attempted, so there is no tool name to
+    record.
+    """
 
     tool_name: str
     stop_reason: StopReason
@@ -217,20 +224,66 @@ def build_guarded_toolset[DepsT](
 def classify_usage_limit_exceeded(exc: UsageLimitExceeded) -> StopReason:
     """Map a native `UsageLimitExceeded` to the closed `StopReason` vocabulary.
 
-    Request-count and tool-call-count limits describe the agentic loop running
-    too many iterations; token limits describe exhausting the token budget.
+    `UsageLimitExceeded` (a bare `pydantic_ai.exceptions.AgentRunError`) carries
+    no structured attribute distinguishing which limit fired - only a message
+    string built by `pydantic_ai.usage.UsageLimits.check_before_request` /
+    `.check_before_tool_call` / `.check_tokens`. Request-count and
+    tool-call-count limits describe the agentic loop running too many
+    iterations; token limits describe exhausting the token budget.
 
     Args:
         exc: The exception raised by `UsageLimits` enforcement.
 
     Returns:
-        `"max_iterations"` for request/tool-call limits, `"budget_exceeded"` for
-        token limits.
+        `"max_iterations"` when the message names `request_limit` or
+        `tool_calls_limit`. Otherwise, Req 7.5's documented default:
+        `"budget_exceeded"`, the more general budget-exhaustion vocabulary
+        member, so a message this classifier does not recognise (e.g. an
+        upstream reword, guarded by a test pinning every current template -
+        Req 7.7) is never asserted to be an iteration-count breach it may not
+        have been.
     """
     message = str(exc)
     if "request_limit" in message or "tool_calls_limit" in message:
         return "max_iterations"
-    return "budget_exceeded"
+    return "budget_exceeded"  # Req 7.5 documented default
+
+
+def _usage_limit_detail(limits: UsageLimits, usage: RunUsage) -> str:
+    """Describe which configured limit(s) the observed usage snapshot crossed.
+
+    Derived from *our own* `limits` crossed with the caller-owned `usage`
+    snapshot the library mutated in place (ADR-1) - never from the raised
+    exception's message, so an upstream reword of that message can never
+    corrupt the audit trail's own detail (Req 7.5).
+
+    Args:
+        limits: The `UsageLimits` configured for the run.
+        usage: The `RunUsage` snapshot observed at the moment of the raise.
+
+    Returns:
+        A comma-separated `"{counter}={observed}/{configured}"` entry for
+        every configured limit whose counter has reached or exceeded it. If
+        none matches - defensive only, since the library raises solely when
+        some limit crossed - a snapshot-only description of every counter.
+    """
+    crossed: list[str] = []
+    if limits.request_limit is not None and usage.requests >= limits.request_limit:
+        crossed.append(f"requests={usage.requests}/{limits.request_limit}")
+    if limits.tool_calls_limit is not None and usage.tool_calls >= limits.tool_calls_limit:
+        crossed.append(f"tool_calls={usage.tool_calls}/{limits.tool_calls_limit}")
+    if limits.input_tokens_limit is not None and usage.input_tokens > limits.input_tokens_limit:
+        crossed.append(f"input_tokens={usage.input_tokens}/{limits.input_tokens_limit}")
+    if limits.output_tokens_limit is not None and usage.output_tokens > limits.output_tokens_limit:
+        crossed.append(f"output_tokens={usage.output_tokens}/{limits.output_tokens_limit}")
+    if limits.total_tokens_limit is not None and usage.total_tokens > limits.total_tokens_limit:
+        crossed.append(f"total_tokens={usage.total_tokens}/{limits.total_tokens_limit}")
+    if crossed:
+        return ", ".join(crossed)
+    return (
+        f"requests={usage.requests}, tool_calls={usage.tool_calls}, "
+        f"total_tokens={usage.total_tokens} (no configured limit matched the observed snapshot)"
+    )
 
 
 async def run_guarded[DepsT, OutputT](
@@ -274,6 +327,11 @@ async def run_guarded[DepsT, OutputT](
         allowed_tools=allowed_tools,
         approval_hook=approval_hook,
     )
+    # Caller-owned RunUsage (per ADR-1): pydantic-ai mutates this exact
+    # object in place as the run progresses, so the counters below stay
+    # readable after a UsageLimitExceeded raise even though the exception
+    # itself carries none.
+    usage = RunUsage()
 
     try:
         # `agent.toolsets` always re-includes the agent's own function
@@ -289,13 +347,26 @@ async def run_guarded[DepsT, OutputT](
                 deps=deps,
                 message_history=list(message_history) if message_history else None,
                 usage_limits=limits,
+                usage=usage,
             )
     except GuardrailStopError as exc:
         return GuardedResult(output=None, stop_reason=exc.stop_reason, audit=list(audit.entries))
     except UsageLimitExceeded as exc:
+        # Req 9.6/14.2: the native check raises before `_GuardedToolset`
+        # ever runs, so nothing above has recorded this stop yet - without
+        # this record `ChatResponse.audit` is empty for essentially every
+        # real budget stop (the measured defect ADR-1/Req 7.5 close).
+        stop_reason = classify_usage_limit_exceeded(exc)
+        audit.record(
+            AuditRecord(
+                tool_name="",
+                stop_reason=stop_reason,
+                detail=_usage_limit_detail(limits, usage),
+            )
+        )
         return GuardedResult(
             output=None,
-            stop_reason=classify_usage_limit_exceeded(exc),
+            stop_reason=stop_reason,
             audit=list(audit.entries),
         )
 

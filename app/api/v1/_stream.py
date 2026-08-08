@@ -24,6 +24,7 @@ from typing import runtime_checkable
 from fastapi import Request
 from pydantic_ai import Agent
 from pydantic_ai import NativeOutput
+from pydantic_ai import RunUsage
 from pydantic_ai import UsageLimitExceeded
 from pydantic_ai import UsageLimits
 from pydantic_ai.messages import FunctionToolCallEvent
@@ -88,6 +89,7 @@ async def _agent_event_stream(
     deps: AgentDeps,
     history: Sequence[ModelMessage],
     settings: Settings,
+    usage: RunUsage | None = None,
 ) -> AsyncGenerator[SSEEvent]:
     """Drive `Agent.iter()` and map pydantic-ai's graph nodes/events onto the typed SSE union.
 
@@ -102,27 +104,40 @@ async def _agent_event_stream(
     instead, so raw JSON never reaches the client.
 
     The run is wrapped in the same guardrails as the non-streaming chat path
-    (Req 4.1: native `UsageLimits`; Req 4.4-4.6: tool allow-list/approval/
-    budget checks) via `build_guarded_toolset`/`agent.override`. A
-    `GuardrailStopError`/`UsageLimitExceeded` raised here propagates out of this
-    generator and is turned into a terminal `Error` SSE event by
-    `_run_with_lifecycle_guards`.
+    (Req 4.1/9.4: native `UsageLimits`, including `tool_calls_limit`; Req
+    4.4-4.6: tool allow-list/approval/budget checks) via
+    `build_guarded_toolset`/`agent.override`. A `GuardrailStopError`/
+    `UsageLimitExceeded` raised here propagates out of this generator and is
+    turned into a terminal `Error` SSE event by `_run_with_lifecycle_guards`.
+
+    Per ADR-1 (same mechanism as `run_guarded`'s non-streaming path), `usage`
+    is a caller-owned `RunUsage` that pydantic-ai mutates in place as the run
+    progresses, so its counters stay readable after a `UsageLimitExceeded`
+    raise even though the exception itself carries none - the caller passes
+    the same instance to `_run_with_lifecycle_guards` so its consumer-side
+    exception handler, which sits outside this generator's task, can read it.
 
     Args:
         chat_agent: The Pydantic AI chat agent to run.
         chat_request: The incoming chat request (message + optional session_id).
         deps: Agent dependencies (session store, settings, http client).
         history: Prior conversation history to seed the run with.
-        settings: Application settings (usage_request_limit/usage_total_tokens_limit).
+        settings: Application settings (usage_request_limit/usage_total_tokens_limit/
+            usage_tool_calls_limit).
+        usage: Caller-owned `RunUsage` passed through to `Agent.iter()`. A
+            fresh instance is created when omitted (e.g. by call sites that
+            don't need to read counters after the run).
 
     Yields:
         Typed SSE events as the agent run progresses.
     """
     is_native_output = isinstance(chat_agent.output_type, NativeOutput)
+    run_usage = usage if usage is not None else RunUsage()
 
     limits = UsageLimits(
         request_limit=settings.usage_request_limit,
         total_tokens_limit=settings.usage_total_tokens_limit,
+        tool_calls_limit=settings.usage_tool_calls_limit,
     )
     guarded_toolset = build_guarded_toolset(chat_agent, limits=limits, audit=deps.audit)
 
@@ -136,6 +151,7 @@ async def _agent_event_stream(
             deps=deps,
             message_history=list(history),
             usage_limits=limits,
+            usage=run_usage,
         ) as agent_run:
             async for node in agent_run:
                 if Agent.is_model_request_node(node):
@@ -250,6 +266,7 @@ async def _run_with_lifecycle_guards(
     agen: AsyncGenerator[SSEEvent],
     settings: Settings,
     *,
+    usage: RunUsage | None = None,
     message_length: int = 0,
 ) -> AsyncIterator[str]:
     """Enforce the SSE stream's lifecycle guarantees around a raw event source.
@@ -263,6 +280,15 @@ async def _run_with_lifecycle_guards(
         request: The incoming request (only `is_disconnected()` is used).
         agen: The raw async generator of typed SSE events to guard.
         settings: Application settings (sse_max_events/sse_send_timeout).
+        usage: The same caller-owned `RunUsage` passed into the event source
+            driving `agen` (e.g. `_agent_event_stream`), if any. `agen` runs
+            in its own dedicated task (see `_drive_to_queue`); this handler
+            runs in the caller's task instead, outside that task and outside
+            the `Agent.iter()` context manager it held open. Reading the same
+            `RunUsage` instance here (mutated in place by pydantic-ai as the
+            run progressed) is what lets a `UsageLimitExceeded` here report
+            the same requests/tool_calls/total_tokens detail as the
+            non-streaming path's `run_guarded()` can (Req 9.4).
         message_length: Length of the user's message, logged as metadata
             instead of the message content itself (never log raw user input).
 
@@ -307,7 +333,13 @@ async def _run_with_lifecycle_guards(
                     elif isinstance(exc, UsageLimitExceeded):
                         stop_reason = classify_usage_limit_exceeded(exc)
                         logger.warning("Agent stream usage limit exceeded: %s", stop_reason)
-                        yield to_sse(Error(message=f"Usage limit exceeded: {stop_reason}"))
+                        detail = (
+                            f" (requests={usage.requests}, tool_calls={usage.tool_calls}, "
+                            f"total_tokens={usage.total_tokens})"
+                            if usage is not None
+                            else ""
+                        )
+                        yield to_sse(Error(message=f"Usage limit exceeded: {stop_reason}{detail}"))
                     else:
                         logger.error(
                             "Unexpected error in agent stream",
@@ -351,6 +383,12 @@ async def event_source(
 ) -> AsyncIterator[str]:
     """Build the agent event stream and guard its lifecycle, yielding SSE wire text.
 
+    Owns a single caller-owned `RunUsage` for the whole request, shared
+    between the event source (`_agent_event_stream`, which runs in its own
+    dedicated task) and the lifecycle guard (`_run_with_lifecycle_guards`,
+    whose `UsageLimitExceeded` handling runs outside that task) so both see
+    the same mutated-in-place counters (Req 9.4).
+
     Args:
         request: The incoming FastAPI request (for disconnect polling).
         chat_agent: The Pydantic AI chat agent to run.
@@ -365,11 +403,13 @@ async def event_source(
     if chat_request.session_id:
         history = await deps.session_store.get_history(chat_request.session_id)
 
-    agen = _agent_event_stream(chat_agent, chat_request, deps, history, settings)
+    usage = RunUsage()
+    agen = _agent_event_stream(chat_agent, chat_request, deps, history, settings, usage=usage)
     async for wire in _run_with_lifecycle_guards(
         request,
         agen,
         settings,
+        usage=usage,
         message_length=len(chat_request.message),
     ):
         yield wire

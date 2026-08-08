@@ -93,6 +93,7 @@ async def chat(
     limits = UsageLimits(
         request_limit=settings.usage_request_limit,
         total_tokens_limit=settings.usage_total_tokens_limit,
+        tool_calls_limit=settings.usage_tool_calls_limit,
     )
 
     try:

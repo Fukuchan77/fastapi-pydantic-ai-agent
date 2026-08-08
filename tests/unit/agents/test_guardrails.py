@@ -9,10 +9,12 @@ deferred real-tool work.
 
 from unittest.mock import AsyncMock
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import httpx
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai import RunUsage
 from pydantic_ai import UsageLimits
 from pydantic_ai.models.test import TestModel
 
@@ -268,6 +270,79 @@ class TestRunGuardedMaxIterations:
         assert result.output is None
 
 
+class TestRunGuardedUsageLimitAudit:
+    """Req 7.4/7.5/9.6: a native UsageLimitExceeded records audit detail too.
+
+    Before this task, `run_guarded`'s `except UsageLimitExceeded` returned an
+    empty `audit` list - the native check raises before `_GuardedToolset`
+    ever runs, so nothing was ever recorded for the most common budget stop.
+    The detail must be derived from *our own* `limits` crossed with the
+    caller-owned `usage` snapshot (ADR-1), never from `exc`'s message text.
+    """
+
+    @pytest.mark.asyncio
+    async def test_request_limit_stop_is_recorded_with_derived_detail(self) -> None:
+        """A request_limit stop appends one audit entry naming requests=1/1."""
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(),
+            limits=UsageLimits(request_limit=1),
+            allowed_tools={"mock_web_search"},
+        )
+
+        assert result.stop_reason == "max_iterations"
+        assert len(result.audit) == 1
+        entry = result.audit[0]
+        assert entry.stop_reason == "max_iterations"
+        assert "requests=1/1" in entry.detail
+
+    @pytest.mark.asyncio
+    async def test_detail_is_derived_from_snapshot_not_exception_message(self) -> None:
+        """The recorded detail reflects our limits x usage, not exc's wording.
+
+        Proven by mismatching the two: a total_tokens_limit low enough to
+        never be reached by TestModel's tiny fixture responses, together with
+        a request_limit=1 stop. If the detail were built from `str(exc)` it
+        would read "request_limit" (the exception's own wording); the
+        snapshot-derived detail instead names the counter that actually
+        crossed its configured value.
+        """
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(),
+            limits=UsageLimits(request_limit=1, total_tokens_limit=1_000_000),
+            allowed_tools={"mock_web_search"},
+        )
+
+        assert result.stop_reason == "max_iterations"
+        entry = result.audit[0]
+        assert "requests=1/1" in entry.detail
+        assert "total_tokens" not in entry.detail
+
+    @pytest.mark.asyncio
+    async def test_no_crossed_limit_falls_back_to_snapshot_only_detail(self) -> None:
+        """A synthetic raise with no configured limit still yields a snapshot detail.
+
+        Exercises `_usage_limit_detail`'s defensive fallback directly - the
+        library never actually raises without a configured limit crossed, so
+        this path is otherwise unreachable through `run_guarded` itself.
+        """
+        from app.agents.guardrails import _usage_limit_detail
+
+        detail = _usage_limit_detail(UsageLimits(request_limit=None), RunUsage(requests=3))
+
+        assert "requests=3" in detail
+        assert "no configured limit matched" in detail
+
+
 class TestClassifyUsageLimitExceeded:
     """Direct unit coverage of the UsageLimitExceeded -> StopReason mapping."""
 
@@ -294,6 +369,73 @@ class TestClassifyUsageLimitExceeded:
         exc = UsageLimitExceeded("Exceeded the total_tokens_limit of 10")
 
         assert classify_usage_limit_exceeded(exc) == "budget_exceeded"
+
+    def test_unrecognized_message_hits_the_documented_default_branch(self) -> None:
+        """Req 7.5: an unrecognised message still resolves to one documented default.
+
+        The dependency exposes no attribute distinguishing an iteration limit
+        from a token limit (R1); a message naming neither `request_limit` nor
+        `tool_calls_limit` must still classify deterministically rather than
+        raise or return an undeclared value (7.6).
+        """
+        from pydantic_ai import UsageLimitExceeded
+
+        exc = UsageLimitExceeded("some future limit_kind the library has not shipped yet")
+
+        assert classify_usage_limit_exceeded(exc) == "budget_exceeded"
+
+
+class TestRunGuardedUsageObject:
+    """Req 9.4/14.2 (ADR-1): a caller-owned RunUsage is passed into agent.run().
+
+    The native exception carries no counters, so `run_guarded` must own the
+    `RunUsage` instance itself - the library mutates it in place - to make
+    accurate post-stop counters readable (closes the 14.2 verification
+    finding that `UsageLimits.tool_calls_limit` was never set/observable).
+    """
+
+    @pytest.mark.asyncio
+    async def test_passes_caller_owned_usage_object_to_agent_run(self) -> None:
+        """A completed run still passes a real, populated RunUsage to agent.run()."""
+        model = TestModel(call_tools=[], custom_output_text="hello there")
+        agent = _build_agent(model)
+
+        with patch.object(agent, "run", wraps=agent.run) as spy_run:
+            result = await run_guarded(
+                agent,
+                "hi",
+                deps=_build_deps(),
+                limits=UsageLimits(),
+            )
+
+        assert result.stop_reason == "completed"
+        spy_run.assert_awaited_once()
+        _, kwargs = spy_run.call_args
+        usage = kwargs.get("usage")
+        assert isinstance(usage, RunUsage)
+        assert usage.requests >= 1
+
+    @pytest.mark.asyncio
+    async def test_usage_object_is_mutated_in_place_even_on_a_budget_stop(self) -> None:
+        """The passed-in RunUsage reflects real counters even when the native check raises."""
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        with patch.object(agent, "run", wraps=agent.run) as spy_run:
+            result = await run_guarded(
+                agent,
+                "search for something",
+                deps=_build_deps(),
+                limits=UsageLimits(request_limit=1),
+                allowed_tools={"mock_web_search"},
+            )
+
+        assert result.stop_reason == "max_iterations"
+        spy_run.assert_awaited_once()
+        _, kwargs = spy_run.call_args
+        usage = kwargs.get("usage")
+        assert isinstance(usage, RunUsage)
+        assert usage.requests >= 1
 
 
 class TestAuditTrail:

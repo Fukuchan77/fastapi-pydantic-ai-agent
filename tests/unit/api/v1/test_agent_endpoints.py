@@ -20,6 +20,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 
+from app.agents.guardrails import GuardedResult
 from app.main import app
 from app.security.principal import Principal
 from app.security.principal import derive_principal_id
@@ -223,6 +224,68 @@ class TestChatEndpoint:
                 data = response.json()
                 # Should count 2 tool-call messages
                 assert data["tool_calls_made"] == 2
+
+    @pytest.mark.asyncio
+    async def test_chat_sets_tool_calls_limit_from_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Req 9.4/14.2: the guarded run's UsageLimits carries tool_calls_limit.
+
+        Closes the 14.2 verification finding that `UsageLimits.tool_calls_limit`
+        was never set - the native tool-call budget was silently inactive
+        regardless of `usage_tool_calls_limit` in settings.
+        """
+        monkeypatch.setenv("API_KEY", "test-api-key-12345")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")
+
+        settings = build_test_settings()
+        assert settings.usage_tool_calls_limit is not None
+
+        guarded_result = GuardedResult(
+            output="hi",
+            stop_reason="completed",
+            audit=[],
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content="Hi")]),
+                ModelResponse(parts=[TextPart(content="hi")]),
+            ],
+        )
+
+        mock_session_store = AsyncMock()
+        mock_session_store.get_history = AsyncMock(return_value=[])
+
+        with (
+            patch("app.api.v1.agent.get_agent_deps") as mock_get_deps,
+            patch(
+                "app.api.v1.agent.run_guarded",
+                new=AsyncMock(return_value=guarded_result),
+            ) as mock_run_guarded,
+        ):
+            mock_deps = MagicMock()
+            mock_deps.session_store = mock_session_store
+            mock_deps.settings = settings
+            mock_get_deps.side_effect = AsyncMock(return_value=mock_deps)
+
+            with (
+                patch.object(app.state, "chat_agent", MagicMock(), create=True),
+                patch.object(app.state, "http_client", AsyncMock(), create=True),
+                patch.object(app.state, "settings", settings, create=True),
+                patch.object(app.state, "session_store", mock_session_store, create=True),
+            ):
+                client = TestClient(app)
+
+                response = client.post(
+                    "/v1/agent/chat",
+                    json={"message": "Hi"},
+                    headers={"X-API-Key": "test-api-key-12345"},
+                )
+
+                assert response.status_code == 200
+
+        mock_run_guarded.assert_awaited_once()
+        _, kwargs = mock_run_guarded.call_args
+        assert kwargs["limits"].tool_calls_limit == settings.usage_tool_calls_limit
 
     @pytest.mark.asyncio
     async def test_chat_timeout_returns_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
