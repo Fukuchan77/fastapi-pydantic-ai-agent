@@ -30,6 +30,13 @@ class SessionStore(Protocol):
 
         This operation replaces any existing history for the session.
 
+        Capacity contract: implementations trim `messages` to their
+        configured per-session cap when it is exceeded — they never raise
+        for reaching the cap. Reaching a long conversation's message limit
+        is expected operation, not a failure, and every implementation
+        applies the same trimming behavior so backend choice does not
+        change the observable capacity semantics (Req 3.3-3.6).
+
         Args:
             session_id: Unique identifier for the conversation session.
             messages: Complete message history to store, in chronological order.

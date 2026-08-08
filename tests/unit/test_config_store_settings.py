@@ -95,3 +95,37 @@ def test_redis_session_store_disabled_without_redis_url_succeeds() -> None:
 
     assert settings.redis_session_store_enabled is False
     assert settings.redis_url is None
+
+
+# ---------------------------------------------------------------------------
+# session_max_messages (Req 3.6)
+# ---------------------------------------------------------------------------
+
+
+def test_session_max_messages_default_matches_in_memory_store_default() -> None:
+    """Default matches InMemorySessionStore.DEFAULT_MAX_MESSAGES.
+
+    So no deployment's effective cap changes unless the operator opts in.
+    """
+    from app.stores.session_store import InMemorySessionStore
+
+    settings = _build_settings()
+
+    assert settings.session_max_messages == InMemorySessionStore.DEFAULT_MAX_MESSAGES
+
+
+def test_session_max_messages_accepts_custom_value() -> None:
+    """session_max_messages accepts an operator-configured override."""
+    settings = _build_settings(session_max_messages=500)
+
+    assert settings.session_max_messages == 500
+
+
+@pytest.mark.parametrize("value", [0, 1])
+def test_session_max_messages_rejects_degenerate_floor(value: int) -> None:
+    """Values below 2 are rejected at construction time.
+
+    This is the trimmer's degenerate max_messages<=1 case, per plan.md's ge=2 floor.
+    """
+    with pytest.raises(ValidationError):
+        _build_settings(session_max_messages=value)

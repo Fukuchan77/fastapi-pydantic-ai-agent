@@ -184,15 +184,15 @@ async def _agent_event_stream(
                                 chat_request.session_id,
                                 agent_run.all_messages(),
                             )
-                        except ValueError as e:
-                            logger.warning(
-                                "Failed to save session history for session %s: %s",
-                                chat_request.session_id,
-                                e,
-                            )
-                            yield Error(message="Failed to save session")
-                            return
                         except Exception:
+                            # `save_history` never raises for reaching the
+                            # per-session cap (Req 3.4: it trims instead), and
+                            # `stream_agent` has already authorized
+                            # `session_id` before this generator runs, so a
+                            # malformed id can't reach here either. This
+                            # branch is a defensive catch-all for genuinely
+                            # unexpected failures (e.g. a backend I/O error),
+                            # not a capacity or validation path.
                             logger.error(
                                 "Unexpected error saving session history for session %s",
                                 chat_request.session_id,

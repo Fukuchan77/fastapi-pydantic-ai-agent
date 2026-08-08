@@ -71,6 +71,38 @@ def test_build_session_store_redis_enabled_returns_redis_session_store() -> None
     mock_from_url.assert_called_once_with("redis://localhost:6379/0", decode_responses=False)
 
 
+def test_build_session_store_passes_default_session_max_messages_to_in_memory_store() -> None:
+    """The default session_max_messages setting reaches InMemorySessionStore."""
+    store = build_session_store(_build_settings())
+
+    assert isinstance(store, InMemorySessionStore)
+    assert store.max_messages == 1000
+
+
+def test_build_session_store_passes_custom_session_max_messages_to_in_memory_store() -> None:
+    """An operator-configured session_max_messages reaches InMemorySessionStore."""
+    store = build_session_store(_build_settings(session_max_messages=250))
+
+    assert isinstance(store, InMemorySessionStore)
+    assert store.max_messages == 250
+
+
+def test_build_session_store_passes_session_max_messages_to_redis_store() -> None:
+    """The configured session_max_messages setting reaches RedisSessionStore too (Req 3.6)."""
+    mock_redis_client = AsyncMock()
+    settings = _build_settings(
+        redis_session_store_enabled=True,
+        redis_url="redis://localhost:6379/0",
+        session_max_messages=250,
+    )
+
+    with patch("redis.asyncio.from_url", return_value=mock_redis_client):
+        store = build_session_store(settings)
+
+    assert isinstance(store, RedisSessionStore)
+    assert store.max_messages == 250
+
+
 # ---------------------------------------------------------------------------
 # build_vector_store selection matrix (Req 5.1, 5.3)
 # ---------------------------------------------------------------------------

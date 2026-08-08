@@ -10,6 +10,8 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 
+from app.stores.session_store._trim import trim_history
+
 
 class InMemorySessionStore:
     """In-memory session history store with per-session locking.
@@ -39,8 +41,10 @@ class InMemorySessionStore:
         """Initialize an empty in-memory session store with per-session locks and TTL.
 
         Args:
-            max_messages: Maximum number of messages allowed per session (default: 1000).
-                Used to prevent unbounded memory growth.
+            max_messages: Maximum number of messages retained per session
+                (default: 1000). A save exceeding this cap is trimmed to it
+                rather than rejected, bounding memory growth without
+                bricking the session.
             session_ttl: Time-to-live for inactive sessions in seconds (default: 3600).
                 Sessions not accessed for this duration will be eligible for cleanup.
             max_sessions: Maximum number of sessions to store (default: 10,000).
@@ -85,23 +89,27 @@ class InMemorySessionStore:
     async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
         """Save message history for a session.
 
-        This operation replaces any existing history for the session.
+        This operation replaces any existing history for the session. When
+        `messages` exceeds `max_messages`, the oldest surplus is trimmed at a
+        tool-call-pairing-safe boundary (see `app.stores.session_store._trim`)
+        rather than raising — reaching the cap is expected operation for a
+        long conversation, not a failure.
 
         Args:
             session_id: Unique identifier for the conversation session.
                 Must be 1-256 characters, containing only alphanumeric
                 characters, underscores, and hyphens.
             messages: Complete message history to store, in chronological order.
-                Must not exceed max_messages limit. All elements must be
-                ModelMessage instances.
+                All elements must be ModelMessage instances.
 
         Raises:
             ValueError: If session_id is invalid (empty, too long, or contains
-                invalid characters), or if messages list exceeds max_messages limit.
+                invalid characters).
             TypeError: If messages list contains non-ModelMessage instances.
         """
         self._validate_session_id(session_id)
         self._validate_messages(messages)
+        trimmed = trim_history(messages, self.max_messages)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             # Update last access time inside the lock, same as get_history: a
             # concurrent clear()/cleanup_expired_sessions() holding this lock
@@ -110,7 +118,7 @@ class InMemorySessionStore:
             # _store entry with no _last_access entry — invisible to both LRU
             # eviction and TTL cleanup (permanent leak).
             self._last_access[session_id] = time.time()
-            self._store[session_id] = list(messages)
+            self._store[session_id] = trimmed
 
         # Perform LRU eviction AFTER releasing current session lock
         # This prevents deadlock when two concurrent save_history() calls try to evict each other:
@@ -199,17 +207,15 @@ class InMemorySessionStore:
     def _validate_messages(self, messages: Sequence[ModelMessage]) -> None:
         """Validate messages parameter.
 
+        Capacity is not validated here: exceeding `max_messages` is handled
+        by trimming in `save_history`, not by rejecting the save.
+
         Args:
             messages: The messages list to validate.
 
         Raises:
-            ValueError: If messages list exceeds max_messages limit.
             TypeError: If messages list contains non-ModelMessage instances.
         """
-        # Check message count limit
-        if len(messages) > self.max_messages:
-            raise ValueError(f"Too many messages (max {self.max_messages})")
-
         # Use strict isinstance check instead of structural validation
         # This prevents duck-typed objects from bypassing validation
         for msg in messages:

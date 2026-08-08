@@ -46,8 +46,10 @@ def build_session_store(settings: Settings) -> SessionStore:
             # Settings.validate_redis_session_store_requires_url() should have
             # already rejected this configuration; this is defense in depth.
             raise RuntimeError("redis_url is required when redis_session_store_enabled is True")
-        return RedisSessionStore(redis_url=settings.redis_url)
-    return InMemorySessionStore()
+        return RedisSessionStore(
+            redis_url=settings.redis_url, max_messages=settings.session_max_messages
+        )
+    return InMemorySessionStore(max_messages=settings.session_max_messages)
 
 
 def build_vector_store(settings: Settings) -> VectorStore:

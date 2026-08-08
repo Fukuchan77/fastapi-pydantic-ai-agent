@@ -17,23 +17,29 @@ class TestSessionStoreMessagesValidation:
         return InMemorySessionStore()
 
     @pytest.mark.asyncio
-    async def test_save_history_too_many_messages_raises_error(
+    async def test_save_history_too_many_messages_trims_to_limit(
         self, store: InMemorySessionStore
     ) -> None:
-        """save_history must raise ValueError when messages exceed max_messages limit."""
+        """save_history must trim to max_messages instead of raising when exceeded (3.3, 3.4)."""
         session_id = "test-session"
 
-        # Create 1001 messages (default max is 1000)
+        # Create 1001 messages (default max is 1000); no tool calls, so the
+        # cut lands exactly at the cap with no head-pin overshoot.
         too_many_messages = [
             ModelRequest(parts=[UserPromptPart(content=f"Message {i}")]) for i in range(1001)
         ]
 
-        with pytest.raises(ValueError, match=r"Too many messages \(max \d+\)") as exc_info:
-            await store.save_history(session_id, too_many_messages)
+        await store.save_history(session_id, too_many_messages)
 
-        error_msg = str(exc_info.value)
-        assert "too many messages" in error_msg.lower()
-        assert "max" in error_msg.lower()
+        history = await store.get_history(session_id)
+        assert len(history) == 1000
+        # Capacity contract (protocol.py save_history docstring): the pinned
+        # head survives and the *oldest* of the rest is what's discarded, not
+        # an arbitrary suffix/prefix truncation — proving the store actually
+        # delegates to the trimmer rather than e.g. keeping messages[:1000].
+        assert history[0].parts[0].content == "Message 0"  # type: ignore[attr-defined]
+        assert history[1].parts[0].content == "Message 2"  # type: ignore[attr-defined]
+        assert history[-1].parts[0].content == "Message 1000"  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_save_history_invalid_type_raises_error(

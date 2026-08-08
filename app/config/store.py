@@ -27,6 +27,14 @@ class StoreSettingsMixin(BaseModel):
         description="Enable Redis-backed session store for multi-instance deployments. "
         "Requires redis_url to be set. If False, uses in-memory store",
     )
+    session_max_messages: int = Field(
+        default=1000,
+        ge=2,
+        description="Maximum number of messages retained per session before the oldest "
+        "context is trimmed. Applies identically across every SessionStore backend. "
+        "The floor of 2 keeps the pinned system-prompt message plus at least one "
+        "other message; anything lower degenerates to head-only retention",
+    )
 
     @model_validator(mode="after")
     def validate_redis_session_store_requires_url(self) -> Self:

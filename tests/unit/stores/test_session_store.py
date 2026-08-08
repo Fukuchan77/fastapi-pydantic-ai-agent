@@ -225,11 +225,23 @@ class TestSaveHistory:
 
     @pytest.mark.asyncio
     async def test_save_history_max_messages_limit(self) -> None:
-        """save_history() raises ValueError when messages exceed max_messages."""
+        """save_history() trims to max_messages instead of raising when exceeded (Req 3.3, 3.4)."""
         store = InMemorySessionStore(max_messages=5)
         messages = [ModelRequest(parts=[UserPromptPart(content=f"Msg {i}")]) for i in range(6)]
-        with pytest.raises(ValueError, match="Too many messages"):
-            await store.save_history("session-1", messages)
+        await store.save_history("session-1", messages)
+        history = await store.get_history("session-1")
+        assert len(history) == 5
+        # Capacity contract (protocol.py save_history docstring): trim discards
+        # the oldest context, not an arbitrary subset — the pinned head and the
+        # newest messages survive, so a store that e.g. kept `messages[:5]`
+        # instead of delegating to the real trimmer would fail this too.
+        assert [m.parts[0].content for m in history] == [  # type: ignore[attr-defined]
+            "Msg 0",
+            "Msg 2",
+            "Msg 3",
+            "Msg 4",
+            "Msg 5",
+        ]
 
     @pytest.mark.asyncio
     async def test_save_history_non_model_message_raises(self) -> None:

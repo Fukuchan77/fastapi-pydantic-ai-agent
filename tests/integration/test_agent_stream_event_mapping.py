@@ -8,6 +8,7 @@ session_id was given) then Completed.
 """
 
 from collections.abc import AsyncIterator
+from collections.abc import Sequence
 
 import httpx
 import pytest
@@ -186,8 +187,10 @@ class TestSessionSaveBeforeCompleted:
         """A save_history() failure yields a terminal Error, never a Completed event."""
 
         class _FailingSessionStore(InMemorySessionStore):
-            async def save_history(self, session_id: str, messages: list[ModelMessage]) -> None:
-                raise ValueError("Too many messages")
+            async def save_history(
+                self, session_id: str, messages: Sequence[ModelMessage]
+            ) -> None:
+                raise RuntimeError("simulated session store backend failure")
 
         agent: Agent[AgentDeps, str] = Agent(
             model=FunctionModel(stream_function=_text_only_stream),

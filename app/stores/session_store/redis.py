@@ -9,6 +9,9 @@ from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
+from app.stores.session_store._trim import trim_history
+from app.stores.session_store.in_memory import InMemorySessionStore
+
 
 # Logger for exception logging in RedisSessionStore
 logger = logging.getLogger(__name__)
@@ -36,6 +39,9 @@ class RedisSessionStore:
         redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
         session_ttl: Time-to-live for sessions in seconds (default: 3600)
         key_prefix: Prefix for all Redis keys (default: "session:")
+        max_messages: Maximum number of messages retained per session
+            (default: `InMemorySessionStore.DEFAULT_MAX_MESSAGES`, matching
+            the in-memory store's effective cap).
     """
 
     DEFAULT_SESSION_TTL: int = 3600
@@ -47,6 +53,7 @@ class RedisSessionStore:
         redis_url: str,
         session_ttl: int = DEFAULT_SESSION_TTL,
         key_prefix: str = DEFAULT_KEY_PREFIX,
+        max_messages: int = InMemorySessionStore.DEFAULT_MAX_MESSAGES,
     ) -> None:
         """Initialize Redis session store.
 
@@ -54,12 +61,19 @@ class RedisSessionStore:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
             session_ttl: Time-to-live for inactive sessions in seconds (default: 3600)
             key_prefix: Prefix for all Redis keys (default: "session:")
+            max_messages: Maximum number of messages retained per session
+                (default: `InMemorySessionStore.DEFAULT_MAX_MESSAGES`). A save
+                exceeding this cap is trimmed to it rather than rejected —
+                a keyword default, not a required parameter, so every
+                existing call site keeps constructing a store with the same
+                effective cap it gets today.
         """
         import redis.asyncio as redis
 
         self._redis = redis.from_url(redis_url, decode_responses=False)
         self.session_ttl = session_ttl
         self.key_prefix = key_prefix
+        self.max_messages = max_messages
         # Compile regex pattern for session_id validation
         self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
@@ -109,6 +123,11 @@ class RedisSessionStore:
     async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
         """Save message history for a session to Redis.
 
+        When `messages` exceeds `max_messages`, the oldest surplus is
+        trimmed at a tool-call-pairing-safe boundary (see
+        `app.stores.session_store._trim`) rather than raising — reaching the
+        cap is expected operation for a long conversation, not a failure.
+
         Args:
             session_id: Unique identifier for the conversation session.
             messages: Complete message history to store.
@@ -118,9 +137,11 @@ class RedisSessionStore:
         """
         self._validate_session_id(session_id)
 
+        trimmed = trim_history(messages, self.max_messages)
+
         # Serialize messages to JSON bytes using Pydantic TypeAdapter
         # Security: Replaced pickle.dumps() with type-safe JSON serialization
-        serialized = ModelMessagesTypeAdapter.dump_json(list(messages))
+        serialized = ModelMessagesTypeAdapter.dump_json(trimmed)
 
         key = f"{self.key_prefix}{session_id}"
         # Store with TTL - Redis will automatically expire the key
