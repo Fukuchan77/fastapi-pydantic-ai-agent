@@ -7,6 +7,7 @@ from pydantic_ai import NativeOutput
 from pydantic_ai import RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models import infer_model
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai_litellm import LiteLLMModel
 from pydantic_ai_litellm import LiteLLMModelSettings
 
@@ -145,10 +146,22 @@ def build_chat_agent(
         else str
     )
 
+    # Agent-level model_settings is the only attachment point transparent to
+    # FallbackModel: member settings survive selection, but an agent-level value
+    # overrides them per key, and this applies uniformly to every model member
+    # actually tried (Req 9.1, 9.3). Do NOT move this to the guardrails install
+    # idiom (`agent.override(...)`) - overriding model_settings there replaces
+    # the agent layer *and* nulls the run layer, silently dropping these values.
+    model_settings: ModelSettings = {
+        "max_tokens": settings.llm_max_output_tokens,
+        "temperature": settings.llm_temperature,
+    }
+
     agent: Agent[AgentDeps, str | ChatOutput] = Agent(
         model=resolved_model,
         deps_type=AgentDeps,
         output_type=output_type,
+        model_settings=model_settings,
         # `output_retries=` was deprecated in pydantic-ai 1.x and removed from the
         # typed overloads (it survives only via **_deprecated_kwargs), so the
         # mapping form is both the supported spelling and the type-checkable one.

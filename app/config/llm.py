@@ -298,11 +298,30 @@ class LLMSettingsMixin(BaseModel):
         "(pydantic-ai UsageLimits.request_limit)",
     )
     usage_total_tokens_limit: int | None = Field(
-        default=None,
+        default=100000,
         ge=1,
         description="Maximum total tokens (input+output) allowed per guarded agent run; "
         "also gates the pre-tool-call budget check before any tool executes. "
         "None disables both checks",
+    )
+    usage_tool_calls_limit: int | None = Field(
+        default=20,
+        ge=1,
+        description="Maximum number of tool calls allowed per guarded agent run "
+        "(pydantic-ai UsageLimits.tool_calls_limit). None disables the check",
+    )
+    llm_max_output_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description="Per-request output-token ceiling applied to every chat model "
+        "request, primary or fallback (pydantic-ai ModelSettings.max_tokens)",
+    )
+    llm_temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature applied to every chat model request, "
+        "primary or fallback (pydantic-ai ModelSettings.temperature)",
     )
 
     @model_validator(mode="after")

@@ -286,6 +286,30 @@ class TestBuildChatAgent:
 
             assert agent._max_output_retries == 7
 
+    def test_build_chat_agent_wires_output_ceiling_and_temperature_onto_the_agent(
+        self,
+    ) -> None:
+        """settings.llm_max_output_tokens/llm_temperature must reach Agent.model_settings.
+
+        Req 9.1/9.2: sourced from Settings (no literal in agent/factory code) and
+        attached once at the Agent layer, so `FallbackModel` transparency carries
+        both values to every model member actually tried (Req 9.3) - proved
+        end-to-end for primary and fallback by
+        test_model_settings_propagation.py (task 5.3).
+        """
+        with patch("app.agents.chat_agent.get_settings") as mock_settings:
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+                llm_max_output_tokens=2048,
+                llm_temperature=0.3,
+            )
+
+            agent = build_chat_agent(model=TestModel())
+
+            assert agent.model_settings == {"max_tokens": 2048, "temperature": 0.3}
+
     def test_build_chat_agent_has_tools(self) -> None:
         """build_chat_agent should have tools available."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
