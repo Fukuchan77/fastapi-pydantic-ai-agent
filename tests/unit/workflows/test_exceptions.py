@@ -4,6 +4,9 @@ Tests that workflow exception classes can be imported from their new location
 and have the expected behavior for error classification and properties.
 """
 
+import httpx
+from pydantic_ai.exceptions import ModelHTTPError
+
 from app.workflows.exceptions import DanglingCitationError
 from app.workflows.exceptions import EmptyCitationError
 from app.workflows.exceptions import RAGEvaluationError
@@ -23,30 +26,41 @@ class TestRAGWorkflowError:
         assert error.message == "Test error"
         assert str(error) == "Test error"
 
-    def test_base_error_is_not_transient_by_default(self) -> None:
-        """RAGWorkflowError should not be transient by default (safer)."""
+    def test_base_error_is_not_transient_and_is_permanent_by_default(self) -> None:
+        """The base class answers both properties from its own default (Req 7.1)."""
         error = RAGWorkflowError("Test error")
         assert error.is_transient is False
+        assert error.is_permanent is True
 
     def test_is_error_transient_detects_rag_transient_error(self) -> None:
         """is_error_transient should return True for RAGTransientError."""
         transient = RAGTransientError("Temporary failure")
         assert RAGWorkflowError.is_error_transient(transient) is True
 
-    def test_is_error_transient_detects_timeout_error(self) -> None:
-        """is_error_transient should return True for TimeoutError."""
-        timeout = TimeoutError("Operation timed out")
+    def test_is_error_transient_detects_leaked_httpx_timeout_exception(self) -> None:
+        """An unwrapped httpx.TimeoutException is transient defence-in-depth (Req 7.1)."""
+        timeout = httpx.TimeoutException("Operation timed out")
         assert RAGWorkflowError.is_error_transient(timeout) is True
 
-    def test_is_error_transient_detects_connection_error(self) -> None:
-        """is_error_transient should return True for ConnectionError."""
-        connection = ConnectionError("Connection failed")
+    def test_is_error_transient_detects_leaked_httpx_network_error(self) -> None:
+        """An unwrapped httpx.NetworkError is transient defence-in-depth (Req 7.1)."""
+        connection = httpx.ConnectError("Connection failed")
         assert RAGWorkflowError.is_error_transient(connection) is True
 
-    def test_is_error_transient_detects_rate_limit_from_message(self) -> None:
-        """is_error_transient should detect rate limit from error message."""
-        error = ValueError("429 rate limit exceeded")
+    def test_is_error_transient_ignores_builtin_timeout_and_connection_errors(self) -> None:
+        """Builtin TimeoutError/ConnectionError carry no structured signal (Req 7.1)."""
+        assert RAGWorkflowError.is_error_transient(TimeoutError("Operation timed out")) is False
+        assert RAGWorkflowError.is_error_transient(ConnectionError("Connection failed")) is False
+
+    def test_is_error_transient_classifies_rate_limit_by_status_code(self) -> None:
+        """429 classifies as transient via `ModelHTTPError.status_code`, not message text."""
+        error = ModelHTTPError(status_code=429, model_name="m", body="rate limit exceeded")
         assert RAGWorkflowError.is_error_transient(error) is True
+
+    def test_is_error_transient_ignores_message_wording(self) -> None:
+        """A message full of transient keywords does not flip a permanent status code."""
+        error = ValueError("429 rate limit exceeded")
+        assert RAGWorkflowError.is_error_transient(error) is False
 
     def test_is_error_transient_returns_false_for_permanent_errors(self) -> None:
         """is_error_transient should return False for non-transient errors."""
