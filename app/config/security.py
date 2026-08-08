@@ -1,6 +1,7 @@
 """Auth, CORS, rate-limiting, HTTP client, and SSE resource-limit settings."""
 
 import json
+from typing import Literal
 from typing import Self
 
 from pydantic import BaseModel
@@ -130,7 +131,15 @@ class SecuritySettingsMixin(BaseModel):
 
         return v
 
-    app_env: str = Field(
+    # Closed vocabulary (Req 1.1-1.4): every production guard in this repository
+    # compares `app_env` with equality — the mock-tool guard below, the
+    # `allowed_hosts` wildcard guard, `app/agents/chat_agent.py`, and
+    # `app/logging_config.py`. A free-form `str` let `prod` or `Production`
+    # silently pass all of them. The `Literal` closes the vocabulary at
+    # construction time, which precedes every store, model, and agent build, and
+    # rejects a misspelling instead of normalizing it: a wrong environment value
+    # is an operator error that must stop startup, not be quietly repaired.
+    app_env: Literal["development", "staging", "production"] = Field(
         default="development",
         description="Application environment (development, staging, production)",
     )
