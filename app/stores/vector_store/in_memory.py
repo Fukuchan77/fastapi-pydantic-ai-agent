@@ -1,9 +1,28 @@
 """InMemoryVectorStore: zero-dependency TF-IDF cosine-similarity vector store."""
 
+import asyncio
 import math
 from collections import Counter
+from dataclasses import dataclass
 
 from app.models.rag import RetrievedHit
+
+
+@dataclass(frozen=True, slots=True)
+class _CorpusSnapshot:
+    """Immutable point-in-time view of the corpus a query scores against.
+
+    Captured under `InMemoryVectorStore._lock` and then scored off the event
+    loop (`asyncio.to_thread`) without touching any further live instance
+    state, so a concurrent `add_documents()`/`clear()` can safely mutate the
+    live `_documents`/`_doc_tokens`/`_ordinals` lists while scoring is in
+    flight: the scorer only ever sees this snapshot's own tuples/dict.
+    """
+
+    documents: tuple[str, ...]
+    doc_tokens: tuple[list[str], ...]
+    ordinals: tuple[int, ...]
+    idf_weights: dict[str, float]
 
 
 class InMemoryVectorStore:
@@ -37,6 +56,14 @@ class InMemoryVectorStore:
           exhaustion and DoS attacks via oversized document chunks
         - Validation is atomic: all chunks must be valid or none are added
         - Default limit is 100,000 characters per chunk
+
+    Concurrency:
+        - All mutation of shared state (documents, tokens, memory accounting,
+          IDF cache) is serialized by one `asyncio.Lock`.
+        - `query()` takes an immutable snapshot of the corpus under that lock,
+          then scores the snapshot off the event loop via `asyncio.to_thread`,
+          so a concurrent `add_documents()`/`clear()` can never produce a torn
+          read and scoring never blocks other requests.
     """
 
     # Extract magic numbers to class constants for maintainability
@@ -70,6 +97,7 @@ class InMemoryVectorStore:
         self._idf_cache: dict[str, float] | None = None
         self._memory_usage: int = 0  # Track approximate memory usage in bytes
         self._generation: int = 0
+        self._lock = asyncio.Lock()
         self.max_documents = max_documents
         self.max_chunk_size = max_chunk_size
         self.max_memory_bytes = max_memory_bytes
@@ -102,35 +130,37 @@ class InMemoryVectorStore:
         Raises:
             ValueError: If any chunk exceeds max_chunk_size characters.
         """
-        # Validate chunk sizes before adding any documents
+        # Validate chunk sizes before adding any documents (no lock needed:
+        # this reads only the immutable max_chunk_size setting)
         for chunk in chunks:
             if len(chunk) > self.max_chunk_size:
                 raise ValueError(f"Document chunk too large (max {self.max_chunk_size} chars)")
 
-        # Tokenize new documents at index time and update memory usage
-        for chunk in chunks:
-            self._documents.append(chunk)
-            tokens = self._tokenize(chunk)
-            self._doc_tokens.append(tokens)
-            self._ordinals.append(self._next_ordinal)
-            self._next_ordinal += 1
-            # Estimate memory: document string + tokenized list
-            self._memory_usage += self._estimate_memory(chunk, tokens)
+        async with self._lock:
+            # Tokenize new documents at index time and update memory usage
+            for chunk in chunks:
+                self._documents.append(chunk)
+                tokens = self._tokenize(chunk)
+                self._doc_tokens.append(tokens)
+                self._ordinals.append(self._next_ordinal)
+                self._next_ordinal += 1
+                # Estimate memory: document string + tokenized list
+                self._memory_usage += self._estimate_memory(chunk, tokens)
 
-        # Apply FIFO eviction if document count exceeds max_documents
-        # Must keep _documents and _doc_tokens synchronized
-        if len(self._documents) > self.max_documents:
-            num_to_evict = len(self._documents) - self.max_documents
-            self._evict_oldest(num_to_evict)
+            # Apply FIFO eviction if document count exceeds max_documents
+            # Must keep _documents and _doc_tokens synchronized
+            if len(self._documents) > self.max_documents:
+                num_to_evict = len(self._documents) - self.max_documents
+                self._evict_oldest(num_to_evict)
 
-        # Apply FIFO eviction if memory usage exceeds max_memory_bytes
-        if self.max_memory_bytes is not None:
-            while self._memory_usage > self.max_memory_bytes and len(self._documents) > 0:
-                self._evict_oldest(1)
+            # Apply FIFO eviction if memory usage exceeds max_memory_bytes
+            if self.max_memory_bytes is not None:
+                while self._memory_usage > self.max_memory_bytes and len(self._documents) > 0:
+                    self._evict_oldest(1)
 
-        # Invalidate IDF cache since corpus changed
-        self._idf_cache = None
-        self._generation += 1
+            # Invalidate IDF cache since corpus changed
+            self._idf_cache = None
+            self._generation += 1
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
         """Retrieve top-k most relevant chunks using TF-IDF cosine similarity.
@@ -148,8 +178,8 @@ class InMemoryVectorStore:
         Raises:
             ValueError: If top_k is less than 1 or greater than 1000.
         """
-        scored = self._top_k_scored_indices(query, top_k)
-        return [self._documents[idx] for idx, _score in scored]
+        ranked = await self._ranked_hits(query, top_k)
+        return [text for text, _ordinal, _score in ranked]
 
     async def query_with_scores(self, query: str, top_k: int = 5) -> list[RetrievedHit]:
         """Retrieve top-k most relevant chunks with stable citation ids and scores.
@@ -169,29 +199,29 @@ class InMemoryVectorStore:
         Raises:
             ValueError: If top_k is less than 1 or greater than 1000.
         """
-        scored = self._top_k_scored_indices(query, top_k)
+        ranked = await self._ranked_hits(query, top_k)
         return [
-            RetrievedHit(
-                chunk_id=f"{self.SOURCE}::{self._ordinals[idx]:04d}",
-                text=self._documents[idx],
-                score=score,
-            )
-            for idx, score in scored
+            RetrievedHit(chunk_id=f"{self.SOURCE}::{ordinal:04d}", text=text, score=score)
+            for text, ordinal, score in ranked
         ]
 
-    def _top_k_scored_indices(self, query: str, top_k: int) -> list[tuple[int, float]]:
+    async def _ranked_hits(self, query: str, top_k: int) -> list[tuple[str, int, float]]:
         """Score every stored document against `query` and return the top-k matches.
 
         Shared ranking logic behind `query()` and `query_with_scores()` so both
-        expose identical results.
+        expose identical results. Validates parameters, then captures an
+        immutable snapshot of the corpus under `self._lock` and scores that
+        snapshot off the event loop (`asyncio.to_thread`), so a concurrent
+        `add_documents()`/`clear()` can never tear the read (Req 6.1-6.6).
 
         Args:
             query: The search query string.
             top_k: Maximum number of results to return.
 
         Returns:
-            List of (document index, similarity score) tuples, sorted by score
-            descending and truncated to top_k. Empty if corpus or query is empty.
+            List of (document text, ordinal, similarity score) tuples, sorted
+            by score descending and truncated to top_k. Empty if corpus or
+            query is empty.
 
         Raises:
             ValueError: If top_k is less than 1 or greater than 1000, the query
@@ -207,56 +237,92 @@ class InMemoryVectorStore:
         if len(query) > self.MAX_QUERY_LENGTH:
             raise ValueError(f"Query string too long (max {self.MAX_QUERY_LENGTH} chars)")
 
-        if not self._documents or not query.strip():
-            return []
+        async with self._lock:
+            if not self._documents or not query.strip():
+                return []
 
-        # Tokenize query
-        query_tokens = self._tokenize(query)
+            # Tokenize query
+            query_tokens = self._tokenize(query)
 
-        # Validate token count to prevent DoS via excessive tokens
-        # This is defense-in-depth: with whitespace tokenization, the character
-        # limit is more restrictive than the token limit,
-        # but this validation guards against future tokenization changes or edge cases.
-        if len(query_tokens) > self.MAX_QUERY_TOKENS:
-            raise ValueError(f"Query has too many tokens (max {self.MAX_QUERY_TOKENS} tokens)")
+            # Validate token count to prevent DoS via excessive tokens
+            # This is defense-in-depth: with whitespace tokenization, the
+            # character limit is more restrictive than the token limit, but
+            # this validation guards against future tokenization changes.
+            if len(query_tokens) > self.MAX_QUERY_TOKENS:
+                raise ValueError(
+                    f"Query has too many tokens (max {self.MAX_QUERY_TOKENS} tokens)"
+                )
 
-        if not query_tokens:
-            return []
+            if not query_tokens:
+                return []
 
-        # Use cached tokenized documents (no re-tokenization)
-        doc_tokens_list = self._doc_tokens
+            # Calculate or reuse cached IDF weights
+            if self._idf_cache is None:
+                # First query after add_documents - compute and cache IDF
+                self._idf_cache = self._calculate_idf(self._doc_tokens)
 
-        # Calculate or reuse cached IDF weights
-        if self._idf_cache is None:
-            # First query after add_documents - compute and cache IDF
-            self._idf_cache = self._calculate_idf(doc_tokens_list)
-        idf_weights = self._idf_cache
+            # Immutable snapshot: subsequent add_documents()/clear() rebind or
+            # mutate the live lists/cache, never the tuples/dict captured here.
+            snapshot = _CorpusSnapshot(
+                documents=tuple(self._documents),
+                doc_tokens=tuple(self._doc_tokens),
+                ordinals=tuple(self._ordinals),
+                idf_weights=self._idf_cache,
+            )
 
-        # Calculate TF-IDF vectors and cosine similarity scores
-        query_tfidf = self._calculate_tfidf_vector(query_tokens, idf_weights)
+        return await asyncio.to_thread(self._score_snapshot, query_tokens, snapshot, top_k)
+
+    @staticmethod
+    def _score_snapshot(
+        query_tokens: list[str], snapshot: _CorpusSnapshot, top_k: int
+    ) -> list[tuple[str, int, float]]:
+        """Score a corpus snapshot against `query_tokens` (runs off the event loop).
+
+        Pure function of its arguments only -- touches no live instance state,
+        so it is safe to run in a worker thread via `asyncio.to_thread` while
+        the event loop concurrently mutates the store.
+
+        Args:
+            query_tokens: Tokenized query.
+            snapshot: Immutable corpus snapshot to score against.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of (document text, ordinal, similarity score) tuples, sorted
+            by score descending and truncated to top_k.
+        """
+        query_tfidf = InMemoryVectorStore._calculate_tfidf_vector(
+            query_tokens, snapshot.idf_weights
+        )
 
         scores: list[tuple[int, float]] = []
-        for idx, doc_tokens in enumerate(doc_tokens_list):
-            doc_tfidf = self._calculate_tfidf_vector(doc_tokens, idf_weights)
-            similarity = self._cosine_similarity(query_tfidf, doc_tfidf)
+        for idx, doc_tokens in enumerate(snapshot.doc_tokens):
+            doc_tfidf = InMemoryVectorStore._calculate_tfidf_vector(
+                doc_tokens, snapshot.idf_weights
+            )
+            similarity = InMemoryVectorStore._cosine_similarity(query_tfidf, doc_tfidf)
             scores.append((idx, similarity))
 
         # Sort by score (descending) and take top-k
         scores.sort(key=lambda x: x[1], reverse=True)
-        return scores[:top_k]
+        return [
+            (snapshot.documents[idx], snapshot.ordinals[idx], score)
+            for idx, score in scores[:top_k]
+        ]
 
     async def clear(self) -> None:
         """Remove all documents from the store.
 
         Also clears the tokenization cache, invalidates IDF cache, and resets memory usage.
         """
-        self._documents.clear()
-        self._doc_tokens.clear()
-        self._ordinals.clear()
-        self._next_ordinal = 0
-        self._idf_cache = None
-        self._memory_usage = 0
-        self._generation += 1
+        async with self._lock:
+            self._documents.clear()
+            self._doc_tokens.clear()
+            self._ordinals.clear()
+            self._next_ordinal = 0
+            self._idf_cache = None
+            self._memory_usage = 0
+            self._generation += 1
 
     async def close(self) -> None:
         """Close the vector store and release any resources.
@@ -362,14 +428,18 @@ class InMemoryVectorStore:
 
         return idf
 
+    @staticmethod
     def _calculate_tfidf_vector(
-        self, tokens: list[str], idf_weights: dict[str, float]
+        tokens: list[str], idf_weights: dict[str, float]
     ) -> dict[str, float]:
         """Calculate TF-IDF vector for a token list.
 
         TF-IDF = TF * IDF, where:
         - TF (Term Frequency) = count of term in document / total terms in document
         - IDF (Inverse Document Frequency) = from pre-calculated corpus weights
+
+        Static because `_score_snapshot` runs this off the event loop via
+        `asyncio.to_thread` and must not touch live instance state.
 
         Args:
             tokens: List of tokens to calculate TF-IDF for.
@@ -394,10 +464,14 @@ class InMemoryVectorStore:
 
         return tfidf
 
-    def _cosine_similarity(self, vec1: dict[str, float], vec2: dict[str, float]) -> float:
+    @staticmethod
+    def _cosine_similarity(vec1: dict[str, float], vec2: dict[str, float]) -> float:
         """Calculate cosine similarity between two TF-IDF vectors.
 
         Cosine similarity = (vec1 · vec2) / (||vec1|| * ||vec2||)
+
+        Static because `_score_snapshot` runs this off the event loop via
+        `asyncio.to_thread` and must not touch live instance state.
 
         Args:
             vec1: First TF-IDF vector.
