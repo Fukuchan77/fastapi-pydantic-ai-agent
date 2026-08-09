@@ -50,7 +50,7 @@ async def test_lifespan_aborts_startup_when_fallback_model_build_fails() -> None
     app = create_app(settings=_build_settings())
 
     with (
-        patch("app.main.build_fallback_model", side_effect=RuntimeError("boom")),
+        patch("app.lifespan.build_fallback_model", side_effect=RuntimeError("boom")),
         pytest.raises(RuntimeError, match="boom"),
     ):
         async with app.router.lifespan_context(app):

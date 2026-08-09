@@ -130,14 +130,16 @@ def test_invalid_app_env_aborts_before_any_store_model_or_agent_is_built(
     explicitly so the abort is attributable to the vocabulary rather than to the
     wildcard-host guard.
 
-    The sentinels are installed on `app.main`, which imports each factory by name
-    (`from app.stores.factory import build_session_store`), so patching the
-    factory module itself would intercept nothing. If major task 10 moves the
-    lifespan into `app/lifespan.py`, these three targets move with the call site.
+    The sentinels are installed on `app.lifespan` (task 10.2 moved the lifespan
+    body, and with it these three factory imports, out of `app.main`), which
+    imports each factory by name (`from app.stores.factory import
+    build_session_store`), so patching the factory module itself would
+    intercept nothing.
 
     Args:
         monkeypatch: Pytest monkeypatch fixture.
     """
+    import app.lifespan as lifespan_module
     import app.main as main_module
 
     def fail(*args: object, **kwargs: object) -> object:
@@ -152,9 +154,9 @@ def test_invalid_app_env_aborts_before_any_store_model_or_agent_is_built(
         """
         raise AssertionError("resource factory reached despite invalid app_env")
 
-    monkeypatch.setattr(main_module, "build_session_store", fail)
-    monkeypatch.setattr(main_module, "build_vector_store", fail)
-    monkeypatch.setattr(main_module, "build_chat_agent", fail)
+    monkeypatch.setattr(lifespan_module, "build_session_store", fail)
+    monkeypatch.setattr(lifespan_module, "build_vector_store", fail)
+    monkeypatch.setattr(lifespan_module, "build_chat_agent", fail)
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
 

@@ -14,7 +14,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from app.main import RetryTransport
+from app.http_client import RetryTransport
 
 
 @pytest.mark.asyncio

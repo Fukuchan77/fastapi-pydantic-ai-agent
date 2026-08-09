@@ -1,16 +1,8 @@
 """FastAPI application factory and lifecycle management."""
 
-import asyncio
 import logging
-import random
 import sys
-from collections.abc import AsyncIterator
-from collections.abc import Awaitable
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from typing import Any
 
-import httpx
 import logfire
 from fastapi import BackgroundTasks
 from fastapi import FastAPI
@@ -20,14 +12,13 @@ from pydantic_ai.models import Model
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.agents.chat_agent import build_chat_agent
 from app.api.errors import register_error_handlers
 from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.config import Settings
 from app.config import get_settings
-from app.llm.factory import build_fallback_model
-from app.logging_config import configure_logging
+from app.http_client import RetryTransport
+from app.lifespan import build_lifespan
 from app.middleware.cors import CORSMiddleware
 from app.middleware.rate_limit import add_rate_limiting
 from app.middleware.request_id import RequestIDMiddleware
@@ -35,155 +26,13 @@ from app.middleware.request_id import request_id_var
 from app.middleware.request_size import RequestSizeLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.models.errors import ErrorResponse
-from app.observability import configure_logfire
-from app.stores.factory import build_session_store
-from app.stores.factory import build_vector_store
-from app.stores.factory import dry_run_stores
 
 
 logger = logging.getLogger(__name__)
 
-# Minimum cleanup interval to avoid wasting CPU on frequent cleanups
-# Even if session_ttl is very short (e.g., 60 seconds in tests), the cleanup
-# interval should not be less than this value.
-CLEANUP_INTERVAL_MIN: int = 300  # seconds (5 minutes)
-
-
-async def _close_quietly(name: str, close: Callable[[], Awaitable[None]]) -> None:
-    """Await `close()`, logging (not raising) on failure.
-
-    Used for each independent shutdown step in `lifespan` so a failure
-    closing one resource (e.g. a Redis connection error) can never skip
-    closing the ones after it - shutdown should always attempt every step.
-    Logged at `error`, not `warning`: a close failure here means a leaked
-    connection/pool, which should be visible to alerting.
-
-    Args:
-        name: Human-readable resource name, for the log message.
-        close: Zero-argument callable returning the awaitable to close it.
-    """
-    try:
-        await close()
-        logger.info("Closed %s", name)
-    except Exception:
-        logger.error("Error closing %s during shutdown", name, exc_info=True)
-
-
-class RetryTransport(httpx.AsyncHTTPTransport):
-    """Custom HTTP transport with retry logic and exponential backoff.
-
-    Implements automatic retry for transient failures (network errors,
-    5xx server errors) with exponential backoff and jitter. Does NOT retry client
-    errors (4xx) as they indicate issues with the request itself.
-
-    Only retries transient 5xx errors {500, 502, 503, 504}.
-    Non-transient errors like 501 (Not Implemented) and 505 (HTTP Version Not Supported)
-    are permanent configuration issues that will not be resolved by retrying.
-
-    Retry behavior:
-    - Network errors (ConnectError, TimeoutException): Retry
-    - Transient 5xx errors (500, 502, 503, 504): Retry
-    - Non-transient 5xx errors (501, 505, etc.): Do NOT retry
-    - 4xx client errors (400-499): Do NOT retry
-    - Exponential backoff: delay = base_delay * (2 ** attempt) + random jitter
-    - Jitter: random.uniform(0, 1) to prevent thundering herd
-
-    Args:
-        max_attempts: Maximum number of retry attempts (from settings)
-        base_delay: Base delay in seconds for exponential backoff (from settings)
-        **kwargs: Additional arguments passed to AsyncHTTPTransport
-    """
-
-    # Define retryable status codes - only transient server errors
-    # Use frozenset for immutability (RUF012)
-    RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({500, 502, 503, 504})
-
-    def __init__(
-        self,
-        max_attempts: int = 3,
-        base_delay: float = 1.0,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> None:
-        """Initialize retry transport with exponential backoff settings.
-
-        Args:
-            max_attempts: Maximum number of retry attempts (default: 3)
-            base_delay: Base delay for exponential backoff in seconds (default: 1.0)
-            **kwargs: Additional arguments for AsyncHTTPTransport
-        """
-        super().__init__(**kwargs)
-        self.max_attempts = max_attempts
-        self.base_delay = base_delay
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        """Handle HTTP request with retry logic.
-
-        Retries transient failures (network errors, transient 5xx) with exponential backoff.
-        Does NOT retry client errors (4xx) or non-transient 5xx errors.
-
-        Args:
-            request: The HTTP request to execute
-
-        Returns:
-            httpx.Response: The HTTP response
-
-        Raises:
-            Exception: If all retry attempts are exhausted
-        """
-        last_exception: Exception | None = None
-
-        for attempt in range(self.max_attempts):
-            try:
-                response = await super().handle_async_request(request)
-
-                # Only retry transient 5xx errors {500, 502, 503, 504}
-                # Non-transient errors (501, 505, etc.) are permanent and should not be retried
-                if (
-                    response.status_code in self.RETRYABLE_STATUS_CODES
-                    and attempt < self.max_attempts - 1
-                ):
-                    delay = self.base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
-                    logger.warning(
-                        "HTTP request to %s returned %d (attempt %d/%d), retrying in %.2fs",
-                        request.url,
-                        response.status_code,
-                        attempt + 1,
-                        self.max_attempts,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-
-                # 2xx, 3xx, 4xx responses - return immediately (don't retry 4xx)
-                return response
-
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
-                # Network errors are transient, retry if attempts remaining
-                last_exception = e
-                if attempt < self.max_attempts - 1:
-                    delay = self.base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
-                    logger.warning(
-                        "HTTP request to %s failed with %s (attempt %d/%d), retrying in %.2fs",
-                        request.url,
-                        type(e).__name__,
-                        attempt + 1,
-                        self.max_attempts,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                # Last attempt failed, raise the exception
-                raise
-            except Exception:
-                # Non-transient errors (e.g., invalid URL, SSL errors) - raise immediately
-                raise
-
-        # All retries exhausted, raise last exception
-        if last_exception:
-            raise last_exception
-
-        # This should never happen, but satisfy type checker
-        raise RuntimeError("Retry logic error: no response or exception")
+# `RetryTransport` moved to `app/http_client.py` (Req 4.3); re-exported here so
+# `from app.main import RetryTransport` keeps working for existing callers.
+__all__ = ["RetryTransport"]
 
 
 def create_app(
@@ -210,175 +59,6 @@ def create_app(
     """
     resolved_settings = settings or get_settings()
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Application lifespan manager.
-
-        Handles startup and shutdown of application resources including:
-        - Vector store initialization
-        - Session store initialization
-        - HTTP client setup
-        - Agent construction
-        - Observability configuration
-        - Background cleanup task for expired sessions
-
-        Args:
-            app: FastAPI application instance
-
-        Yields:
-            None: Control during application lifetime
-        """
-        app.state.settings = resolved_settings
-
-        # Configure Python logging at startup
-        # This must be done early, before any logging occurs
-        configure_logging(resolved_settings)
-        logger.info("Configured Python logging")
-        logger.info("Initialized application settings")
-
-        try:
-            # Initialize HTTP client for agent tool usage
-            # Configure timeout to prevent indefinite hangs
-            # Configure connection pooling limits
-            # Add retry logic with exponential backoff using custom transport
-            retry_transport = RetryTransport(
-                max_attempts=resolved_settings.http_retry_max_attempts,
-                base_delay=resolved_settings.http_retry_base_delay,
-            )
-            app.state.http_client = httpx.AsyncClient(
-                transport=retry_transport,
-                timeout=httpx.Timeout(
-                    resolved_settings.http_timeout,
-                    connect=resolved_settings.http_connect_timeout,
-                ),
-                limits=httpx.Limits(
-                    max_connections=resolved_settings.http_max_connections,
-                    max_keepalive_connections=resolved_settings.http_max_keepalive_connections,
-                ),
-            )
-            logger.info(
-                "Initialized HTTP client with %ss timeout (%ss connect), "
-                "max_connections=%d, max_keepalive=%d, "
-                "retry_max_attempts=%d, retry_base_delay=%.1fs",
-                resolved_settings.http_timeout,
-                resolved_settings.http_connect_timeout,
-                resolved_settings.http_max_connections,
-                resolved_settings.http_max_keepalive_connections,
-                resolved_settings.http_retry_max_attempts,
-                resolved_settings.http_retry_base_delay,
-            )
-        except Exception as e:
-            logger.error("Failed to initialize app.state.http_client: %s", e, exc_info=True)
-            raise
-
-        # Select and construct the vector/session stores from settings (store
-        # factory), then probe connectivity so a misconfigured external store
-        # fails startup instead of the first request.
-        try:
-            app.state.vector_store = build_vector_store(resolved_settings)
-            logger.info(
-                "Initialized vector store (backend=%s)",
-                resolved_settings.vector_store_backend,
-            )
-
-            app.state.session_store = build_session_store(resolved_settings)
-            logger.info(
-                "Initialized session store (redis_enabled=%s)",
-                resolved_settings.redis_session_store_enabled,
-            )
-
-            await dry_run_stores(app.state.vector_store, app.state.session_store)
-            logger.info("Store connectivity dry-run passed")
-        except Exception as e:
-            logger.error("Store startup dry-run failed: %s", e, exc_info=True)
-            raise
-
-        # Start background cleanup task for expired sessions
-        async def cleanup_loop() -> None:
-            """Background task that periodically cleans up expired sessions.
-
-            Added comprehensive error handling to prevent cleanup
-            task from stopping on transient errors, which would cause memory leaks.
-            """
-            session_store = app.state.session_store
-            # Ensure cleanup interval has a minimum bound to avoid wasting CPU
-            cleanup_interval = max(CLEANUP_INTERVAL_MIN, session_store.session_ttl // 2)
-            logger.info("Starting session cleanup task (interval: %d seconds)", cleanup_interval)
-
-            try:
-                while True:
-                    await asyncio.sleep(cleanup_interval)
-                    try:
-                        # cleanup_expired_sessions is now public
-                        removed_count = await session_store.cleanup_expired_sessions()
-                        if removed_count > 0:
-                            logger.info("Cleaned up %d expired sessions", removed_count)
-                    except Exception as e:
-                        # Catch all non-CancelledError exceptions
-                        # Log the error but continue the cleanup loop to prevent memory leaks
-                        logger.error(
-                            "Error during session cleanup (will retry): %s",
-                            e,
-                            exc_info=True,
-                        )
-            except asyncio.CancelledError:
-                logger.info("Session cleanup task cancelled during shutdown")
-                raise
-
-        # Create and store the cleanup task
-        app.state.cleanup_task = asyncio.create_task(cleanup_loop())
-
-        # Build the FallbackModel chain eagerly so a misconfigured provider
-        # chain fails startup instead of the first request (Req 10.1). A
-        # test-injected `model` override bypasses this entirely, matching the
-        # existing store/session-store test-isolation contract.
-        try:
-            resolved_model = model if model is not None else build_fallback_model(resolved_settings)
-        except Exception as e:
-            logger.error("Failed to build LLM fallback model chain: %s", e, exc_info=True)
-            raise
-
-        # Initialize chat agent, forwarding the resolved model
-        app.state.chat_agent = build_chat_agent(model=resolved_model, settings=resolved_settings)
-        logger.info("Initialized chat agent")
-
-        # Configure Logfire observability
-        configure_logfire(resolved_settings)
-        logger.info("Configured Logfire observability")
-
-        # Log warning if CORS_ORIGINS contains wildcard "*"
-        # Check after logging is configured so warning is properly logged
-        if "*" in resolved_settings.cors_origins:
-            logger.warning(
-                "CORS wildcard '*' detected in CORS_ORIGINS configuration. "
-                "This allows requests from ANY origin and may pose a security risk in "
-                "production. Consider restricting to specific origins for production "
-                "deployments."
-            )
-
-        yield
-
-        # Cleanup happens here after yield
-        # Cancel the cleanup task during shutdown
-        if hasattr(app.state, "cleanup_task"):
-            app.state.cleanup_task.cancel()
-            try:
-                await app.state.cleanup_task
-            except asyncio.CancelledError:
-                logger.info("Session cleanup task successfully cancelled")
-
-        # Each store/client is closed independently via _close_quietly(), so
-        # a failure in one (e.g. a Redis connection error) can never skip
-        # closing the ones after it.
-        if hasattr(app.state, "vector_store"):
-            await _close_quietly("vector store", app.state.vector_store.close)
-
-        if hasattr(app.state, "session_store"):
-            await _close_quietly("session store", app.state.session_store.close)
-
-        if hasattr(app.state, "http_client"):
-            await _close_quietly("HTTP client", app.state.http_client.aclose)
-
     app = FastAPI(
         title="FastAPI Pydantic AI Agent",
         description=(
@@ -396,7 +76,7 @@ def create_app(
             "comprehensive error handling, and production-ready configuration management."
         ),
         version="0.1.0",
-        lifespan=lifespan,
+        lifespan=build_lifespan(resolved_settings, model),
         license_info={
             "name": "MIT",
             "url": "https://opensource.org/licenses/MIT",
