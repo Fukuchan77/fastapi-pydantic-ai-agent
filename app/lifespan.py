@@ -212,6 +212,25 @@ async def _startup(app: FastAPI, settings: Settings, model: Model | str | None) 
             "deployments."
         )
 
+    # Warn when the deployment and application halves could silently disagree
+    # about the client-facing scheme (Req 11.4, ADR-5). SecurityHeadersMiddleware
+    # (L4.5) emits Strict-Transport-Security only when `request.url.scheme ==
+    # "https"`, which is resolved by the ASGI server, not read from a forwarded
+    # header here. Outside development that resolution requires the server to
+    # already trust the TLS-terminating proxy's forwarded scheme
+    # (--forwarded-allow-ips/FORWARDED_ALLOW_IPS, L4.6); `trust_proxy_headers`
+    # is the operator's confirmation that it does. Read from `settings`, never
+    # `os.environ` directly, to stay Principle-4 compliant.
+    if settings.app_env != "development" and not settings.trust_proxy_headers:
+        logger.warning(
+            "trust_proxy_headers is False while app_env is %r. Strict-Transport-"
+            "Security will never be emitted behind a TLS-terminating proxy unless "
+            "the ASGI server is configured to trust it "
+            "(--forwarded-allow-ips/FORWARDED_ALLOW_IPS) and trust_proxy_headers "
+            "is set to True to confirm it. See docs/production_deployment.md.",
+            settings.app_env,
+        )
+
 
 def build_lifespan(
     settings: Settings,

@@ -444,6 +444,28 @@ class SecuritySettingsMixin(BaseModel):
         "stream aborts with a terminal error event if exceeded",
     )
 
+    hsts_max_age: int = Field(
+        default=31536000,
+        ge=0,
+        description="max-age (seconds) for the Strict-Transport-Security header, "
+        "sent only over HTTPS (Req 11.4). Default matches the prior hard-coded "
+        "1-year literal",
+    )
+    hsts_include_subdomains: bool = Field(
+        default=True,
+        description="Whether the Strict-Transport-Security header includes "
+        "includeSubDomains; switch off when this service shares an apex domain "
+        "with hosts that cannot yet serve HTTPS",
+    )
+    trust_proxy_headers: bool = Field(
+        default=False,
+        description="Operator confirmation that the ASGI server's "
+        "--forwarded-allow-ips/FORWARDED_ALLOW_IPS is configured to trust the "
+        "TLS-terminating proxy. Read only by the startup warning (Req 11.4); "
+        "grants no trust itself, since scheme trust is resolved entirely at "
+        "the ASGI-server layer",
+    )
+
     @model_validator(mode="after")
     def validate_sse_heartbeat_interval_within_send_timeout(self) -> Self:
         """Validate that sse_heartbeat_interval does not exceed sse_send_timeout.

@@ -278,6 +278,31 @@ def test_virtual_environment_in_path(running_container: str) -> None:
     assert "/app/.venv/bin/uvicorn" in uvicorn_path
 
 
+def test_forwarded_allow_ips_default_configured(running_container: str) -> None:
+    """Test that the image sets an explicit uvicorn proxy trust list.
+
+    Uvicorn's `Config` reads `FORWARDED_ALLOW_IPS` from the environment as the
+    default for `forwarded_allow_ips` (the trust list its `ProxyHeadersMiddleware`
+    uses to decide whether to rewrite `scope["scheme"]` from `X-Forwarded-Proto`).
+    Leaving it unset falls back to uvicorn's own implicit "127.0.0.1" default,
+    which silently never matches a real reverse proxy - Strict-Transport-Security
+    (Req 11.4) would then never be emitted in a TLS-terminating deployment. The
+    Dockerfile makes that default explicit so it is documented and overridable
+    via `docker run -e FORWARDED_ALLOW_IPS=...` rather than implicit.
+
+    Requirements: 11.4
+    """
+    result = subprocess.run(
+        ["docker", "exec", running_container, "printenv", "FORWARDED_ALLOW_IPS"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "127.0.0.1"
+
+
 @pytest.fixture
 def sigterm_container(build_docker_image: str) -> Iterator[str]:
     """Start a dedicated container for the SIGTERM test.

@@ -103,7 +103,10 @@ def create_app(
 
     # Add security headers middleware
     # Added first so it applies to all responses (executes last in the middleware chain)
-    app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
+    app.add_middleware(  # type: ignore[arg-type]
+        SecurityHeadersMiddleware,
+        settings=resolved_settings,
+    )
 
     # Add request size limit middleware BEFORE request ID middleware
     # Middleware executes in REVERSE order of addition, so this ensures

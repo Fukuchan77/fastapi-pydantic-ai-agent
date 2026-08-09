@@ -134,6 +134,30 @@ TRUSTED_PROXIES=["127.0.0.1", "10.0.0.0/8"]  # Adjust to your Nginx server IPs
 
 This ensures the application correctly extracts the real client IP from `X-Forwarded-For` headers for rate limiting.
 
+**This is a separate trust list from uvicorn's own proxy trust**, which controls
+whether `Strict-Transport-Security` (Req 11.4) is ever emitted. `SecurityHeadersMiddleware`
+emits HSTS only when `request.url.scheme == "https"` and never reads
+`X-Forwarded-Proto` itself - that header is trusted (or not) entirely at the
+ASGI-server layer, via uvicorn's `ProxyHeadersMiddleware`. The container image
+sets `FORWARDED_ALLOW_IPS=127.0.0.1` (the Dockerfile makes uvicorn's own
+implicit default explicit rather than leaving it undocumented). Behind a real
+reverse proxy, that default will not match the proxy's address, so
+`scope["scheme"]` stays `"http"` and **HSTS is silently never emitted, even
+though the client genuinely connects over HTTPS**.
+
+Override it to your reverse proxy's actual address (a single IP,
+comma-separated IPs, or a CIDR range) when running behind Nginx/ALB/Cloudflare:
+
+```bash
+docker run -e FORWARDED_ALLOW_IPS="10.0.0.0/8" ...
+```
+
+Pair this with setting `TRUST_PROXY_HEADERS=true` in the same change: the
+application logs a startup warning in any non-`development` environment while
+`trust_proxy_headers` stays at its `false` default, so the deployment-level
+trust list (`FORWARDED_ALLOW_IPS`) and the application's confirmation flag
+cannot silently drift out of sync.
+
 ---
 
 #### SSE Streaming Considerations
