@@ -84,10 +84,12 @@ def get_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
     with _workflow_cache_lock:
         if vector_store not in _workflow_cache:
             settings = get_settings()
-            # Pass settings values as cache keys
+            # Pass settings values as cache keys. `settings.llm_base_url` is typed
+            # `HttpUrl | None`, so it is coerced to a plain `str` here rather than
+            # widening `_get_cached_model`'s `str | None` parameter annotation.
             model = _get_cached_model(
                 llm_model=settings.llm_model,
-                llm_base_url=settings.llm_base_url,
+                llm_base_url=str(settings.llm_base_url) if settings.llm_base_url else None,
             )
             _workflow_cache[vector_store] = CorrectiveRAGWorkflow(
                 vector_store=vector_store,

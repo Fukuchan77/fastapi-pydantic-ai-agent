@@ -13,7 +13,9 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai_litellm import LiteLLMModel
 
+from app.agents.chat_agent import build_model
 from app.config import Settings
 from app.models.rag import RetrievedHit
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
@@ -236,3 +238,43 @@ class TestDeterministicCitationOrdering:
         result = await workflow.run(query="test", max_retries=1)
 
         assert [c.chunk_id for c in result["citations"]] == ["a::0000", "z::0000"]
+
+
+class TestDefaultModelResolution:
+    """Req 11.1/11.2: no model supplied still resolves via the chat builder.
+
+    With no explicit `llm_model`, resolution must go through the same
+    builder the chat path uses, never a raw `"provider:model"` settings
+    string passed straight to an `Agent` constructor.
+    """
+
+    def test_no_model_supplied_resolves_through_build_model(self) -> None:
+        """The `None` branch must build via `build_model`, not `llm_settings.llm_model`."""
+        settings = _settings(
+            llm_model="ollama:granite3.3",
+            llm_base_url="http://localhost:11434",
+        )
+        expected_model_name = build_model(settings).model_name
+
+        workflow = CorrectiveRAGWorkflow(
+            vector_store=_mock_vector_store(),
+            llm_settings=settings,
+        )
+
+        assert isinstance(workflow._eval_agent.model, LiteLLMModel)
+        assert workflow._eval_agent.model.model_name == expected_model_name
+        assert isinstance(workflow._synth_agent.model, LiteLLMModel)
+        assert workflow._synth_agent.model.model_name == expected_model_name
+
+    def test_explicit_model_override_is_unaffected(self) -> None:
+        """An explicitly-injected model (e.g. a test double) must still win."""
+        injected = FunctionModel(_always_relevant)
+
+        workflow = CorrectiveRAGWorkflow(
+            vector_store=_mock_vector_store(),
+            llm_settings=_settings(),
+            llm_model=injected,
+        )
+
+        assert workflow._eval_agent.model is injected
+        assert workflow._synth_agent.model is injected

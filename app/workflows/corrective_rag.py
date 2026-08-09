@@ -25,6 +25,7 @@ from llama_index.core.workflow import step
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.agents.chat_agent import build_model
 from app.config import Settings
 from app.models.rag import RetrievedHit
 from app.stores.vector_store import VectorStore
@@ -86,7 +87,13 @@ class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ig
         # Create Agent instances once during initialization
         # instead of recreating them on every LLM call (which happens in retry loops)
         # This reduces overhead from max_retries x 2 instances to just 2 instances total
-        resolved_model = llm_model or llm_settings.llm_model
+        #
+        # Req 11.1/11.2: an unsupplied model must resolve through build_model(),
+        # the same builder the chat path uses, so LiteLLM provider routing and
+        # Ollama base-URL handling stay identical. Passing llm_settings.llm_model
+        # (a raw "provider:model" string) straight to Agent() would bypass both,
+        # since Agent's own model inference has no knowledge of settings.llm_base_url.
+        resolved_model = llm_model or build_model(llm_settings)
         self._eval_agent: Agent[None, str] = Agent(
             model=resolved_model,
             output_type=str,
