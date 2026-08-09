@@ -67,6 +67,24 @@ class RetrievedHit(BaseModel):
     score: float = Field(description="Relevance score assigned by the vector store")
 
 
+class RelevanceVerdict(BaseModel):
+    """Structured sufficiency decision for retrieved RAG context.
+
+    Attributes:
+        sufficient: Whether the retrieved chunks are sufficient to answer the query.
+        rationale: Reasoning behind the verdict, required and non-empty so the
+            contract cannot be satisfied by an absent or blank explanation.
+    """
+
+    sufficient: bool = Field(
+        description="Whether the retrieved chunks are sufficient to answer the query"
+    )
+    rationale: str = Field(
+        min_length=1,
+        description="Reasoning behind the sufficiency verdict",
+    )
+
+
 class RAGQueryResponse(BaseModel):
     """Response model for RAG query endpoint.
 

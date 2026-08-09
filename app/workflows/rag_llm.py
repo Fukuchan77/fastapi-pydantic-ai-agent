@@ -14,6 +14,7 @@ import random
 from pydantic_ai import Agent
 
 from app.config import Settings
+from app.models.rag import RelevanceVerdict
 from app.models.rag import RetrievedHit
 from app.workflows.exceptions import RAGWorkflowError
 from app.workflows.rag_prompts import PromptBuildingMixin
@@ -32,25 +33,38 @@ class LLMCallMixin(PromptBuildingMixin):
     them to resolve `self._eval_agent`/`self._synth_agent`/`self.llm_settings`
     statically). Inherits `PromptBuildingMixin` for `_truncate_chunks`/
     `_truncate_hits`/`_build_prompt`, used by both methods below.
+
+    Two nested retry budgets govern the eval agent, and each governs a
+    different failure mode: pydantic-ai's own `retries={"output": ...}`
+    (set on `_eval_agent` in `corrective_rag.py.__init__`) retries *output
+    validation* failures inside a single `agent.run()` call - the model
+    replied but not with a valid `RelevanceVerdict` tool call. This mixin's
+    own `_run_agent_with_retry` loop below retries *transient* failures
+    (network errors, 5xx) across separate `agent.run()` calls, and treats a
+    timeout or an exhausted output-retry budget identically: both surface as
+    an `Exception`/`TimeoutError` from `agent.run()` and fall back to the
+    caller-supplied safe value without raising (Req 10.4, 10.5).
     """
 
     llm_settings: Settings
-    _eval_agent: Agent[None, str]
+    _eval_agent: Agent[None, RelevanceVerdict]
     _synth_agent: Agent[None, str]
 
-    async def _run_agent_with_retry(
+    async def _run_agent_with_retry[T](
         self,
-        agent: Agent[None, str],
+        agent: Agent[None, T],
         prompt: str,
         *,
         op_name: str,
-        fallback: str,
-    ) -> str:
+        fallback: T,
+    ) -> T:
         """Run an LLM agent with timeout-then-no-retry, transient-then-backoff policy.
 
         Shared by `_evaluate_relevance` and `_synthesize_answer`, which need the
-        identical retry policy and differ only in the agent, prompt, and the
-        value to fall back to on failure.
+        identical retry policy and differ only in the agent, prompt, output
+        type, and the value to fall back to on failure. Generic over the
+        agent's output type (Req 10.7) so a validated `RelevanceVerdict`
+        crosses this boundary typed, not just a plain string.
 
         Args:
             agent: Pre-initialized pydantic-ai agent to run.
@@ -59,7 +73,7 @@ class LLMCallMixin(PromptBuildingMixin):
             fallback: Value returned on timeout, permanent error, or retry exhaustion.
 
         Returns:
-            str: The agent's stripped output, or `fallback` on failure.
+            T: The agent's validated output, or `fallback` on failure.
         """
         max_retries = self.llm_settings.llm_retry_max_attempts
         base_delay = self.llm_settings.llm_retry_base_delay
@@ -71,7 +85,7 @@ class LLMCallMixin(PromptBuildingMixin):
                     agent.run(prompt),
                     timeout=self.llm_settings.llm_agent_timeout,
                 )
-                return result.output.strip()
+                return result.output
 
             except TimeoutError:
                 # asyncio.TimeoutError indicates the LLM is consistently too slow,
@@ -117,18 +131,22 @@ class LLMCallMixin(PromptBuildingMixin):
         # Fallback (should not reach here: loop always returns within the try/except)
         return fallback
 
-    async def _evaluate_relevance(self, chunks: list[str], query: str) -> str:
+    async def _evaluate_relevance(self, chunks: list[str], query: str) -> RelevanceVerdict:
         """Evaluate relevance of retrieved chunks using LLM.
 
         Uses configurable retry logic with exponential backoff for transient
-        LLM API failures. Returns "insufficient" as safe fallback on error.
+        LLM API failures. Returns a safe insufficient verdict on error - no
+        text parsing is involved (Req 10.2): the eval agent's output type is
+        `RelevanceVerdict`, so the sufficiency decision is a validated field,
+        not prose to inspect.
 
         Args:
             chunks: Retrieved document chunks.
             query: Original user query.
 
         Returns:
-            "relevant" if chunks are sufficient, "insufficient" otherwise.
+            The validated sufficiency verdict, or a safe insufficient verdict
+            on timeout or retry exhaustion.
         """
         # MEDIUM FIX: Use helper method to truncate chunks based on actual character count
         original_count = len(chunks)
@@ -145,33 +163,15 @@ class LLMCallMixin(PromptBuildingMixin):
         instruction = """Given the following chunks and query, assess if the chunks contain \
 relevant information to answer the query."""
         prompt = self._build_prompt(query, chunks, instruction, chunk_label="Chunk")
-        prompt += """
 
-Respond with exactly one word:
-- "relevant" if the chunks contain sufficient information to answer the query
-- "insufficient" if the chunks do not contain relevant information
-
-Response:"""
-
-        response = await self._run_agent_with_retry(
-            self._eval_agent, prompt, op_name="evaluation", fallback="insufficient"
+        fallback = RelevanceVerdict(
+            sufficient=False,
+            rationale="Evaluation unavailable (timeout or retry exhaustion); "
+            "treating context as insufficient.",
         )
-        normalized = response.strip().lower()
-        # The prompt asks for exactly one word, so try an exact match first -
-        # this also protects a genuinely positive verdict that happens to
-        # *mention* a negation word (e.g. "relevant, not irrelevant") from
-        # being misread by the substring fallback below.
-        if normalized in ("relevant", "insufficient"):
-            return normalized
-        # Free-form fallback: "irrelevant" and "not relevant" both contain
-        # the substring "relevant", so a naive `"relevant" in normalized`
-        # misreads the LLM's negative verdict as positive and skips the
-        # widened-retrieval retry that CRAG relies on for grounding - check
-        # negations before the plain substring check below.
-        negations = ("insufficient", "irrelevant", "not relevant")
-        if any(term in normalized for term in negations):
-            return "insufficient"
-        return "relevant" if "relevant" in normalized else "insufficient"
+        return await self._run_agent_with_retry(
+            self._eval_agent, prompt, op_name="evaluation", fallback=fallback
+        )
 
     async def _synthesize_answer(self, hits: list[RetrievedHit], query: str) -> str:
         """Synthesize final answer from relevant hits using LLM.
@@ -211,6 +211,7 @@ Response:"""
             "I encountered an error while processing your question. "
             "Please try again or rephrase your question."
         )
-        return await self._run_agent_with_retry(
+        response = await self._run_agent_with_retry(
             self._synth_agent, prompt, op_name="synthesis", fallback=fallback
         )
+        return response.strip()

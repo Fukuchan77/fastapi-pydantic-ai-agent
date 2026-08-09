@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -92,7 +93,12 @@ async def test_workflow_timeout_is_configurable(
         info: AgentInfo,
     ) -> ModelResponse:
         await asyncio.sleep(8)  # Under 20s workflow timeout
-        return ModelResponse(parts=[TextPart(content="relevant")])
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     model = FunctionModel(moderate_speed_model)
 

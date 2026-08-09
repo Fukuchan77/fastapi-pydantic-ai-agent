@@ -27,6 +27,7 @@ from pydantic_ai.models import Model
 
 from app.agents.chat_agent import build_model
 from app.config import Settings
+from app.models.rag import RelevanceVerdict
 from app.models.rag import RetrievedHit
 from app.stores.vector_store import VectorStore
 from app.workflows.citation import order_hits
@@ -94,9 +95,14 @@ class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ig
         # (a raw "provider:model" string) straight to Agent() would bypass both,
         # since Agent's own model inference has no knowledge of settings.llm_base_url.
         resolved_model = llm_model or build_model(llm_settings)
-        self._eval_agent: Agent[None, str] = Agent(
+        # Req 10.1/10.3: the sufficiency decision is a validated model, not
+        # prose, with its own output-retry budget (distinct from
+        # `_run_agent_with_retry`'s transient-retry loop - see the nested
+        # retry budgets note in `rag_llm.py`).
+        self._eval_agent: Agent[None, RelevanceVerdict] = Agent(
             model=resolved_model,
-            output_type=str,
+            output_type=RelevanceVerdict,
+            retries={"output": llm_settings.max_output_retries},
         )
         self._synth_agent: Agent[None, str] = Agent(
             model=resolved_model,
@@ -205,16 +211,17 @@ class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ig
                 )
 
             # Evaluate relevance using LLM
-            relevance = await self._evaluate_relevance([hit.text for hit in ev.hits], ev.query)
+            verdict = await self._evaluate_relevance([hit.text for hit in ev.hits], ev.query)
 
             logfire.info(
                 "Evaluated relevance",
-                relevance=relevance,
+                sufficient=verdict.sufficient,
+                rationale=verdict.rationale,
                 search_count=state.search_count,
             )
 
-            # If relevant, proceed to synthesis
-            if relevance == "relevant":
+            # If sufficient, proceed to synthesis
+            if verdict.sufficient:
                 return SynthesizeEvent(
                     query=ev.query,
                     hits=ev.hits,

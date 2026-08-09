@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -95,11 +96,14 @@ async def test_synthesis_times_out_after_llm_agent_timeout(
         nonlocal call_count
         call_count += 1
 
-        # First call is evaluation - return quickly
-        if call_count == 1:
-            return ModelResponse(parts=[TextPart(content="relevant")])
+        # The eval agent's structured tool call - answer it quickly.
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
 
-        # Second call is synthesis - take 10 seconds (exceeds timeout)
+        # Synthesis (plain text) - take 10 seconds (exceeds timeout)
         await asyncio.sleep(10)
         return ModelResponse(parts=[TextPart(content="This is the synthesized answer")])
 
@@ -147,7 +151,12 @@ async def test_timeout_is_configurable_via_settings(
         info: AgentInfo,
     ) -> ModelResponse:
         await asyncio.sleep(3)  # Takes 3 seconds (under timeout)
-        return ModelResponse(parts=[TextPart(content="relevant")])
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     model = FunctionModel(moderate_speed_model)
 

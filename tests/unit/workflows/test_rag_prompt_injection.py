@@ -20,29 +20,29 @@ import pytest
 async def test_rag_evaluate_prompt_structure_uses_xml_tags() -> None:
     """Test that evaluate prompt uses XML tags to wrap user content.
 
-    This test verifies the fixed prompt structure by simulating
-    what _evaluate_relevance constructs at lines 497-510 after the fix.
+    This test verifies the fixed prompt structure by simulating what
+    `LLMCallMixin._evaluate_relevance` (`app/workflows/rag_llm.py`) builds
+    via `PromptBuildingMixin._build_prompt` (`app/workflows/rag_prompts.py`)
+    after the fix. Since the L5.2 structured-relevance rework
+    (Req 10.1-10.2), the eval agent's sufficiency decision is a validated
+    `RelevanceVerdict` tool call, not free-form text - so the prompt no
+    longer asks for a one-word text response.
 
     After fix: XML tags wrap query and context to prevent prompt injection
     """
-    # Simulate the FIXED prompt construction from lines 497-510 in corrective_rag.py
+    # Simulate the current prompt construction: _build_prompt()'s
+    # instruction + XML-tagged query/context, with no free-text response
+    # instruction (the eval agent's output type is RelevanceVerdict).
     query = "What is testing?"
     chunks = ["This is a test document.", "Testing verifies software quality."]
 
-    # Fixed implementation (lines 497-510) - WITH XML tags
     context = "\n\n".join(f"Chunk {i + 1}: {chunk}" for i, chunk in enumerate(chunks))
     prompt_fixed = f"""Given the following chunks and query, assess if the chunks contain \
 relevant information to answer the query.
 
 <query>{query}</query>
 
-<context>{context}</context>
-
-Respond with exactly one word:
-- "relevant" if the chunks contain sufficient information to answer the query
-- "insufficient" if the chunks do not contain relevant information
-
-Response:"""
+<context>{context}</context>"""
 
     # Test that XML tags are present (should PASS after fix)
     assert "<query>" in prompt_fixed, "Evaluate prompt should wrap query in <query> XML tags"
@@ -56,12 +56,14 @@ Response:"""
 async def test_rag_synthesize_prompt_structure_uses_xml_tags() -> None:
     """Test that synthesize prompt uses XML tags to wrap user content.
 
-    This test verifies the fixed prompt structure by simulating
-    what _synthesize_answer constructs at lines 600-608 after the fix.
+    This test verifies the fixed prompt structure by simulating what
+    `LLMCallMixin._synthesize_answer` (`app/workflows/rag_llm.py`) builds
+    via `PromptBuildingMixin._build_prompt` (`app/workflows/rag_prompts.py`)
+    after the fix.
 
     After fix: XML tags wrap query and context to prevent prompt injection
     """
-    # Simulate the FIXED prompt construction from lines 600-608 in corrective_rag.py
+    # Simulate the current prompt construction in _synthesize_answer().
     query = "What is testing?"
     chunks = ["This is a test document.", "Testing verifies software quality."]
 

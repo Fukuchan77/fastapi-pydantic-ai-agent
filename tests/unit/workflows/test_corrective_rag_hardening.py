@@ -11,6 +11,7 @@ import pytest
 from pydantic import SecretStr
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_litellm import LiteLLMModel
@@ -35,12 +36,29 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**defaults)  # type: ignore[arg-type]
 
 
+def _verdict_response(info: AgentInfo, *, sufficient: bool, rationale: str) -> ModelResponse:
+    """Build the tool-call response the structured-output eval agent expects.
+
+    Discriminates on `info.output_tools` (present for the eval agent, absent
+    for the synth agent), not prompt text - Req 10.2/15.4 delete prompt
+    sniffing from production code and it must not survive in test fixtures.
+    """
+    tool = info.output_tools[0]
+    return ModelResponse(
+        parts=[ToolCallPart(tool.name, {"sufficient": sufficient, "rationale": rationale})]
+    )
+
+
 def _always_insufficient(messages: list, info: AgentInfo) -> ModelResponse:
-    return ModelResponse(parts=[TextPart(content="insufficient")])
+    if info.output_tools:
+        return _verdict_response(info, sufficient=False, rationale="insufficient")
+    return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
 
 def _always_relevant(messages: list, info: AgentInfo) -> ModelResponse:
-    return ModelResponse(parts=[TextPart(content="relevant")])
+    if info.output_tools:
+        return _verdict_response(info, sufficient=True, rationale="relevant")
+    return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
 
 def _mock_vector_store() -> AsyncMock:
@@ -158,11 +176,10 @@ class TestDegradedReturnAtRetryLimit:
 
         def model_fn(messages: list, info: AgentInfo) -> ModelResponse:
             nonlocal synth_calls
-            last_text = messages[-1].parts[0].content if messages else ""
-            if "using the following context" in last_text.lower():
-                synth_calls += 1
-                return ModelResponse(parts=[TextPart(content="Best-effort degraded answer")])
-            return ModelResponse(parts=[TextPart(content="insufficient")])
+            if info.output_tools:
+                return _verdict_response(info, sufficient=False, rationale="insufficient")
+            synth_calls += 1
+            return ModelResponse(parts=[TextPart(content="Best-effort degraded answer")])
 
         workflow = CorrectiveRAGWorkflow(
             vector_store=vector_store,

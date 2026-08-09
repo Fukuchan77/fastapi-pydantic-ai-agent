@@ -13,6 +13,7 @@ from httpx import ASGITransport
 from httpx import AsyncClient
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.profiles import ModelProfile
@@ -235,6 +236,13 @@ def auth_headers(test_api_key: str) -> dict[str, str]:
 def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
     """Simple LLM function for testing that returns predictable responses.
 
+    Discriminates on `agent_info.output_tools` - whether the agent asked for
+    structured output - rather than on prompt text (Req 10.8, 15.4): prompt
+    sniffing is exactly what Req 10.2 deletes from production code, so this
+    fixture must not reintroduce it. The RAG relevance evaluator is the only
+    structured-output caller here; a terminal tool-call part answers it
+    directly, with no dependence on prompt wording.
+
     Args:
         messages: List of ModelMessage objects.
         agent_info: Agent information.
@@ -242,6 +250,17 @@ def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
     Returns:
         ModelResponse with canned response for testing.
     """
+    if agent_info.output_tools:
+        tool = agent_info.output_tools[0]
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool.name,
+                    {"sufficient": True, "rationale": "The retrieved chunks answer the query."},
+                )
+            ]
+        )
+
     # Extract the last user message content
     user_messages = [
         msg.parts[0].content
@@ -251,12 +270,6 @@ def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
 
     if user_messages:
         last_message = user_messages[-1].lower()
-
-        # Detect RAG evaluation prompts and return "relevant"
-        is_evaluation = "respond with exactly one word" in last_message
-        has_relevance = "relevant" in last_message or "insufficient" in last_message
-        if is_evaluation and has_relevance:
-            return ModelResponse(parts=[TextPart(content="relevant")])
 
         # Detect RAG synthesis prompts and return a contextual answer
         is_synthesis = (
@@ -335,7 +348,10 @@ def test_model() -> FunctionModel:
     `simple_llm_function`/`simple_llm_stream_function` return plain text, not
     JSON matching `ChatOutput` - an explicit `supports_json_schema_output=False`
     profile keeps this fixture on the plain-output path (Req 10.3) regardless
-    of `FunctionModel`'s own default profile (which reports `True`).
+    of `FunctionModel`'s own default profile (which reports `True`). The RAG
+    relevance evaluator is a separate, tool-based structured-output agent;
+    `simple_llm_function` answers it with a terminal tool-call part instead
+    (Req 10.8), unaffected by this profile setting.
 
     Returns:
         FunctionModel configured with simple_llm_function and stream support.

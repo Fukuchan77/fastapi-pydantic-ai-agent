@@ -15,6 +15,7 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -44,17 +45,23 @@ async def test_stale_query_returns_post_ingest_content_without_ttl_wait() -> Non
     call_count = 0
 
     def model_fn(messages: list, info: AgentInfo) -> ModelResponse:
-        """Accept the first search result, then echo the synthesis prompt.
+        """Accept every search result, then echo the synthesis prompt.
 
-        Odd calls are the evaluation step (always "relevant" so the workflow
-        proceeds to synthesis without extra search rounds); even calls are
-        the synthesis step, echoed back verbatim so the returned answer
-        reveals exactly which chunk(s) it was grounded on.
+        The eval agent's structured tool call is always answered as
+        sufficient so the workflow proceeds to synthesis without extra
+        search rounds; the synthesis (plain-text) call is echoed back
+        verbatim so the returned answer reveals exactly which chunk(s) it
+        was grounded on. Discriminates on `info.output_tools` rather than
+        call parity, since pydantic-ai's own output-retry loop can consume
+        extra eval-agent calls that would otherwise shift the parity.
         """
         nonlocal call_count
         call_count += 1
-        if call_count % 2 == 1:
-            return ModelResponse(parts=[TextPart(content="relevant")])
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
         prompt = messages[-1].parts[0].content if messages else ""
         return ModelResponse(parts=[TextPart(content=str(prompt))])
 
@@ -113,10 +120,13 @@ async def test_pending_query_survives_generation_bump_during_ingest() -> None:
         """Block the evaluation call until the test signals the ingest is done."""
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
+        if info.output_tools:
             eval_started.set()
             await release_eval.wait()
-            return ModelResponse(parts=[TextPart(content="relevant")])
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
         return ModelResponse(parts=[TextPart(content="answer for pending query")])
 
     workflow = CorrectiveRAGWorkflow(
@@ -166,7 +176,12 @@ async def test_cache_key_is_identical_across_callers_with_different_session_iden
 
     def model_fn(messages: list, info: AgentInfo) -> ModelResponse:
         """Always accept the search result so both runs reach the same cache path."""
-        return ModelResponse(parts=[TextPart(content="relevant")])
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     caller_a_api_key = "caller-a-api-key-1234567890"
     caller_b_api_key = "caller-b-api-key-1234567890"

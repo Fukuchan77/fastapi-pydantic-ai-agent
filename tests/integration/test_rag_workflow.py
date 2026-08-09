@@ -8,6 +8,7 @@ import pytest
 from pydantic import SecretStr
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -40,8 +41,13 @@ def workflow_with_relevant_eval(
     """Provide workflow that always evaluates chunks as relevant."""
 
     def mock_relevance_eval(messages: list, info: AgentInfo) -> ModelResponse:
-        """Mock LLM that always returns 'relevant'."""
-        return ModelResponse(parts=[TextPart(content="relevant")])
+        """Mock LLM that always answers the eval agent's tool call as sufficient."""
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     # Create workflow with FunctionModel for evaluation
     workflow = CorrectiveRAGWorkflow(
@@ -60,8 +66,13 @@ def workflow_with_insufficient_eval(
     """Provide workflow that always evaluates chunks as insufficient."""
 
     def mock_relevance_eval(messages: list, info: AgentInfo) -> ModelResponse:
-        """Mock LLM that always returns 'insufficient'."""
-        return ModelResponse(parts=[TextPart(content="insufficient")])
+        """Mock LLM that always answers the eval agent's tool call as insufficient."""
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": False, "rationale": "insufficient"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     workflow = CorrectiveRAGWorkflow(
         vector_store=vector_store,

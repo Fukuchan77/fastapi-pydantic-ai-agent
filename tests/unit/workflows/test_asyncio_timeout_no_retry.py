@@ -11,6 +11,7 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -112,11 +113,14 @@ async def test_asyncio_timeout_error_does_not_retry_synthesis(
         nonlocal call_count
         call_count += 1
 
-        # First call is evaluation - return quickly
-        if call_count == 1:
-            return ModelResponse(parts=[TextPart(content="relevant")])
+        # The eval agent's structured tool call - answer it quickly.
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
 
-        # Subsequent calls are synthesis - timeout
+        # Synthesis (plain text) - timeout
         await asyncio.sleep(10)
         return ModelResponse(parts=[TextPart(content="This is the synthesized answer")])
 
