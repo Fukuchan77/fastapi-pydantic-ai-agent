@@ -88,12 +88,31 @@ class CORSMiddleware(BaseHTTPMiddleware):
             response.headers["Access-Control-Allow-Origin"] = origin
             # Add Vary: Origin header when returning specific origin
             # to prevent proxy caches from returning wrong CORS headers to different clients
-            response.headers["Vary"] = "Origin"
+            self._merge_vary_origin(response)
 
         if self.allow_credentials and not self.allow_all_origins:
             response.headers["Access-Control-Allow-Credentials"] = "true"
 
         return response
+
+    @staticmethod
+    def _merge_vary_origin(response: Response) -> None:
+        """Append "Origin" to any existing Vary header without duplicating it.
+
+        A downstream handler may have already set Vary (e.g. for
+        Accept-Encoding); replacing it outright would silently drop that
+        value and break caches keyed on it.
+
+        Args:
+            response: Response object to merge the Vary header into.
+        """
+        existing = response.headers.get("Vary")
+        if existing is None:
+            response.headers["Vary"] = "Origin"
+            return
+        existing_values = {v.strip().casefold() for v in existing.split(",")}
+        if "origin" not in existing_values:
+            response.headers.append("Vary", "Origin")
 
     async def dispatch(
         self,
