@@ -108,6 +108,55 @@ class TestVerifyApiKey:
         assert result == Principal(id=derive_principal_id("TestKey123456789"))
 
     @pytest.mark.asyncio
+    async def test_non_ascii_api_key_raises_401_not_500(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-ASCII bytes in the header must 401, not raise TypeError (Req 5.1, 5.3)."""
+        # Arrange
+        monkeypatch.setenv("API_KEY", "test-secret-key-1234567")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
+        settings = Settings()
+
+        # Act & Assert
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(api_key="wrong-key-é", settings=settings)
+
+        assert exc_info.value.status_code == 401
+        detail = exc_info.value.detail
+        if isinstance(detail, dict):
+            assert detail["message"] == "Unauthorized"
+        else:
+            assert detail.message == "Unauthorized"
+
+    @pytest.mark.asyncio
+    async def test_all_rejection_reasons_yield_identical_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing, empty, non-ASCII, and wrong-but-ASCII keys must be indistinguishable.
+
+        Req 5.5: same status, same body, same headers.
+        """
+        # Arrange
+        monkeypatch.setenv("API_KEY", "test-secret-key-1234567")
+        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test123456789")
+        settings = Settings()
+
+        candidates: list[str | None] = [None, "", "wrong-key-é", "wrong-ascii-key"]
+        responses = []
+        for candidate in candidates:
+            with pytest.raises(HTTPException) as exc_info:
+                await verify_api_key(api_key=candidate, settings=settings)
+            responses.append(
+                (exc_info.value.status_code, exc_info.value.detail, exc_info.value.headers)
+            )
+
+        # Assert - every rejection reason produces the exact same response shape
+        first = responses[0]
+        assert all(response == first for response in responses)
+
+    @pytest.mark.asyncio
     async def test_error_response_has_correct_structure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

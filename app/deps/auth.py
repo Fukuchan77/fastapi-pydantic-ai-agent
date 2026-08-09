@@ -29,6 +29,19 @@ api_key_header = APIKeyHeader(
 )
 
 
+def _unauthorized() -> HTTPException:
+    """Build the single 401 response shared by every rejection reason (Req 5.5).
+
+    Missing, empty, non-ASCII, and wrong-but-ASCII keys all raise this same
+    exception so the response shape gives a caller no signal about which
+    check failed.
+    """
+    return HTTPException(
+        status_code=401,
+        detail=ErrorResponse(message="Unauthorized", code="UNAUTHORIZED").model_dump(),
+    )
+
+
 async def verify_api_key(
     api_key: str | None = Depends(api_key_header),
     settings: Settings = Depends(get_settings),  # noqa: B008
@@ -48,30 +61,36 @@ async def verify_api_key(
         Principal: The authenticated caller, derived from the API key (Req 11.1).
 
     Raises:
-        HTTPException: 401 Unauthorized if key is missing or invalid
+        HTTPException: 401 Unauthorized for any missing, non-ASCII, or
+            incorrect key (Req 5.1, 5.3, 5.5).
     """
-    # Use constant-time comparison to prevent timing attacks
-    # secrets.compare_digest() requires both arguments to be strings
-    # Extract secret value from SecretStr for comparison
-    if api_key is None or not secrets.compare_digest(api_key, settings.api_key.get_secret_value()):
-        # Log authentication failure for security monitoring
-        # Do NOT log the actual API key values (security risk)
-        request_id = request_id_var.get()
-        if api_key is None:
-            logger.warning(
-                "Authentication failed: missing API key (request_id: %s)",
-                request_id,
-            )
-        else:
-            logger.warning(
-                "Authentication failed: invalid API key (request_id: %s)",
-                request_id,
-            )
+    # Do NOT log the actual API key values (security risk)
+    request_id = request_id_var.get()
 
-        # Add error code for programmatic error handling
-        raise HTTPException(
-            status_code=401,
-            detail=ErrorResponse(message="Unauthorized", code="UNAUTHORIZED").model_dump(),
+    if api_key is None:
+        logger.warning(
+            "Authentication failed: missing API key (request_id: %s)",
+            request_id,
         )
+        raise _unauthorized()
+
+    # secrets.compare_digest() raises TypeError on a non-ASCII str (it only
+    # accepts ASCII str or bytes), which would otherwise turn a malformed,
+    # non-ASCII key into an unhandled 500 instead of the 401 this dependency
+    # promises for any byte sequence a client can present in the header.
+    if not api_key.isascii():
+        logger.warning(
+            "Authentication failed: invalid API key (request_id: %s)",
+            request_id,
+        )
+        raise _unauthorized()
+
+    # Use constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(api_key, settings.api_key.get_secret_value()):
+        logger.warning(
+            "Authentication failed: invalid API key (request_id: %s)",
+            request_id,
+        )
+        raise _unauthorized()
 
     return Principal(id=derive_principal_id(api_key))
