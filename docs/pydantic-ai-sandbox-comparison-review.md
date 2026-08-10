@@ -17,6 +17,7 @@
 - [5. 検証結果](#5-検証結果)
 - [6. 推奨ロードマップ](#6-推奨ロードマップ)
 - [7. 追補: 001-agent-architecture-enhancements ブランチとの照合](#7-追補-001-agent-architecture-enhancements-ブランチとの照合)
+- [8. 追補2: 検証記録と移行準備(002-review-roadmap-remediation)](#8-追補2-検証記録と移行準備002-review-roadmap-remediation)
 
 ---
 
@@ -510,3 +511,187 @@ CI 原則と矛盾する。IPv6 テストは `socket.has_ipv6` 等での skip �
    も `UsageLimitExceeded` の属性ベース判定へ)。lifespan startup 後半の try/finally。
 4. **P3**: 残りの Low(L-6/7/8/11)と `asyncio_mode = "auto"`。v2 移行は
    1.107.1 への更新で距離が縮まっており、§6 P3 のチェックリストが引き続き有効。
+
+---
+
+## 8. 追補2: 検証記録と移行準備(`002-review-roadmap-remediation`)
+
+追補日: 2026-08-10。本章は spec `002-review-roadmap-remediation` が §6 ロードマップを
+完全に解消した結果を記録する追補である。§7 追補が既存の in-repo 前例であり、本章も
+レポート本体を書き換えず追記する。8.1 は §7.3 マトリクスで ✅ / 🔶 と判定された項目のうち、
+本 spec の作業を経ても現在のコードが素の状態(追加の実装や決定を要さない)でロードマップの
+意図を満たしていることを確認できたものの検証記録である。`_get_cached_model` の残存課題
+(M-9)、SSE が `BaseHTTPMiddleware` 系スタックに包まれたままである残課題(M-8)、および
+それらの発見事項のディスポジションは 8.2 で扱う。v2 移行準備チェックリストは 8.3 で扱う。
+
+### 8.1 ロードマップ意図に対する検証記録(§7.3 該当項目)
+
+| 指摘/項目 | 判定 | 根拠 |
+|---|---|---|
+| H-1 キャンセルされた RAG リクエストが in-flight キャッシュを恒久汚染する | 意図を満たす。キャンセル(`CancelledError`)を含む全終了経路で `_pending_futures` エントリが解放される | 実装: [rag_cache.py:215-262](../app/workflows/rag_cache.py#L215-L262) — `except BaseException` がジェネリック例外とキャンセルの両方を捕捉し、`_pending_futures` からエントリを除去([L232-233](../app/workflows/rag_cache.py#L232-L233))、フォロワーには `TimeoutError` を伝播([L255](../app/workflows/rag_cache.py#L255))。テスト: `tests/unit/workflows/test_rag_cache_cancellation.py::TestLeaderCancellationDoesNotDropFollower::test_follower_gets_timeout_error_not_cancelled_error` / `::test_pending_future_is_cleaned_up_after_cancellation` / `::test_genuine_workflow_exception_still_propagates_to_follower`。 |
+| M-2 Redis / Chroma / embedding 設定がデッドコード | 意図を満たす。すべてのストアは `Settings` から factory 経由で構築され、外部バックエンドが到達不能なら起動が fail-fast する | 実装: [factory.py:34](../app/stores/factory.py#L34) `build_session_store` / [factory.py:55](../app/stores/factory.py#L55) `build_vector_store` / [factory.py:85](../app/stores/factory.py#L85) `dry_run_stores`(Redis 失敗時 `StoreDryRunError` を [factory.py:120](../app/stores/factory.py#L120) で送出、Ollama 失敗時は [factory.py:141](../app/stores/factory.py#L141))。`lifespan.py` はストア構築直後に `dry_run_stores()` を呼ぶ([lifespan.py:141-153](../app/lifespan.py#L141-L153))。テスト: `tests/unit/stores/test_factory.py::test_dry_run_stores_raises_store_dry_run_error_on_redis_failure` / `::test_dry_run_stores_raises_store_dry_run_error_on_ollama_failure`、`tests/integration/test_store_dry_run_startup.py::test_lifespan_aborts_startup_when_vector_store_dry_run_fails`。 |
+| M-7 レートリミットがプロセスローカル | 意図を満たす。設定されたストレージ(Redis)経由でワーカー間の状態を共有し、LLM 呼び出し経路には追加の厳しい上限がかかる | 実装: [rate_limit.py:103-108](../app/middleware/rate_limit.py#L103-L108) `Limiter(..., storage_uri=storage_uri, in_memory_fallback_enabled=True)`、[rate_limit.py:178](../app/middleware/rate_limit.py#L178) `enforce_llm_rate_limit`。適用箇所: [agent.py:48](../app/api/v1/agent.py#L48)(`/agent/chat`)、[agent.py:189](../app/api/v1/agent.py#L189)(`/agent/stream`)、[rag.py:58](../app/api/v1/rag.py#L58)(`/rag/query`)。テスト: `tests/e2e/test_rate_limiting_enforcement.py::test_rate_limit_enforced_on_agent_chat` / `::test_llm_rate_limit_triggers_429_before_global_default`。 |
+| §4.7 Logfire スクラビングのデフォルト有効化 | 意図を満たす。デフォルトで `prompt`/`tool_input`/`tool_output` をスクラブし、明示的に無効化すると `AUDIT:` 警告を出す | 実装: [observability.py:18](../app/observability.py#L18) `configure_logfire`、[observability.py:54-58](../app/observability.py#L54-L58)(`log_sensitive_payloads` 分岐と `AUDIT:` ログ)。テスト: `tests/unit/test_observability.py::TestConfigureLogfireScrubbing::test_scrubbing_enabled_by_default_covers_prompt_and_tool_payloads` / `::test_log_sensitive_payloads_disables_scrubbing_and_warns`。 |
+| M-8(型付きイベント・イベント数上限・切断検知・キャンセル再送出の部分に限る) | 意図を満たす。この部分に限っての判定であり、SSE が `BaseHTTPMiddleware` 系スタックに包まれたままである残課題は 8.2 で扱う | 実装: [sse.py:21-64](../app/patterns/sse.py#L21-L64)(`_StrictEvent` に `ConfigDict(extra="forbid")`。discriminated union は `StepStarted`/`ToolCalled`/`Token`/`Completed`/`Error` の 5 種)。[_stream.py:307](../app/api/v1/_stream.py#L307) `is_disconnected()` ポーリング、[_stream.py:358](../app/api/v1/_stream.py#L358) `sse_max_events` 上限、[_stream.py:364](../app/api/v1/_stream.py#L364) `CancelledError` 再送出(クリーンアップ後)。テスト: `tests/unit/api/v1/test_stream_lifecycle.py::test_stops_when_client_disconnected` / `::test_stops_producing_further_events_at_sse_max_events_cap` / `::test_cancelled_error_is_re_raised_after_cleanup`。 |
+
+検証のみとして持ち越された 3 要件(spec の Requirement 5.4 / 9.5 / 10.6 — 専用の実装タスクを
+持たず、既存実装が意図を満たすことの確認のみが求められる)についても同様に確認した:
+
+| 要件 | 判定 | 根拠 |
+|---|---|---|
+| 5.4 提示された API キーがレスポンス本文・ヘッダ・ログのいずれにも一切現れない | 満たす | 実装: [auth.py:67](../app/deps/auth.py#L67)(「Do NOT log the actual API key values」のコメント)。[auth.py:71-93](../app/deps/auth.py#L71-L93) の3箇所の `logger.warning` はいずれも `request_id` のみを引用し、キー値自体を含めない。テスト: `tests/unit/deps/test_auth_logging.py::test_auth_failure_does_not_log_api_key`。 |
+| 9.5 チャットの壁時計時間が `chat_request_timeout` で境界化され 504 として現れる | 満たす | 実装: [agent.py:100-112](../app/api/v1/agent.py#L100-L112) — `asyncio.wait_for(..., timeout=settings.chat_request_timeout)` を `TimeoutError` で捕捉し `HTTPException(status_code=504, ...)` を送出。テスト: `tests/unit/api/v1/test_agent_endpoints.py::test_chat_timeout_returns_504`。 |
+| 10.6 グラウンディング(決定的な引用順序、空/不整合な引用IDの拒否)が維持されている | 満たす | 実装: [citation.py:13-26](../app/workflows/citation.py#L13-L26) `order_hits()` は `(-score, chunk_id)` でソート、[citation.py:29](../app/workflows/citation.py#L29) `validate_citations()` は空集合・未知IDを例外化。テスト: `tests/unit/workflows/test_citation.py::TestOrderHits::test_orders_by_descending_score` / `::test_breaks_score_ties_by_chunk_id_ascending`、`::TestValidateCitations::test_empty_citations_raises_empty_citation_error` / `::test_unknown_citation_raises_dangling_citation_error`。 |
+
+### 8.2 検証で見つかった3件の発見事項、指摘の対応状況、および既存ガードの健全性確認
+
+8.1 の検証で終わらず、`14.2`(✅/🔶 項目の検証でギャップが見つかった場合は実装課題として扱う)に
+従って3件の発見事項が実装課題に変換された。それぞれのディスポジションを記録する。
+
+#### 8.2.1 3件の検証発見事項とそのディスポジション
+
+| # | 発見事項 | ディスポジション | 根拠 |
+|---|---|---|---|
+| 1 | `UsageLimits.tool_calls_limit` が一度も設定されていなかった(9.4/9.7、H-4 の「実装済みとされた部分」の残存ギャップ) | **実装課題として解消**。`usage_tool_calls_limit`(既定 `20`)を `UsageLimits` に渡すよう chat・stream 両経路を修正 | 設定: [llm.py:307-311](../app/config/llm.py#L307-L311) `usage_tool_calls_limit: int \| None = Field(default=20, ge=1, ...)`。適用: [agent.py:96](../app/api/v1/agent.py#L96)(`/agent/chat` の `UsageLimits(...)`)、[_stream.py:140](../app/api/v1/_stream.py#L140)(`/agent/stream` の `UsageLimits(...)`)。テスト: `tests/unit/api/v1/test_agent_endpoints.py::TestChatEndpoint::test_chat_sets_tool_calls_limit_from_settings`(chat 経路、`kwargs["limits"].tool_calls_limit == settings.usage_tool_calls_limit` を検証)、`tests/integration/test_agent_stream_event_mapping.py::TestUsageLimitEnforcement::test_tool_calls_limit_reaches_agent_iter`(stream 経路)。 |
+| 2 | `_get_cached_model` が `HttpUrl` を `str \| None` パラメータに渡していた(M-9 の残存課題) | **実装課題として解消**。呼び出し側で `str(settings.llm_base_url)` に変換し、パラメータ注釈は広げていない | 実装: [workflow.py:88-91](../app/deps/workflow.py#L88-L91) の呼び出しコメントを拡張し変換理由を明記(`_get_cached_model` 自体の `str \| None` 注釈とキャッシュキーに関する docstring は変換後も正確なため無変更)。テスト: `tests/unit/deps/test_workflow.py::test_get_rag_workflow_passes_llm_base_url_as_str` が `_get_cached_model` へのキーワード引数 `llm_base_url` が `str` であり `HttpUrl` ではないことを固定。 |
+| 3 | SSE 経路が `BaseHTTPMiddleware` 系スタックに包まれたまま残る(M-8 の残存課題、14.9) | **現状のまま受容**。除去は spec の Out of Scope で既に見送り済み | 現状: [main.py:102](../app/main.py#L102) `SlowAPIMiddleware`、[main.py:106-109](../app/main.py#L106-L109) `SecurityHeadersMiddleware`、[main.py:114](../app/main.py#L114) `RequestSizeLimitMiddleware`、[main.py:117](../app/main.py#L117) `RequestIDMiddleware`、[main.py:124-132](../app/main.py#L124-L132) `CORSMiddleware` — いずれも `starlette.middleware.base.BaseHTTPMiddleware` 派生(`CORSMiddleware`/`RequestSizeLimitMiddleware`/`SecurityHeadersMiddleware`/`RequestIDMiddleware` の4枚)+ `SlowAPIMiddleware` が `/agent/stream` の `StreamingResponse` を再ラップする構造は変わっていない。決定: spec.md の Out of Scope 節「Migrating SSE onto `sse-starlette`, and removing `BaseHTTPMiddleware` from the streaming path (14.9 records the decision only)」の通り、除去は本 spec の範囲外として別途スケジュールされる(8.1 で確認済みの型付きイベント・上限・切断検知・キャンセル再送出の部分は解消済みのまま)。 |
+
+finding 1 は同時に、9.7(「トークン上限と温度が primary/fallback 両方のモデルリクエストパラメータに
+到達することをテストで示し、H-4 の実装済み部分の検証結果を記録する」)の記録も兼ねる。
+`llm_max_output_tokens`/`llm_temperature` が primary モデルおよびフォールバック選択後の
+両モデルの `AgentInfo.model_settings` に到達することは
+`tests/unit/agents/test_model_settings_propagation.py::TestModelSettingsReachThePrimaryModel::test_reaches_agent_info_for_a_lone_primary_model`
+(単独 primary の場合)と
+`::TestModelSettingsReachASelectedFallbackModel::test_reaches_agent_info_for_both_the_failed_primary_and_the_fallback`
+(primary が `ModelHTTPError` で失敗し fallback が応答する場合、両方の `FunctionModel` が同一の
+`{"max_tokens": 2048, "temperature": 0.15}` を観測することをアサート)が示す。したがって H-4 は
+「予算・タイムアウトは実装済み、モデル設定(上限・温度)は本 feature で追加、tool_calls_limit は
+本節で解消」の3点をもって完全に解消されたと記録する。
+
+#### 8.2.2 既存リポジトリガードの健全性確認(14.8)
+
+Requirement 14.8 が列挙する8件のガードすべてについて、本 feature 完了後も現在のコードベースに
+対して green で通り、かつ各ガードが本来主張すべき性質を実際に検証していることを再実行して確認した
+(`uv run pytest tests/unit/test_file_size_policy.py tests/unit/test_contract_drift.py
+tests/unit/test_ci_workflows.py tests/unit/test_no_hardcoded_model_ids.py
+tests/unit/test_naming_conventions.py tests/unit/test_pre_push_hook.py
+tests/unit/test_expect_live_tests_plugin.py tests/unit/test_block_network.py -q` — 全件 passed)。
+
+| ガード | 契約変更による意図的更新 | 備考 |
+|---|---|---|
+| file-size policy(`test_file_size_policy.py`) | なし | 本 feature で変更した全ファイルが 500 行未満、または既存の 500-999 行帯を維持(`app/config/security.py` は 12.1 後も 492 行)。 |
+| contract drift(`test_contract_drift.py`) | **あり** | 17.4 でリテラル値ドリフト検知(`TestLivenessContractDrift`)とエラーコード表ドリフト検知(`TestErrorEnvelopeContractDrift`)を追加し、README との不一致(L-11)を検出できなかった旧来の `/health` 特例を削除。README の値変更(17.1/17.2)という契約変更に対応して更新。 |
+| pinned CI actions(`test_ci_workflows.py`) | なし | ワークフロー YAML の `uses:` は本 feature で変更していない。 |
+| model-id scan(`test_no_hardcoded_model_ids.py`) | なし | 静的スキャン対象・許可リストは無変更。 |
+| naming conventions(`test_naming_conventions.py`) | なし | 命名規則の対象・許可リストは無変更。 |
+| pre-push hook(`test_pre_push_hook.py`) | **あり** | 1.6 で `mise run test:local` 呼び出しに対する `EXPECT_LIVE_TESTS=5` の設定確認アサーションを追加(anti-false-green 化という契約変更)。 |
+| live-test count plugin(`test_expect_live_tests_plugin.py`) | なし | プラグイン自体は無変更。1.5/1.6 が新設した3レーン(Chroma・Docker・`test:local`)がこのプラグインを利用する側として増えたのみ。 |
+| network blocking(`test_block_network.py`) | **あり** | 1.3 で IPv6 未対応ホストでのスキップガード(`socket.has_ipv6` 相当のプローブ)を追加(13.6/13.7 という契約変更)。 |
+
+上記に加え、本 feature は新規ガードを1件追加した(`test_pydantic_ai_api_lock.py`、Requirement
+15.1–15.3、major 16)。これは Requirement 14.8 が列挙する既存8件のいずれでもなく、新設のため
+「意図的更新」列の対象外である。
+
+#### 8.2.3 本 feature が対応した指摘の一覧(12.6)
+
+§3/§7.3 の指摘のうち本 feature の Requirement 1–13 が対応したもの、および §8.1/8.2.1 で検証・
+記録したものすべてのディスポジションを記録する。
+
+| 指摘/項目 | Requirement | ディスポジション | 根拠 |
+|---|---|---|---|
+| H-2 `app_env` 自由文字列 | 1 | 解消 | `Literal["development", "staging", "production"]` 化(major 8)。テスト: `tests/unit/test_config_app_env_literal.py`。 |
+| H-3 ingest がキャッシュを無効化しない | 2 | 解消 | ベクトルストアに単調増加する `generation` を追加し、RAG 結果キャッシュのキーに混入(major 3)。テスト: `tests/integration/test_rag_cache_generation.py`。 |
+| H-5 履歴 1000 件到達で恒久破損 | 3 | 解消 | 例外の代わりにペア整合を保つ境界でのトリミングに変更(major 4)。テスト: `tests/unit/stores/test_trim_history.py`、`tests/unit/stores/test_session_trim_across_backends.py`。 |
+| M-1 lifespan 起動失敗時のリソースリーク | 4 | 解消 | `_startup`/`_shutdown` に分割し、起動失敗時も同じ後始末経路を通す(major 10)。テスト: `tests/integration/test_lifespan_startup_failure.py`。 |
+| M-6 非 ASCII `X-API-Key` で 500 | 5 | 解消 | 定数時間比較の前に ASCII 事前チェックを追加(major 9)。テスト: `tests/unit/deps/test_auth.py`、`tests/e2e/test_auth.py`。 |
+| M-3 `InMemoryVectorStore` の CPU バウンド・無ロック | 6 | 解消 | ロックで保護したスナップショットをワーカースレッドでスコアリング(major 11)。テスト: `tests/unit/stores/test_in_memory_vector_store_concurrency.py`、`tests/benchmarks/test_in_memory_query_latency.py`。 |
+| M-4 substring による transient 判定 | 7 | 解消 | 状態コードの集合+型による分類に変更、メッセージ文字列判定を除去(major 7)。テスト: `tests/unit/workflows/test_error_classification.py`。 |
+| M-5 エラーエンベロープ 2 系統 | 8 | 解消 | 単一のフラット `ErrorResponse` に統一(404/405 を含む10状態、major 2)。テスト: `tests/unit/api/test_error_envelope.py`。 |
+| H-4 チャット経路の予算・時間上限なし | 9 | 解消 | `ModelSettings`(上限・温度、major 5)+ `tool_calls_limit`(major 6、8.2.1 finding 1)+ 既存の `chat_request_timeout`/`UsageLimits`。テスト: `tests/unit/agents/test_model_settings_propagation.py`、`tests/unit/api/v1/test_agent_endpoints.py::test_chat_sets_tool_calls_limit_from_settings`。 |
+| §4.2 構造化されていない RAG 関連性評価 | 10 | 解消 | `RelevanceVerdict`(sufficiency+rationale必須)を出力型とする評価エージェントに変更、文字列パースを削除(major 15)。テスト: `tests/unit/workflows/test_structured_relevance.py`。 |
+| L-6 workflow のモデル解決フォールバック | 11 | 解消 | デフォルト分岐も `build_model()` 経由に統一(major 14)。テスト: `tests/unit/workflows/test_corrective_rag_hardening.py`。 |
+| L-7 CSP `'unsafe-inline'` / 無条件 HSTS | 11 | 解消 | HTTPS のみ HSTS を送出、CSP のドキュメント緩和をドキュメントパスに限定(major 12)。テスト: `tests/unit/test_middleware_security_headers.py`、`tests/unit/middleware/test_csp_scope.py`。 |
+| L-8 `Vary` 上書き | 11 | 解消 | 既存値への追記+重複排除に変更(major 13)。テスト: `tests/unit/middleware/test_cors_vary.py`。 |
+| L-11 README `/health` 例と実装の不一致 | 12 | 解消 | README を実装値 `{"status": "ok"}` に修正し、値レベルのドリフトガードを追加(major 17)。テスト: `tests/unit/test_contract_drift.py::TestLivenessContractDrift`。 |
+| §7.4 Chroma テストがオフラインで失敗 | 13 | 解消 | `RUN_CHROMA_INTEGRATION_TESTS` オプトイン化(major 1)。テスト: `tests/unit/test_chroma_test_gating.py`。 |
+| §7.4 IPv6 テストが IPv6 非対応ホストで失敗 | 13 | 解消 | `socket.has_ipv6` 相当のプローブでスキップガード追加(major 1)。テスト: `tests/unit/test_block_network.py`。 |
+| §4.8 `asyncio_mode` 未設定 | 13 | 解消 | `pyproject.toml` に `asyncio_mode = "auto"` を設定(major 1)。テスト: `tests/unit/test_pytest_config.py`。 |
+| H-1 RAG キャッシュ `CancelledError` 汚染 | 14.3 | 意図を満たすことを検証済み(§8.1) | — |
+| M-2 未配線ストア設定 | 14.4 | 意図を満たすことを検証済み(§8.1) | — |
+| M-7 プロセスローカルなレート制限 | 14.5 | 意図を満たすことを検証済み(§8.1) | — |
+| §4.7 Logfire スクラビング | 14.6 | 意図を満たすことを検証済み(§8.1) | — |
+| M-8(型付きイベント・上限・切断検知・キャンセル再送出の部分) | 14.7 | 意図を満たすことを検証済み(§8.1) | — |
+| M-9 `_get_cached_model` の `HttpUrl` 残存課題 | 14.2 | 実装課題として解消(本節 8.2.1 finding 2) | — |
+| H-4 の tool_calls_limit 残存ギャップ | 14.2, 9.7 | 実装課題として解消(本節 8.2.1 finding 1) | — |
+| M-8 の `BaseHTTPMiddleware` 残存構造 | 14.9 | 現状のまま受容(本節 8.2.1 finding 3) | — |
+| 5.4 API キーがログ等に現れない | 5.4 | 検証のみ・満たす(§8.1) | — |
+| 9.5 チャット壁時計タイムアウト | 9.5 | 検証のみ・満たす(§8.1) | — |
+| 10.6 グラウンディング維持 | 10.6 | 検証のみ・満たす(§8.1) | — |
+| 依存フロア(pydantic-ai-slim) | 15.7 | 解消 | `>=1.70.0,<2.0` → `>=1.99.0,<2.0`(major 16、メジャーバージョンは不変)。 |
+| §6 P3 API サーフェスロック未整備 | 15.1–15.3 | 解消 | 応用コード非依存の subset ロックテストを新設(major 16)。テスト: `tests/unit/test_pydantic_ai_api_lock.py`。 |
+
+v2 移行チェックリスト(15.4–15.6, 15.8)の記録は本節の範囲外で、8.3 で扱う。
+
+### 8.3 v2 移行チェックリストと項目別コンプライアンス、litellm readiness の訂正、kill switch の決定(15.4–15.6, 15.8)
+
+§6 P3 が採用した sandbox 由来の移行チェックリスト(`result.data` 廃止・`system_prompt` →
+`instructions`・`FunctionModel` 終端応答・slim-plus-extras 依存形態)を対象に、現在のコードが
+アップグレード時に変更を要するか否かを項目ごとに記録する(15.4, 15.6)。あわせて
+`pydantic-ai-litellm` readiness の訂正済み結論を移行の前提条件として記録し(15.5)、グローバルな
+モデルリクエスト kill switch を採用しない決定とその根拠を記録する(15.8)。v2 アップグレード自体は
+spec.md の Out of Scope の通り別 spec に委ねられ、本節は準備のみを扱う。
+
+#### 8.3.1 移行チェックリストの項目別コンプライアンス(15.4, 15.6)
+
+| チェックリスト項目 | 判定 | 根拠 |
+|---|---|---|
+| `result.data` の完全廃止 | **準拠**。アップグレード時の対応不要 | `app/` 配下に `RunResult.data`(または `AgentRunResult.data`)への読み取りは存在しない。チャット経路は [agent.py:138](../app/api/v1/agent.py#L138) `guarded.output.reply if isinstance(guarded.output, ChatOutput) else str(guarded.output)` で常に `.output` を読む。**注記**: [_stream.py:194](../app/api/v1/_stream.py#L194) の `node.data.output` は `Agent.is_end_node` が真になった際のグラフ `End` ノード自身の `.data` 属性(終端ペイロードを保持する pydantic-ai グラフ API)であり、廃止対象の `RunResult.data` とは無関係の別アクセサである。アップグレード作業中に同じ `.data` という字面で誤って「廃止対象そのもの」と読み違えないよう、ここに明記する。 |
+| `system_prompt` → `instructions` への移行 | **アップグレード時に変更が必要** | [chat_agent.py:172](../app/agents/chat_agent.py#L172) が `agent.system_prompt(_build_system_prompt)`(デコレータ形式、ビルダー本体は [chat_agent.py:90](../app/agents/chat_agent.py#L90))を使用しており、`instructions` パラメータ/デコレータへの置き換えがまだ行われていない。ただし研究(research.md R2 finding 8)により `agent.system_prompt(fn)` デコレータ自体は v2.22.0 でも変更なく存在することを確認済み — v2 は `instructions` を単に「推奨」するだけでこの形式を削除しないため、緊急度は当初想定より低いが、チェックリスト項目としては引き続き「要変更」で記録する。 |
+| `FunctionModel` 終端応答を `ToolCallPart("final_result", ...)` で表現 | **準拠**。アップグレード時の対応不要 | [conftest.py:253-262](../tests/conftest.py#L253-L262) の `simple_llm_function`(共有 `test_model` フィクスチャの実装本体)は `agent_info.output_tools` の有無で分岐し、構造化出力エージェント向けには `tool = agent_info.output_tools[0]` で解決したツール名(構造化出力の既定名 `final_result`)を使って `ToolCallPart(tool.name, {...})` を返す。major 15(Req 10.8)がこの分岐パターンをチャット・RAG 評価・RAG 統合のテストダブル全件に先行導入済みで、同型のヘルパーは [test_structured_relevance.py:29-34](../tests/unit/workflows/test_structured_relevance.py#L29-L34)・[test_corrective_rag_hardening.py:39-49](../tests/unit/workflows/test_corrective_rag_hardening.py#L39-L49) をはじめ `test_rag_relevance_negation.py`・`test_asyncio_timeout_no_retry.py`・`test_rag_cache_generation.py`・`test_corrective_rag_timeout.py`・`test_workflow_level_timeout.py`・`test_rag_workflow.py`(および evals 側の `test_graders.py`)に共通する。`str` 出力のみに答えるダブル(`simple_llm_function` 自身の非構造化分岐を含む)が `TextPart` のまま終端するのは正しい挙動(構造化出力を持たないエージェントに tool-call 終端を要求する理由がない)であり、本チェックリスト項目の対象外であって欠落ではない。[test_rag_citation_errors.py:47](../tests/e2e/test_rag_citation_errors.py#L47) の `create_app(settings=settings, model=test_model)` が示す通り、e2e テストは単一の `test_model` をアプリ全体に注入するため、`simple_llm_function` の tool-call 分岐は RAG 評価エージェントに対して実際に呼び出される経路であり、死んだコードではない。 |
+| slim-plus-extras の依存形態の維持 | **準拠** | [pyproject.toml:22](../pyproject.toml#L22) `pydantic-ai-slim[logfire,openai]>=1.99.0,<2.0` — メタパッケージ `pydantic-ai` は使用せず、extras 形態のまま。 |
+
+チェックリストに含まれない、**唯一確認済みのハードブレイク**も併せて記録する:
+[factory.py:91](../app/llm/factory.py#L91) `target.profile.supports_json_schema_output` は、v2 で
+`ModelProfile` が `TypedDict(total=False)` になる(pydantic-ai PR #5481)ため属性アクセスが
+`AttributeError` になる唯一の既知の破壊点であり、アップグレード時に
+`target.profile.get("supports_json_schema_output", False)` へ書き換える必要がある。この形状は
+`test_pydantic_ai_api_lock.py` の Layer B′ アサーション
+(`ModelProfile.__dataclass_fields__ ⊇ {supports_json_schema_output}`、
+[test_pydantic_ai_api_lock.py:193-197](../tests/unit/test_pydantic_ai_api_lock.py#L193-L197))が
+ロックしており、この形状が崩れるアップグレードはロックテストの差分として名前付きで検出され、
+実行時の `AttributeError` より先に失敗する。
+
+#### 8.3.2 `pydantic-ai-litellm` v2 readiness の訂正済み結論、移行の前提条件として記録(15.5)
+
+spec.md の前提(「`pydantic-ai-litellm` の v2 対応でブロックされている」)は訂正が必要である。
+[pyproject.toml:21](../pyproject.toml#L21) の `pydantic-ai-litellm>=0.2.3,<1.0` は**この
+プロジェクト自身が設けた上限**であり、アダプタ自体のメタデータは `litellm>=1.86.2`、
+`pydantic-ai-slim>=1.95.0` を宣言するのみで上限を持たない。さらにアダプタの最新リリース
+(0.2.8、2026-07-14)は pydantic-ai 2.9 系に対する破壊(`StreamedResponse.provider_url` の
+`@abstractmethod` 化、`ModelResponsePartsManager.handle_text_delta` の戻り値型変更)を修正する
+PR #13 のためのリリースであり、v2 系そのものを対象に出ている。したがって**前提は満たされている
+——ただし「2.9.x 系に対してのみメンテナ自身が検証済み」という限定付き**で記録する:
+pydantic-ai は 2026-08-01 時点で 2.10 → 2.22 まで進んでいる一方、アダプタは 2026-07-14 の
+0.2.8 以降リリースがなく、現行の v2 系との互換性は上流で未検証のまま残っている。この訂正済みの
+結論を、別 spec として予定されている v2 アップグレード本体の**前提条件**として記録する
+(spec.md の Out of Scope 節が「`pydantic-ai-litellm` の readiness 結論(15.5)にゲートされる」と
+すでに明記している通り)。この訂正は本 feature のスコープ(v2 移行の準備のみ)を変更するものでは
+なく、記録される結論のみを変更する。
+
+#### 8.3.3 グローバルなモデルリクエスト kill switch の決定と根拠(15.8)
+
+**決定**: `models.ALLOW_MODEL_REQUESTS = False` を採用しない。現状(未採用)を維持する。
+
+**根拠 — スコープの非対称性**(形式論ではなく本決定の実質):
+`_hermetic_unit_network` fixture([conftest.py:93-107](../tests/conftest.py#L93-L107))は
+`tests/unit/` 配下のテストファイルのパスでのみソケット遮断を有効化する
+(`_UNIT_TESTS_ROOT not in request.node.path.parents` による判定、[conftest.py:101-103](../tests/conftest.py#L101-L103))。
+統合・e2e・local・benchmark 各層は実ストア/プロバイダを exercise する意図的な設計であり、
+この fixture の対象外である。一方 `models.ALLOW_MODEL_REQUESTS = False` は pydantic-ai の
+モデルリクエスト経路をプロセス全体でグローバルに遮断するため、採用すればユニット層だけでなく
+統合・e2e 層の `FunctionModel`/`TestModel` テストダブルの実行経路にも及ぶ——これは
+`block_network()`([hermetic.py:17](../tests/support/hermetic.py#L17) `_BLOCKED_FAMILIES`、
+[hermetic.py:25](../tests/support/hermetic.py#L25) `block_network`)がユニット層に限定して提供する
+保護より広いスコープである。§7.3 の判定が示す通りソケットレベルの遮断は「同等以上の保護」を
+すでにユニット層に提供しており、それ以上の全層グローバル遮断を追加するコストに見合う具体的な
+ギャップが確認されていないため、kill switch は採用せず現状を維持する。
