@@ -151,3 +151,61 @@ class TestLeaderCancellationDoesNotDropFollower:
         assert leader_result == "leader:boom"
         assert follower_result == "follower:boom"
         assert workflow._pending_futures == {}
+
+
+class TestFollowerCancellationDoesNotBreakLeader:
+    """A cancelled follower must not cancel the future it shares with the leader."""
+
+    @pytest.mark.asyncio
+    async def test_leader_still_succeeds_after_follower_is_cancelled(self) -> None:
+        """The mirror of the leader-cancellation case, and the reason for `asyncio.shield`.
+
+        Cancelling a task that is awaiting a future cancels that future
+        (`Task.cancel()` cancels its `_fut_waiter`). Since the follower awaits
+        the *shared* `_pending_futures` entry, an unshielded await would let the
+        follower's own timeout - or a client disconnect - cancel the leader's
+        future, so the leader's `set_result()` would raise `InvalidStateError`
+        and turn an already-successful run (result even written to `_cache`)
+        into a 500.
+        """
+        settings = build_test_settings(llm_model="openai:gpt-4o", rag_cache_ttl=300)
+        workflow = _CachedWorkflow(settings, delay=0.2)
+        cache_key = workflow._generate_cache_key("q", 3)
+
+        async def leader() -> dict:
+            return await workflow.run(query="q")
+
+        async def follower() -> dict:
+            await asyncio.sleep(0.02)  # join after the leader registers the pending future
+            return await workflow.run(query="q")
+
+        leader_task = asyncio.create_task(leader())
+        follower_task = asyncio.create_task(follower())
+
+        await asyncio.sleep(0.05)  # let the follower start awaiting the shared future
+        follower_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await follower_task
+
+        assert await leader_task == {"answer": "ok", "query": "q"}
+        assert cache_key not in workflow._pending_futures
+        assert cache_key in workflow._cache
+
+    @pytest.mark.asyncio
+    async def test_second_follower_still_served_after_first_is_cancelled(self) -> None:
+        """A cancelled follower must not poison the shared future for other followers."""
+        settings = build_test_settings(llm_model="openai:gpt-4o", rag_cache_ttl=300)
+        workflow = _CachedWorkflow(settings, delay=0.2)
+
+        leader_task = asyncio.create_task(workflow.run(query="q"))
+        await asyncio.sleep(0.02)
+        doomed = asyncio.create_task(workflow.run(query="q"))
+        survivor = asyncio.create_task(workflow.run(query="q"))
+
+        await asyncio.sleep(0.05)
+        doomed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await doomed
+
+        assert await survivor == {"answer": "ok", "query": "q"}
+        assert await leader_task == {"answer": "ok", "query": "q"}

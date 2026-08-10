@@ -170,7 +170,14 @@ class ResultCacheMixin:
 
         # If we found a pending future, await it OUTSIDE the lock
         if pending_future is not None:
-            result = await pending_future
+            # `shield` is load-bearing, not defensive: cancelling a task that is
+            # awaiting a future cancels that future (`Task.cancel()` cancels its
+            # `_fut_waiter`). Without the shield, a follower whose own
+            # `asyncio.timeout` fires - or whose client disconnects - would
+            # cancel the future it *shares* with the leader, and the leader's
+            # later `set_result()` would raise `InvalidStateError`, failing a
+            # run that had already succeeded and populated the cache.
+            result = await asyncio.shield(pending_future)
             # Verify result from pending future is a dict before copying
             if not isinstance(result, dict):
                 raise TypeError(f"Expected dict from workflow, got {type(result).__name__}")
@@ -207,8 +214,12 @@ class ResultCacheMixin:
                         max_size=self.llm_settings.rag_cache_size,
                     )
 
-            # Resolve future and remove from pending
-            future.set_result(result)
+            # Resolve future and remove from pending. The `done()` guard pairs
+            # with the `shield` above: any path that resolves the shared future
+            # before the leader gets here must not turn a successful run into an
+            # `InvalidStateError`.
+            if not future.done():
+                future.set_result(result)
             self._pending_futures.pop(cache_key, None)
             return result
 
