@@ -57,6 +57,7 @@ cp .env.example .env
 # Edit .env with your settings
 # Required:
 #   - API_KEY: Your API key for X-API-Key authentication
+#   - SESSION_SIGNING_KEY: Secret used to HMAC-sign server-issued session ids
 #   - LLM_MODEL: Model identifier (e.g., "openai:gpt-4o", "anthropic:claude-3-5-sonnet")
 #   - LLM_API_KEY: Your LLM provider API key (or leave empty for Ollama)
 ```
@@ -65,6 +66,7 @@ cp .env.example .env
 
 ```bash
 API_KEY=my-secret-api-key
+SESSION_SIGNING_KEY=my-session-signing-key
 LLM_MODEL=openai:gpt-4o
 LLM_API_KEY=sk-...your-openai-key...
 ```
@@ -73,8 +75,10 @@ LLM_API_KEY=sk-...your-openai-key...
 
 ```bash
 API_KEY=my-secret-api-key
+SESSION_SIGNING_KEY=my-session-signing-key
 LLM_MODEL=ollama:llama3
-LLM_BASE_URL=http://localhost:11434/v1
+# No /v1 suffix: LiteLLM appends it for Ollama (see app/agents/chat_agent.py)
+LLM_BASE_URL=http://localhost:11434
 # LLM_API_KEY not required for Ollama
 ```
 
@@ -415,17 +419,21 @@ All configuration is managed via environment variables or `.env` file. See [`.en
 
 ### Required Variables
 
-| Variable    | Description            | Example                                        |
-| ----------- | ---------------------- | ---------------------------------------------- |
-| `API_KEY`   | X-API-Key header value | `my-secret-key`                                |
-| `LLM_MODEL` | LLM provider and model | `openai:gpt-4o`, `anthropic:claude-3-5-sonnet` |
+| Variable              | Description                                                | Example                                        |
+| --------------------- | ---------------------------------------------------------- | ---------------------------------------------- |
+| `API_KEY`             | X-API-Key header value                                     | `my-secret-key`                                |
+| `SESSION_SIGNING_KEY` | HMAC key binding server-issued session ids to a principal  | `my-session-signing-key`                       |
+| `LLM_MODEL`           | LLM provider and model                                     | `openai:gpt-4o`, `anthropic:claude-3-5-sonnet` |
+
+Both `API_KEY` and `SESSION_SIGNING_KEY` must be at least 16 characters and must not be
+a placeholder value — startup fails with a validation error otherwise.
 
 ### Optional Variables
 
 | Variable               | Default                     | Description                                                    |
 | ---------------------- | --------------------------- | -------------------------------------------------------------- |
 | `LLM_API_KEY`          | `None`                      | Provider API key (not required for Ollama)                     |
-| `LLM_BASE_URL`         | `None`                      | Custom endpoint (e.g., `http://localhost:11434/v1` for Ollama) |
+| `LLM_BASE_URL`         | `None`                      | Custom endpoint (e.g., `http://localhost:11434` for Ollama, no `/v1`) |
 | `MAX_OUTPUT_RETRIES`   | `3`                         | Pydantic AI output validation retries                          |
 | `LOGFIRE_TOKEN`        | `None`                      | Pydantic Logfire observability token                           |
 | `LOGFIRE_SERVICE_NAME` | `fastapi-pydantic-ai-agent` | Service name for traces                                        |
