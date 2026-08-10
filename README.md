@@ -91,7 +91,7 @@ mise run dev
 ### 4. Verify Health Check
 
 ```bash
-# Health check endpoint (no authentication required)
+# Liveness check (no authentication required)
 curl http://localhost:8000/health
 ```
 
@@ -99,10 +99,40 @@ curl http://localhost:8000/health
 
 ```json
 {
-  "status": "healthy",
-  "service": "fastapi-pydantic-ai-agent"
+  "status": "ok"
 }
 ```
+
+`/health` is a liveness probe only — it takes no arguments and touches no
+external state, so a 200 means the process is running, not that its
+dependencies are reachable.
+
+```bash
+# Readiness check (no authentication required)
+curl http://localhost:8000/health/ready
+```
+
+For deep dependency checks, use `/health/ready` instead. It runs concurrent
+live probes against the session store, vector store, and LLM provider and
+returns a per-dependency `checks` map:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "session_store": "healthy",
+    "vector_store": "skipped",
+    "llm_provider": "healthy"
+  }
+}
+```
+
+Each check is `"healthy"`, `"unreachable"`, or `"skipped"` — a backend with
+no external dependency to probe (e.g. the in-memory session/vector stores,
+or embedded Chroma) reports `"skipped"` rather than `"healthy"`, since no
+round-trip was actually made. Responds `200` with `"status": "ready"` when
+every probe passes, or `503` with `"status": "not_ready"` naming the failed
+dependency otherwise.
 
 ## 📚 API Examples
 
@@ -247,6 +277,36 @@ data: {"type":"completed"}
 - `Cache-Control: no-cache` and `X-Accel-Buffering: no` response headers so reverse proxies don't buffer the stream
 - Conversation history saved before the terminal `completed` event (a save failure yields a terminal `error` event instead)
 
+## ⚠️ Error Responses
+
+Every error response — regardless of status code or which layer raised it — uses the same flat body. There is no nested `{"detail": {...}}` form on any route or status code:
+
+```json
+{
+  "message": "Invalid or missing API key",
+  "code": "UNAUTHORIZED"
+}
+```
+
+`code` is drawn from one stable, documented set, so clients can branch on `code` instead of on body shape:
+
+| Status | `code`                      | Meaning                                                                   |
+| ------ | --------------------------- | -------------------------------------------------------------------------- |
+| 401    | `UNAUTHORIZED`               | Missing or invalid API key                                                |
+| 403    | `FORBIDDEN`                  | Session-ownership rejection                                               |
+| 404    | `NOT_FOUND`                  | No route matches the request path (raised by the router)                 |
+| 405    | `METHOD_NOT_ALLOWED`         | Path exists but not for this HTTP method (raised by the router)          |
+| 413    | `REQUEST_TOO_LARGE`          | Request body exceeds the configured size limit                          |
+| 422    | `VALIDATION_ERROR`           | Request validation failed (message is generic; no per-field detail)      |
+| 429    | `RATE_LIMIT_EXCEEDED`        | Request-rate limit exceeded                                              |
+| 500    | `INTERNAL_ERROR`             | Unhandled exception                                                      |
+| 502    | `UPSTREAM_GROUNDING_FAILED`  | The RAG workflow could not produce a grounded, citable answer            |
+| 504    | `WORKFLOW_TIMEOUT`           | The RAG workflow exceeded its timeout                                    |
+
+404 and 405 are emitted by Starlette's router itself — no route in this codebase raises either directly. A 405 response additionally carries an `Allow` header naming the HTTP methods the path actually accepts.
+
+**One exception**: a request with an untrusted `Host` header is rejected by `TrustedHostMiddleware` with a plain-text `400 Invalid host header` response, *not* this JSON envelope. That middleware is outermost and returns before FastAPI's exception-handling machinery runs, so no handler here can intercept it.
+
 ## 🏗️ Project Structure
 
 ```
@@ -256,7 +316,7 @@ app/
 ├── observability.py            # Logfire initialization helpers
 │
 ├── api/                        # FastAPI route handlers
-│   ├── health.py               # GET /health
+│   ├── health.py               # GET /health, /health/ready
 │   └── v1/
 │       ├── router.py           # Aggregates v1 sub-routers
 │       ├── agent.py            # POST /v1/agent/chat, /v1/agent/stream
@@ -369,6 +429,9 @@ All configuration is managed via environment variables or `.env` file. See [`.en
 | `MAX_OUTPUT_RETRIES`   | `3`                         | Pydantic AI output validation retries                          |
 | `LOGFIRE_TOKEN`        | `None`                      | Pydantic Logfire observability token                           |
 | `LOGFIRE_SERVICE_NAME` | `fastapi-pydantic-ai-agent` | Service name for traces                                        |
+| `APP_ENV`              | `development`               | Deployment environment — see below                             |
+
+`APP_ENV` accepts exactly `development`, `staging`, or `production` — no case variants (`Production`), abbreviations (`prod`), or aliasing. Any other value fails settings construction before any store, model, or agent is built, with an error naming the field and listing the three permitted values.
 
 ## 🔌 Extension Points
 
