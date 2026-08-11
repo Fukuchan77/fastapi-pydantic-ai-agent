@@ -16,6 +16,16 @@ jobs:
   ci:
     name: Lint, Test, Audit
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,6 +41,11 @@ jobs:
 
       - name: Test (unit + integration + e2e, coverage gate)
         run: mise run test:ci
+
+      - name: Test (Redis session store live lane)
+        env:
+          EXPECT_LIVE_TESTS: "5"
+        run: mise run test:redis
 
       - name: Audit dependencies (pip-audit)
         run: mise run audit
