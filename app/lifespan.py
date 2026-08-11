@@ -194,6 +194,13 @@ async def _startup(app: FastAPI, settings: Settings, model: Model | str | None) 
     # existing store/session-store test-isolation contract.
     resolved_model = model if model is not None else build_fallback_model(settings)
 
+    # Publish the resolved model - the test-injected override when one was
+    # supplied, otherwise the eagerly built chain - so chat and RAG share
+    # exactly one model instance (Req 3.1, 3.2). Placed between the resolve
+    # step and the chat-agent build so a later chat-agent build failure still
+    # leaves it discoverable to shutdown.
+    app.state.llm_model = resolved_model
+
     # Initialize chat agent, forwarding the resolved model
     app.state.chat_agent = build_chat_agent(model=resolved_model, settings=settings)
     logger.info("Initialized chat agent")

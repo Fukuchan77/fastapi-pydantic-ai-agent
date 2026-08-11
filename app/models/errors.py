@@ -35,6 +35,9 @@ class ErrorResponse(BaseModel):
             - `INTERNAL_ERROR` (500) - an unhandled exception.
             - `UPSTREAM_GROUNDING_FAILED` (502) - the RAG workflow could not
               produce a grounded, citable answer.
+            - `DEPENDENCY_NOT_INITIALIZED` (503) - a required `app.state`
+              singleton (`settings` or `llm_model`) was absent when a RAG
+              query was handled.
             - `WORKFLOW_TIMEOUT` (504) - the RAG workflow exceeded its
               timeout.
     """

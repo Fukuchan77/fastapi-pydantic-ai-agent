@@ -2,13 +2,10 @@
 
 import threading
 import weakref
-from functools import lru_cache
 
+from fastapi import HTTPException
 from fastapi import Request
-from pydantic_ai.models import Model
 
-from app.agents.chat_agent import build_model
-from app.config import get_settings
 from app.stores.vector_store import VectorStore
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 
@@ -26,38 +23,17 @@ _workflow_cache: weakref.WeakKeyDictionary[VectorStore, CorrectiveRAGWorkflow] =
 _workflow_cache_lock: threading.Lock = threading.Lock()
 
 
-@lru_cache(maxsize=8)
-def _get_cached_model(
-    llm_model: str,
-    llm_base_url: str | None = None,
-) -> Model:
-    """Cache the LLM model instance keyed by model name and base URL.
-
-    Changed from no-arg function to accept model configuration
-    parameters as cache keys. This allows the cache to invalidate automatically
-    when settings change (e.g., via hot reload or environment variable changes).
-
-    The cache keys on llm_model and llm_base_url because these determine
-    the model structure and endpoint. API keys are NOT included in the cache
-    key for security (they shouldn't appear in logs/traces) and because
-    changing only the API key doesn't require rebuilding the model instance.
-
-    Cache size increased from 1 to 8 to support multiple model configurations
-    (e.g., different models for different endpoints or A/B testing scenarios).
-
-    Args:
-        llm_model: The model identifier (e.g., "openai:gpt-4", "ollama:llama3").
-        llm_base_url: Optional base URL for custom endpoints (e.g., Ollama local server).
-
-    Returns:
-        Cached Model instance for the given configuration.
-    """
-    settings = get_settings()
-    return build_model(settings)
-
-
 def get_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
     """Return a cached CorrectiveRAGWorkflow instance for the given request.
+
+    Reads `settings` and `llm_model` from `req.app.state` (Req 3.3) instead
+    of process-global `get_settings()` and a model cache keyed on model name
+    and base URL (removed - Req 3.7). `app.state.llm_model` is the single
+    model instance `app/lifespan.py` resolves once per application and
+    shares with the chat agent (Req 3.1, 3.2), so this dependency and the
+    chat agent share exactly one model. Neither singleton falls back to a
+    process-global default when absent (Req 3.4) - a fallback would hide the
+    exact bug this dependency used to have.
 
     Caches workflow instances using WeakKeyDictionary keyed by vector_store object.
     This prevents memory leaks (deleted vector stores are auto-removed from cache) and
@@ -72,25 +48,32 @@ def get_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
     instances on every request.
 
     Args:
-        req: FastAPI request object containing app.state.vector_store.
+        req: FastAPI request object, reading app.state.vector_store,
+            app.state.settings, and app.state.llm_model.
 
     Returns:
-        Cached CorrectiveRAGWorkflow instance configured with the application's
-        vector store and LLM settings.
+        Cached CorrectiveRAGWorkflow instance configured with the
+        application's vector store, injected settings, and shared LLM model.
+
+    Raises:
+        HTTPException: 503 with `code="DEPENDENCY_NOT_INITIALIZED"` when
+            `app.state.settings` or `app.state.llm_model` is absent (Req 3.4).
     """
     vector_store = req.app.state.vector_store
 
     # Protect check-then-set with lock to prevent race condition
     with _workflow_cache_lock:
         if vector_store not in _workflow_cache:
-            settings = get_settings()
-            # Pass settings values as cache keys. `settings.llm_base_url` is typed
-            # `HttpUrl | None`, so it is coerced to a plain `str` here rather than
-            # widening `_get_cached_model`'s `str | None` parameter annotation.
-            model = _get_cached_model(
-                llm_model=settings.llm_model,
-                llm_base_url=str(settings.llm_base_url) if settings.llm_base_url else None,
-            )
+            settings = getattr(req.app.state, "settings", None)
+            model = getattr(req.app.state, "llm_model", None)
+            if settings is None or model is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": "Required application dependency is not initialized.",
+                        "code": "DEPENDENCY_NOT_INITIALIZED",
+                    },
+                )
             _workflow_cache[vector_store] = CorrectiveRAGWorkflow(
                 vector_store=vector_store,
                 llm_settings=settings,

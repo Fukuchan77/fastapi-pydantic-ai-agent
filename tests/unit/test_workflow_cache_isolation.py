@@ -6,6 +6,7 @@ Updated for Uses WeakKeyDictionary with vector_store objects as keys.
 
 import pytest
 
+from app.agents.chat_agent import build_model
 from app.config import get_settings
 from app.deps import workflow as wf
 from app.stores.vector_store import InMemoryVectorStore
@@ -33,10 +34,7 @@ def test_workflow_cache_isolation_first():
     # Simulate cache population using a vector_store object as key
     test_store = InMemoryVectorStore()
     settings = get_settings()
-    model = wf._get_cached_model(
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    model = build_model(settings)
     test_workflow = CorrectiveRAGWorkflow(
         vector_store=test_store,
         llm_settings=settings,
@@ -75,10 +73,7 @@ def test_workflow_cache_cleared_between_parametrized_tests(test_id):
     # Add entry for this test using a vector_store object as key
     test_store = InMemoryVectorStore()
     settings = get_settings()
-    model = wf._get_cached_model(
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    model = build_model(settings)
     test_workflow = CorrectiveRAGWorkflow(
         vector_store=test_store,
         llm_settings=settings,

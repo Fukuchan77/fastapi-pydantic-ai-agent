@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from fastapi import Request
 from httpx import ASGITransport
 from httpx import AsyncClient
 from pydantic_ai.messages import ModelResponse
@@ -164,16 +163,11 @@ def clear_settings_cache():
 
 @pytest.fixture(autouse=True)
 def clear_workflow_cache():
-    """Clear workflow cache before and after each test to prevent pollution.
+    """Clear the workflow cache before and after each test to prevent pollution.
 
     The _workflow_cache dict in app/deps/workflow.py is a module-level
     global that persists between tests. Without clearing it, tests can see stale
     entries from previous tests, especially if Python reuses id() values after GC.
-
-    Also clear the _get_cached_model LRU cache to prevent settings
-    pollution. When tests change LLM settings via monkeypatch, the @lru_cache
-    decorator on _get_cached_model() causes the old model to persist, leading
-    to tests inadvertently sharing configuration.
 
     This fixture runs automatically (autouse=True) before and after every test
     to ensure test isolation.
@@ -182,11 +176,9 @@ def clear_workflow_cache():
 
     # Clear before test runs
     wf._workflow_cache.clear()
-    wf._get_cached_model.cache_clear()
     yield
     # Clear after test completes
     wf._workflow_cache.clear()
-    wf._get_cached_model.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -391,9 +383,10 @@ async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     """Provide an async HTTP client for E2E tests.
 
     Builds an isolated app via `create_app(settings=..., model=test_model)` so the
-    chat agent is wired directly with the `FunctionModel`, without needing to
-    monkeypatch environment variables or post-hoc override `app.state.chat_agent`.
-    The RAG workflow dependency is separately overridden to also use `test_model`.
+    chat agent is wired directly with the `FunctionModel`. `app/lifespan.py`
+    publishes that same model on `app.state.llm_model` (Req 3.1), and
+    `get_rag_workflow` now reads it from there (Req 3.3) - no dependency
+    override is needed for RAG to see the injected model either.
 
     Args:
         test_model: FunctionModel fixture for testing.
@@ -401,20 +394,7 @@ async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     Yields:
         AsyncClient configured for testing.
     """
-    from app.deps.workflow import get_rag_workflow
-    from app.workflows.corrective_rag import CorrectiveRAGWorkflow
-
     test_app = create_app(settings=build_test_settings(), model=test_model)
-
-    def get_test_rag_workflow(req: Request) -> CorrectiveRAGWorkflow:
-        """Test version of get_rag_workflow that uses FunctionModel."""
-        return CorrectiveRAGWorkflow(
-            vector_store=req.app.state.vector_store,
-            llm_settings=req.app.state.settings,
-            llm_model=test_model,  # Inject test model here
-        )
-
-    test_app.dependency_overrides[get_rag_workflow] = get_test_rag_workflow
 
     async with (
         test_app.router.lifespan_context(test_app),

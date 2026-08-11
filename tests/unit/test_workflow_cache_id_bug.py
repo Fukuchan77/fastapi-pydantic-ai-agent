@@ -14,6 +14,7 @@ exists in cache. However, WeakKeyDictionary still provides benefits:
 import gc
 import weakref
 
+from app.agents.chat_agent import build_model
 from app.config import get_settings
 from app.deps import workflow as wf
 from app.stores.vector_store import InMemoryVectorStore
@@ -47,10 +48,7 @@ def test_workflow_cache_uses_object_identity():
     store_2 = InMemoryVectorStore()
 
     settings = get_settings()
-    model = wf._get_cached_model(
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    model = build_model(settings)
 
     # Cache workflow for store_1
     workflow_1 = CorrectiveRAGWorkflow(
@@ -99,10 +97,7 @@ def test_workflow_cache_auto_cleanup_on_unreference():
     # Add to cache (but DON'T store the workflow in a variable)
     # This way, the only reference to vector_store will be from the cache key
     settings = get_settings()
-    model = wf._get_cached_model(
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    model = build_model(settings)
     wf._workflow_cache[vector_store] = CorrectiveRAGWorkflow(
         vector_store=vector_store,
         llm_settings=settings,
@@ -149,10 +144,7 @@ def test_no_id_collision_bug():
     WeakKeyDictionary fixes this by using object identity, not id().
     """
     settings = get_settings()
-    model = wf._get_cached_model(
-        llm_model=settings.llm_model,
-        llm_base_url=settings.llm_base_url,
-    )
+    model = build_model(settings)
 
     # Create and cache first vector store
     store_1 = InMemoryVectorStore()

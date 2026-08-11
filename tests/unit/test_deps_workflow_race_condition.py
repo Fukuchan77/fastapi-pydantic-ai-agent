@@ -12,7 +12,9 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 
+from app.agents.chat_agent import build_model
 from app.deps.workflow import get_rag_workflow
+from tests.conftest import build_test_settings
 
 
 class MockVectorStore:
@@ -60,9 +62,15 @@ async def test_mock_vector_store_exposes_real_generation_and_scored_query() -> N
 
 @pytest.fixture
 def mock_app() -> FastAPI:
-    """Create a FastAPI app with a mock vector store."""
+    """Create a FastAPI app with a mock vector store, settings, and llm_model.
+
+    `get_rag_workflow` reads all three from `app.state` (Req 3.3).
+    """
     app = FastAPI()
     app.state.vector_store = MockVectorStore()
+    settings = build_test_settings()
+    app.state.settings = settings
+    app.state.llm_model = build_model(settings)
     return app
 
 
