@@ -1,6 +1,5 @@
 """Rate limiting middleware using slowapi."""
 
-import time
 from collections.abc import Callable
 from collections.abc import Sequence
 
@@ -8,6 +7,7 @@ import limits
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from limits import RateLimitItem
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.wrappers import Limit as SlowApiLimit
@@ -116,15 +116,23 @@ def add_rate_limiting(
     # `exc` is typed `Exception`, not `RateLimitExceeded`, to match
     # `Starlette.add_exception_handler`'s actual signature - it dispatches by
     # the registered exception class below, but the handler type itself is
-    # not generic over it. The body only ever does a defensive `hasattr`
-    # check, so nothing here relies on the narrower type.
-    async def rate_limit_exceeded_handler(
+    # not generic over it.
+    #
+    # Deliberately synchronous (`def`, not `async def`): `SlowAPIMiddleware`
+    # reaches this handler through `sync_check_limits`, which uses
+    # `inspect.iscoroutinefunction` to detect an `async def` handler and
+    # silently swaps it for slowapi's own default handler (which returns
+    # `{"error": ...}`) instead of calling this one - that swap is what let
+    # the global rate limit's 429 escape this project's flat envelope.
+    # Starlette runs a synchronous handler via `run_in_threadpool`, so the
+    # `enforce_llm_rate_limit` dependency's raise site is unaffected. If this
+    # ever needs to become `async def` again, `SlowAPIMiddleware` must be
+    # replaced too, or the same regression recurs silently.
+    def rate_limit_exceeded_handler(
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
         """Handle rate limit exceeded exception with structured error response.
-
-        Adds Retry-After header to improve client UX and reduce retry storms.
 
         Args:
             request: The request that exceeded rate limit
@@ -132,42 +140,32 @@ def add_rate_limiting(
                 the handler's own note on `Starlette.add_exception_handler`)
 
         Returns:
-            JSONResponse: 429 response with ErrorResponse body, rate limit headers,
-                         and Retry-After header indicating seconds until reset
+            JSONResponse: 429 response with the flat `ErrorResponse` body.
+                Header construction (`X-RateLimit-*` and a delay-seconds
+                `Retry-After`) is delegated to `Limiter._inject_headers`,
+                which knows the actual rate-limit window; this handler no
+                longer computes any header itself.
         """
         error_response = ErrorResponse(
             message="Rate limit exceeded. Please try again later.",
             code="RATE_LIMIT_EXCEEDED",
         )
+        response = JSONResponse(status_code=429, content=error_response.model_dump())
 
-        # Get rate limit headers from exception. `isinstance` (not `hasattr`)
-        # both narrows `exc` back to `RateLimitExceeded` for the type checker and
-        # documents that `.headers` (`Mapping[str, str] | None`, inherited from
-        # Starlette's `HTTPException`) is only meaningful on that type.
-        headers: dict[str, str] = {}
-        if isinstance(exc, RateLimitExceeded) and exc.headers:
-            headers = dict(exc.headers)
-
-        # Add Retry-After header (RFC 6585, RFC 7231)
-        # Calculate seconds until rate limit resets based on X-RateLimit-Reset header
-        if "X-RateLimit-Reset" in headers:
-            try:
-                reset_timestamp = int(headers["X-RateLimit-Reset"])
-                current_timestamp = int(time.time())
-                retry_after_seconds = max(1, reset_timestamp - current_timestamp)
-                headers["Retry-After"] = str(retry_after_seconds)
-            except (ValueError, TypeError):
-                # If parsing fails, default to 60 seconds (reasonable for most rate limits)
-                headers["Retry-After"] = "60"
-        else:
-            # Fallback if X-RateLimit-Reset is not available
-            headers["Retry-After"] = "60"
-
-        return JSONResponse(
-            status_code=429,
-            content=error_response.model_dump(),
-            headers=headers,
+        # `view_rate_limit` is set by slowapi itself for both the middleware
+        # and the `@limiter.limit`-decorated path. `enforce_llm_rate_limit`
+        # sets it explicitly too, since it checks the limit directly rather
+        # than through slowapi's own request-limit machinery. The `getattr`
+        # default guards any future raise site that forgets to set it -
+        # `_inject_headers` itself no-ops on a `None` current_limit, so this
+        # keeps such a case a 429 rather than an `AttributeError` -> 500.
+        view_rate_limit: tuple[RateLimitItem, list[str]] | None = getattr(
+            request.state, "view_rate_limit", None
         )
+        # `_inject_headers`'s own type hint omits the `None` it explicitly
+        # handles at runtime, and it returns the same `JSONResponse` object
+        # it was given (typed as the wider `Response` base class).
+        return limiter._inject_headers(response, view_rate_limit)  # type: ignore
 
     # Register exception handler
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
@@ -200,6 +198,13 @@ async def enforce_llm_rate_limit(request: Request) -> None:
     identifier = get_client_identifier(request)
 
     if not limiter.limiter.hit(item, identifier):
+        # Record the window this check hit, the same way slowapi's own
+        # `_check_request_limit` does for the middleware and decorator
+        # paths - this call checks the limit directly instead, so nothing
+        # else sets it. Without this, `rate_limit_exceeded_handler` finds no
+        # `view_rate_limit` and this 429 carries no `Retry-After`/
+        # `X-RateLimit-*` headers at all (Req 1.4, 1.10).
+        request.state.view_rate_limit = (item, [identifier])
         raise RateLimitExceeded(
             SlowApiLimit(item, get_client_identifier, None, False, None, None, None, 1, False)
         )

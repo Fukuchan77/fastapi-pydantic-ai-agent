@@ -4,6 +4,7 @@ Verify that rate limit errors include Retry-After header
 to improve client UX and reduce retry storms.
 """
 
+import limits
 import pytest
 from fastapi import FastAPI
 from fastapi import Request
@@ -11,6 +12,15 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.middleware.rate_limit import add_rate_limiting
+
+
+# The configured window's duration (Req 1.11): once `Limiter._inject_headers`
+# actually runs, `Retry-After` is derived from the real window rather than
+# hardcoded, and its delay-seconds computation can land on the window's
+# duration or one second above it (an off-by-one from the reset-time ->
+# delta-seconds conversion) - so bounds below allow window + 1, not a bare
+# literal.
+_WINDOW_SECONDS = limits.parse("2/minute").get_expiry()
 
 
 @pytest.fixture
@@ -61,7 +71,10 @@ def test_rate_limit_response_includes_retry_after_header(client: TestClient):
     retry_after = response.headers["Retry-After"]
     assert retry_after.isdigit(), "Retry-After should be an integer (seconds)"
     assert int(retry_after) > 0, "Retry-After should be positive"
-    assert int(retry_after) <= 60, "Retry-After should be reasonable (≤60s for 1-minute window)"
+    assert int(retry_after) <= _WINDOW_SECONDS + 1, (
+        f"Retry-After should be within the {_WINDOW_SECONDS}s window (+1 for the "
+        f"reset-time -> delta-seconds off-by-one), got {retry_after}"
+    )
 
 
 def test_retry_after_header_value_is_reasonable(client: TestClient):
@@ -80,9 +93,10 @@ def test_retry_after_header_value_is_reasonable(client: TestClient):
 
     retry_after_seconds = int(response.headers["Retry-After"])
 
-    # Should be within the 1-minute window
-    assert 1 <= retry_after_seconds <= 60, (
-        f"Retry-After should be 1-60 seconds for a 1-minute window, got {retry_after_seconds}"
+    # Should be within the configured window (+1 for the off-by-one noted above)
+    assert 1 <= retry_after_seconds <= _WINDOW_SECONDS + 1, (
+        f"Retry-After should be 1-{_WINDOW_SECONDS + 1} seconds for a "
+        f"{_WINDOW_SECONDS}s window, got {retry_after_seconds}"
     )
 
 
