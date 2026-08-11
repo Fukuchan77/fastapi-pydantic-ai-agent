@@ -29,7 +29,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 Lint/type config lives in `pyproject.toml`: Ruff is strict (`S` bandit, `ANN` annotations, `D` google-style docstrings, `SIM`, `B`), imports are one-per-line (`force-single-line`), line length 100, Python 3.13+. `ty` runs in strict mode (no implicit `Any`). Tests relax `S101`/`ANN`. Coverage gate is `fail_under = 80`. `asyncio_mode = "auto"`, so an unmarked coroutine test cannot pass unawaited. Pytest markers: `docker`, `benchmark`, `ollama`, `chroma`.
 
-`mise run lint`/`format` cover `app/`, `evals/`, and `tests/` — `evals/` is production-linted code, not a scratch directory.
+`mise run lint`/`format` cover `app/`, `evals/`, and `tests/` — `evals/` is production-linted code, not a scratch directory. (`ruff` runs over all three; `ty check` covers `app/` and `evals/` only, so a type error confined to `tests/` will not fail `lint`.)
 
 ### Dependency pins that are load-bearing
 
@@ -37,6 +37,8 @@ Two upper bounds in `pyproject.toml` exist because the *newer* version silently 
 
 - `fastapi<0.137` — 0.137 wraps included routers in `_IncludedRouter` instead of flattening them into `app.routes`; slowapi's `_find_route_handler` scans `app.routes` non-recursively, finds no `.endpoint`, and `_should_exempt` then treats **every** request as exempt. `tests/e2e/test_rate_limiting_enforcement.py` is the canary.
 - `starlette<1.0` — slowapi 0.1.10 is incompatible with starlette 1.x (exception-handler misdispatch, and `SlowAPIMiddleware` stops emitting `X-RateLimit-*`).
+
+A third bound is *wrong in the other direction*: `pydantic-ai-litellm>=0.2.3,<1.0`. It is a 0.x package that reaches into private pydantic-ai APIs, so `<1.0` admits unreviewed 0.3.x–0.9.x releases; the bound should be `<0.3.0`, matching how `fastapi` is handled for 0.x versioning. `tests/unit/test_pydantic_ai_api_lock.py` is what would catch the breakage, not the pin.
 
 That starlette pin is why `mise run audit` carries an `--ignore-vuln` list: each ignored advisory is either mitigated at the app layer (`PYSEC-2026-161`, closed by `TrustedHostMiddleware`) or unreachable here (no `request.form()`, `HTTPEndpoint`, or `StaticFiles`). Re-run `uv run pip-audit` *without* `--ignore-vuln` after any starlette bump before renewing that list. `tests/unit/test_config_dependency_bounds.py` separately requires every production dependency to declare an upper bound at all.
 
@@ -46,6 +48,16 @@ That starlette pin is why `mise run audit` carries an `--ignore-vuln` list: each
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, a pygrep `no-hardcoded-model-id` guard, and an inert `real-tool-conventions-guard` that fires the moment a non-mock `@agent.tool` appears under `app/agents/` (forcing a read of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, enable with `git config core.hooksPath .githooks`): availability-gated — probes `${OLLAMA_BASE_URL}/api/tags`, runs `EXPECT_LIVE_TESTS=5 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
+- **Dependabot** (`.github/dependabot.yml`): weekly `uv` and `github-actions` updates. It has no ecosystem-level ignore rules, so it *can* propose the `fastapi`/`starlette` bumps the pins above deliberately forbid — read the pin comments before accepting one.
+
+## Known active defects
+
+Verified present in the code as of this branch (`003-pydantic-ai-v2-migration`), each specified for repair in `.sdd/specs/003-pydantic-ai-v2-migration/spec.md`. They are listed because each one makes a *documented* guarantee false — don't rediscover them, and don't build on the broken behaviour:
+
+- **The global 429 escapes the flat envelope.** `rate_limit_exceeded_handler` in `app/middleware/rate_limit.py` is `async def`, and `SlowAPIMiddleware` reaches it through `sync_check_limits`, which swaps any coroutine handler for slowapi's own `_rate_limit_exceeded_handler` (`inspect.iscoroutinefunction`). So a globally rate-limited request gets `{"error": "Rate limit exceeded: ..."}` with slowapi-injected `X-RateLimit-*`. Fix is one keyword: `async def` → `def`.
+- **The `Retry-After` computation is unreachable.** `RateLimitExceeded.__init__` only sets `status_code`/`detail`, never `.headers`, so `exc.headers` is always `None` — the handler's `X-RateLimit-Reset` branch never runs and every 429 it *does* emit (the per-route `enforce_llm_rate_limit` path) carries a constant `Retry-After: 60` and no `X-RateLimit-*` at all. Header construction belongs to the limiter (`limiter._inject_headers`), not to this handler.
+- **`_get_cached_model` (`app/deps/workflow.py`) ignores its own arguments.** The body is `get_settings(); build_model(settings)` regardless of the `llm_model`/`llm_base_url` it keys `@lru_cache` on. `get_rag_workflow` compounds it by calling `get_settings()` instead of reading `req.app.state.settings`, so **RAG ignores `create_app(settings=...)` test injection** and rebuilds its own model rather than sharing the startup `FallbackModel` chain. The planned fix deletes `_get_cached_model` and publishes the resolved model as a new `app.state.llm_model` singleton — note that attribute does **not** exist yet.
+- **`InMemorySessionStore` LRU eviction picks its victim from the wrong dict.** `in_memory.py` selects `min(self._last_access.items(), ...)`, but `get_history()` stamps `_last_access` even for a session id that was never saved. A ghost entry can therefore win the vote, and the `lru_session_id in self._store` guard then skips the eviction entirely — so `max_sessions` is a soft limit until the ghost's TTL expires. Victim selection should come from `self._store.keys()`.
 
 ## Architecture
 
@@ -77,7 +89,7 @@ Every error response is the same flat `ErrorResponse` shape (`message` + `code`)
 
 - The global `Exception` handler stays in `main.py` (it also owns background-task logging): a generic `ErrorResponse` that never leaks internals, with full detail logged in a **background task** so logging latency never blocks the response.
 - `app/api/errors.py::register_error_handlers(app)` covers everything raised as an exception. It registers on **`starlette.exceptions.HTTPException`, not `fastapi.HTTPException`** — starlette resolves handlers by walking the raised class's MRO upward, so a registration on the FastAPI subclass would never match the base class the *router* raises for 404/405, and those would fall back to the legacy `{"detail": ...}` body. `_render_detail()` accepts a string, a mapping, or anything else; `_DEFAULT_CODE_BY_STATUS` supplies the `code` when the raise site carries none. Validation failures deliberately drop FastAPI's per-field `detail` list so a response never echoes request content back.
-- 413 and 429 never reach `HTTPException` — they're emitted directly by `RequestSizeLimitMiddleware` and slowapi's handler in `app/middleware/rate_limit.py` (which also computes `Retry-After` from `X-RateLimit-Reset`).
+- 413 and 429 never reach `HTTPException` — they're emitted directly by `RequestSizeLimitMiddleware` and by the 429 handler in `app/middleware/rate_limit.py`. **The 429 is the one hole in the envelope today**, and the two 429 producers do not agree: the global (middleware-enforced) limit does *not* use our handler at all, so its body is slowapi's `{"error": ...}`, while the per-route `enforce_llm_rate_limit` 429 does use it and is flat. See Known active defects below before writing anything that parses a 429.
 
 ### Security headers: HSTS and CSP
 
@@ -169,6 +181,8 @@ The rate-limit key is `get_client_identifier()`, which trusts `X-Forwarded-For` 
 
 `configure_logfire()` (`app/observability.py`) scrubs `prompt`/`tool_input`/`tool_output` by default; `log_sensitive_payloads=True` disables scrubbing and emits an `AUDIT:` warning. Any init failure is caught and logged — observability never blocks startup. Pydantic AI is instrumented even without a token (local dev traces).
 
+Stdlib logging is separate and configured first: `configure_logging()` (`app/logging_config.py`, called at the top of `_startup` before anything else logs) installs a single stdout handler with a `JSONFormatter` (one JSON object per line: `timestamp`, `level`, `logger`, `message`, `request_id`, plus `exc_info` when present) and a `RequestIDFilter` that reads `app.middleware.request_id.request_id_var`. That filter is why no call site inserts a request id by hand — log with a plain `logging.getLogger(__name__)` and correlation comes for free. It is idempotent by an "already has handlers" check on the root logger, which also means **a test or harness that configures logging first silently wins**. Level is `DEBUG` in development, `INFO` in staging/production.
+
 ### Health
 
 `/health` is liveness (`{"status": "ok"}`). `/health/ready` runs concurrent live probes of the session store (Redis only), vector store (Ollama only), and LLM provider (a `max_tokens=1` request), returning 200 `ready` or 503 `not_ready` with a per-dependency `checks` map. Backends with no external dependency report `"skipped"`, not `"healthy"`.
@@ -204,5 +218,6 @@ Several unit tests enforce project rules and will fail on structural drift. Unde
 - **File-size policy** (`.sdd/steering/file-size-policy.md`): <500 lines OK, 500–999 review for splitting, ≥1000 prohibited. Reference splits: `app/config/` (mixin per domain), `app/workflows/` (mixin per concern), `app/stores/*/` (protocol + one file per backend).
 - **No `os.environ` reads outside `Settings`** (Constitution Principle 4). Every env var is declared on a `Settings` mixin and reached via `get_settings()` or `app.state.settings`; there are currently zero direct reads in `app/`, and settings validation is what turns misconfiguration into a startup error.
 - **Docstrings**: Google style, required on all public symbols. Requirement IDs (`Req 4.6`) in docstrings trace back to `.sdd/specs/<feature>/spec.md`.
-- **SDD workflow**: specs, reviews, steering, and constitution live under `.sdd/`. Active feature specs in `.sdd/specs/<feature>/`; the 7 core principles are in `.sdd/memory/constitution.md`. The constitution predates two refactors and still says `app/config.py` and "lifespan of `app/main.py`" — those are now the `app/config/` package and `app/lifespan.py`; the principles hold, the paths don't.
+- **SDD workflow**: specs, reviews, steering, and constitution live under `.sdd/`. Active feature specs in `.sdd/specs/<feature>/`; the 8 core principles are in `.sdd/memory/constitution.md` (v1.1.0 — paths there match the current tree, and Governance requires a refactor to update any path it moves in the same change). Two smaller directories are retrospective, not planning: `.sdd/mistakes/` (per-feature post-mortems) and `.sdd/patterns/` (techniques worth reusing) — append to them rather than re-deriving a lesson already recorded.
+- **The current feature (`003-pydantic-ai-v2-migration`) is specified but unimplemented** — `spec.json` is at phase `tasks-generated` with all three approvals, and all 90 tasks in `tasks.md` are open. Its tasks are boundary-scoped (`_Boundary:_` lists the only files a task may touch) and several of them own edits to *this file*, so check `tasks.md` before making an architectural change here: the change may already be assigned, sequenced, and required to ship behind a failing test.
 - **Design docs** worth reading before related work: `docs/tool-design-conventions.md` (before adding a real agent tool), `docs/owasp-agentic-llm-mapping.md`, `docs/production_deployment.md`.
