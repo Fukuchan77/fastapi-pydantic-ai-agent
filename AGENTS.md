@@ -106,6 +106,8 @@ These fail on structural drift — understand what they assert before bypassing:
 
 `pydantic-ai-litellm` is pinned `<1.0` in `pyproject.toml` — that pin **should be `<0.3.0`** (it's a 0.x package and depends on six private pydantic-ai APIs; `<1.0` admits 0.3.x–0.9.x unreviewed). The correct bound mirrors how `fastapi` is handled for 0.x versioning.
 
+A private-API coupling, not a version bound: the rate-limit-exceeded handler (`app/middleware/rate_limit.py`) delegates 429 header construction (`X-RateLimit-*`, delay-seconds `Retry-After`) to slowapi's `Limiter._inject_headers` — a leading-underscore method with no compatibility guarantee. A slowapi upgrade needs re-verification against `tests/unit/test_middleware_rate_limit_global_envelope.py`.
+
 ## CI Gating
 
 - **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
@@ -115,8 +117,6 @@ These fail on structural drift — understand what they assert before bypassing:
 
 ## Known Active Bugs (tracked in `.sdd/specs/003-pydantic-ai-v2-migration/spec.md`)
 
-- **`rate_limit_exceeded_handler` in `app/middleware/rate_limit.py` is `async def`** — slowapi's `SlowAPIMiddleware` uses `inspect.iscoroutinefunction` to detect async handlers and falls back to its default handler when it finds one, so the global rate limit 429 currently returns `{"error": ...}` instead of the flat `{message, code}` envelope. **Fix: change to `def`.**
-- **The `Retry-After` computation in the same handler is unreachable** — `RateLimitExceeded.__init__` never sets `.headers`, so `exc.headers` is always `None`, the `X-RateLimit-Reset` branch never runs, and every 429 the handler *does* emit carries a constant `Retry-After: 60` and no `X-RateLimit-*`. **Fix: delegate headers to `limiter._inject_headers`.**
 - **`_get_cached_model` in `app/deps/workflow.py` ignores its parameters** — body calls `get_settings(); build_model(settings)` regardless of the `llm_model`/`llm_base_url` arguments, so `@lru_cache` keys on values that never affect the result. Also, `get_rag_workflow` calls `get_settings()` directly instead of `req.app.state.settings`, so RAG ignores `create_app(settings=...)` test injection. **Fix (A-3+A-4): delete `_get_cached_model`; read settings and model from `app.state`.**
 - **`InMemorySessionStore` LRU eviction selects from `_last_access` not `_store.keys()`** — ghost entries created by `get_history()` on a never-saved session ID poison the LRU victim pool, making `max_sessions` ineffective until the ghost's TTL expires. **Fix (A-2): change `min` target to `self._store.keys()`.**
 
