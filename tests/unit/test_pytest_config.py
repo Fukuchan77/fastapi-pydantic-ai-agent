@@ -47,3 +47,24 @@ def test_asyncio_default_fixture_loop_scope_is_function() -> None:
         "pyproject.toml's [tool.pytest.ini_options] must set "
         'asyncio_default_fixture_loop_scope = "function" (Req 13.1/13.2).'
     )
+
+
+def test_filterwarnings_declares_error_on_deprecation_warning() -> None:
+    """Verify [tool.pytest.ini_options] declares the deprecation-warning filter.
+
+    Req 7.2: without `error::DeprecationWarning`, a `pydantic_ai` deprecation
+    warning collects as a passing test instead of failing the session. The
+    filter is demonstrated (not merely declared) by
+    tests/unit/test_deprecation_filter.py; this guard only pins that the key
+    cannot be silently dropped from configuration.
+    """
+    pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
+    with pyproject_path.open("rb") as f:
+        pyproject = tomllib.load(f)
+
+    ini_options = pyproject["tool"]["pytest"]["ini_options"]
+
+    assert "error::DeprecationWarning" in ini_options["filterwarnings"], (
+        "pyproject.toml's [tool.pytest.ini_options] must declare "
+        '"error::DeprecationWarning" in filterwarnings (Req 7.2).'
+    )
