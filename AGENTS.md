@@ -15,6 +15,7 @@ mise run test:e2e            # full HTTP stack (AsyncClient)
 mise run test:ci             # what PR CI runs: unit+integration+e2e + coverage gate
 mise run test:benchmark      # latency/throughput/cache-hit benchmarks (-s)
 mise run test:local          # requires a running Ollama instance (-m ollama)
+mise run test:redis          # requires a reachable Redis server (-m redis)
 mise run evals               # offline LLM-judge golden set; makes REAL LLM calls (pre-push only)
 mise run lint                # ruff check + ty check (type checker is `ty`, NOT mypy)
 mise run format              # ruff format
@@ -88,7 +89,8 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **`build_test_settings(**overrides)`** helper in `conftest.py` constructs isolated `Settings` without relying on env vars
 - **`asyncio_mode = "auto"`**: all coroutine tests are collected and awaited automatically — no `@pytest.mark.asyncio` needed
 - **`EXPECT_LIVE_TESTS=N`** env var: session fails if the actual executed test count ≠ N — used to guard gated test lanes from silent skips
-- **`chroma` marker**: opt-in (`RUN_CHROMA_INTEGRATION_TESTS` env var); downloads a Hugging Face embedding model — do not run routinely
+- **`chroma` marker**: opt-in (`RUN_CHROMA_INTEGRATION_TESTS` env var); downloads a Hugging Face embedding model — do not run routinely: `RUN_CHROMA_INTEGRATION_TESTS=1 EXPECT_LIVE_TESTS=6 uv run pytest tests/integration/test_chroma_query_with_scores.py` (`6` = `tests/support/chroma.py::CHROMA_LIVE_TEST_COUNT`)
+- **`redis` marker**: gated on live reachability, not an opt-in var — `tests/support/redis.py::redis_reachable()` probes a real server and the lane skips (never fails) when none answers: `EXPECT_LIVE_TESTS=5 mise run test:redis` (`5` = `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`)
 - Tests for cloud-provider API key validation must `monkeypatch.delenv("LLM_API_KEY")` explicitly (the autouse fixture sets it by default)
 
 ### Repo-guard tests (assert on project structure, not app behavior)
@@ -100,7 +102,7 @@ These fail on structural drift — understand what they assert before bypassing:
 - `test_ci_workflows.py` — every `uses:` in GitHub Actions YAML must be pinned to a 40-char SHA
 - `test_pydantic_ai_api_lock.py` — subset-only lock on the pydantic-ai symbols/params/fields/kinds this project uses (no `app/` imports), so a dependency upgrade fails here by name. Add newly relied-upon symbols to its tables.
 - `test_config_dependency_bounds.py` — every production dependency must declare an upper bound
-- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, plus the `chroma`/`local`/`docker` gating guards
+- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, plus the `chroma`/`local`/`docker`/`redis` gating guards
 
 ## Dependency Pins That Are Load-Bearing
 
@@ -112,7 +114,7 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 
 ## CI Gating
 
-- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
+- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `test:redis` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). The `redis`-marked lane does run here — CI starts a `redis:7-alpine` service container and sets `EXPECT_LIVE_TESTS=5` so a broken container fails the run instead of passing as a silent zero-collected green. `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, `no-hardcoded-model-id` pygrep, `real-tool-conventions-guard` (fires on any non-mock `@agent.tool` under `app/agents/`, forcing review of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, opt-in via `git config core.hooksPath .githooks`): probes Ollama, runs `EXPECT_LIVE_TESTS=5 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.

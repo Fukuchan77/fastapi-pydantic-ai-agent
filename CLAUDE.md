@@ -27,7 +27,7 @@ mise run build               # docker build
 
 Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_name -v`
 
-Lint/type config lives in `pyproject.toml`: Ruff is strict (`S` bandit, `ANN` annotations, `D` google-style docstrings, `SIM`, `B`), imports are one-per-line (`force-single-line`), line length 100, Python 3.13+. `ty` runs in strict mode (no implicit `Any`). Tests relax `S101`/`ANN`. Coverage gate is `fail_under = 80`. `asyncio_mode = "auto"`, so an unmarked coroutine test cannot pass unawaited. Pytest markers: `docker`, `benchmark`, `ollama`, `chroma`.
+Lint/type config lives in `pyproject.toml`: Ruff is strict (`S` bandit, `ANN` annotations, `D` google-style docstrings, `SIM`, `B`), imports are one-per-line (`force-single-line`), line length 100, Python 3.13+. `ty` runs in strict mode (no implicit `Any`). Tests relax `S101`/`ANN`. Coverage gate is `fail_under = 80`. `asyncio_mode = "auto"`, so an unmarked coroutine test cannot pass unawaited. Pytest markers: `docker`, `benchmark`, `ollama`, `chroma`, `redis`.
 
 `mise run lint`/`format` cover `app/`, `evals/`, and `tests/` — `evals/` is production-linted code, not a scratch directory. (`ruff` runs over all three; `ty check` covers `app/` and `evals/` only, so a type error confined to `tests/` will not fail `lint`.)
 
@@ -46,7 +46,7 @@ A fourth coupling is not a version bound but a private-API dependency: `rate_lim
 
 ### Gating: what runs where
 
-- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
+- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `test:redis` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). The `redis`-marked lane does run here — CI starts a `redis:7-alpine` service container and the step sets `EXPECT_LIVE_TESTS=5` so a broken container fails the run instead of passing as a silent zero-collected green. `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, a pygrep `no-hardcoded-model-id` guard, and an inert `real-tool-conventions-guard` that fires the moment a non-mock `@agent.tool` appears under `app/agents/` (forcing a read of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, enable with `git config core.hooksPath .githooks`): availability-gated — probes `${OLLAMA_BASE_URL}/api/tags`, runs `EXPECT_LIVE_TESTS=5 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
@@ -199,7 +199,8 @@ Layers mirror the `mise` tasks: `tests/unit/` (hermetic), `tests/integration/` (
 - **`build_test_settings(**overrides)`** in `conftest.py` builds an isolated `Settings` by passing explicit field values, bypassing env/`.env` lookups.
 - **Autouse isolation fixtures**: `clear_settings_cache` (`get_settings.cache_clear()`), `clear_workflow_cache` (`_workflow_cache`), `test_env` (minimal valid env vars). Tests verifying cloud-provider key validation must `monkeypatch.delenv("LLM_API_KEY")` explicitly, since `test_env` sets it.
 - **`EXPECT_LIVE_TESTS=N`** fails the session when the count of tests that actually reached phase `call` ≠ N — an anti-false-green guard for gated lanes that could otherwise silently skip everything.
-- **Opt-in lanes are env-gated, and their expected counts are asserted.** The `chroma` marker needs `RUN_CHROMA_INTEGRATION_TESTS` (it downloads a Hugging Face embedding model, so don't run it routinely); `tests/support/chroma.py::CHROMA_LIVE_TEST_COUNT` is the number to pass as `EXPECT_LIVE_TESTS`, and a guard test fails when that constant drifts from the gated module. `tests/local/` and the Docker tests work the same way (`tests/support/ollama.py`, `tests/support/docker.py`).
+- **Opt-in lanes are env-gated, and their expected counts are asserted.** The `chroma` marker needs `RUN_CHROMA_INTEGRATION_TESTS` (it downloads a Hugging Face embedding model, so don't run it routinely): `RUN_CHROMA_INTEGRATION_TESTS=1 EXPECT_LIVE_TESTS=6 uv run pytest tests/integration/test_chroma_query_with_scores.py`, where `6` is `tests/support/chroma.py::CHROMA_LIVE_TEST_COUNT`; a guard test (`test_chroma_test_gating.py`) fails when that constant drifts from the gated module. `tests/local/` and the Docker tests work the same way (`tests/support/ollama.py`, `tests/support/docker.py`).
+- **The `redis` marker gates on live reachability, not an opt-in env var** — it needs a real Redis server rather than a one-time download, so `tests/support/redis.py::redis_reachable()` probes it directly and the lane skips (never fails) when nothing answers: `EXPECT_LIVE_TESTS=5 mise run test:redis` (equivalently `uv run pytest -m redis -v`), where `5` is `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`. `test_redis_test_gating.py` fails when that constant drifts from either the gated module's test count or the `EXPECT_LIVE_TESTS` literal in the PR CI step of `.github/workflows/pr.yml`.
 
 ### Repo guards (tests that assert on the repo, not the app)
 
@@ -210,7 +211,7 @@ Several unit tests enforce project rules and will fail on structural drift. Unde
 - `test_ci_workflows.py` — parses the workflow YAML; every `uses:` must be pinned to a full 40-char SHA.
 - `test_pydantic_ai_api_lock.py` — locks the pydantic-ai / `pydantic-ai-litellm` surface this project uses (symbols, parameter names, dataclass fields, and *kinds* like `property`/`staticmethod`/`cached_property`), with **no `app/` imports**, so a dependency upgrade fails here naming the symbol instead of surfacing as an opaque app-test failure. Every assertion is subset-only — upstream *additions* must stay green — and `TestAntiFalseGreen` guards against the tables being silently emptied. When you start relying on a new pydantic-ai symbol, add it here.
 - `test_config_dependency_bounds.py` — every production dependency must declare an upper bound.
-- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, and the gating guards (`test_chroma_test_gating.py`, `test_local_test_gating.py`, `test_docker_deployment_gating.py`).
+- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, and the gating guards (`test_chroma_test_gating.py`, `test_local_test_gating.py`, `test_docker_deployment_gating.py`, `test_redis_test_gating.py`).
 
 ## Conventions
 
