@@ -118,10 +118,13 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, `no-hardcoded-model-id` pygrep, `real-tool-conventions-guard` (fires on any non-mock `@agent.tool` under `app/agents/`, forcing review of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, opt-in via `git config core.hooksPath .githooks`): probes Ollama, runs `EXPECT_LIVE_TESTS=5 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
+- **Dependabot** (`.github/dependabot.yml`): weekly `uv` + `github-actions`, minors/patches grouped. Its `ignore:` list blocks the forbidden bumps — `starlette` majors and `fastapi` **minors and majors** (Dependabot reads fastapi's 0.x releases by patch position, so `0.136 → 0.137` is a minor) — plus `chromadb`/`redis` majors, shelved pending a client-compatibility pass. Guarded by `tests/unit/test_dependabot_config.py`; `docs/dependency-runbook.md` is the accept/shelve process.
 
-## Known Active Bugs (tracked in `.sdd/specs/003-pydantic-ai-v2-migration/spec.md`)
+## Feature Status (`004-pydantic-ai-v2-unblock` active; `003-pydantic-ai-v2-migration` sealed, both tracked under `.sdd/specs/`)
 
-- **`InMemorySessionStore` LRU eviction selects from `_last_access` not `_store.keys()`** — ghost entries created by `get_history()` on a never-saved session ID poison the LRU victim pool, making `max_sessions` ineffective until the ghost's TTL expires. **Fix (A-2): change `min` target to `self._store.keys()`.**
+- No known active bugs. The `InMemorySessionStore` LRU-victim defect previously listed here is fixed — victim selection now comes from `self._store.keys()` (`app/stores/session_store/in_memory.py`, which carries the comment explaining why).
+- `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED** (evidence: `docs/adapter-probe-report.md`), so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` is now the single active spec and re-executes that gate under its own Requirement 4 before re-attempting the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
+- `pydantic-ai-slim` stays pinned to the 1.x line (`>=1.99.0,<2.0` in `pyproject.toml`) until `004`'s gate is recorded as passed; only `004`'s task 7 retires this pin.
 
 ## Adding a New Real Agent Tool
 
