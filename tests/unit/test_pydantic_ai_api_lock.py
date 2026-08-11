@@ -235,9 +235,7 @@ class TestKindAssertions:
             "Model.profile is no longer a functools.cached_property"
         )
 
-    @pytest.mark.parametrize(
-        "name", ["is_model_request_node", "is_call_tools_node", "is_end_node"]
-    )
+    @pytest.mark.parametrize("name", ["is_model_request_node", "is_call_tools_node", "is_end_node"])
     def test_agent_node_predicates_are_staticmethods_returning_typeis(self, name: str) -> None:
         """`_stream.py` narrows graph nodes via these; a `TypeIs` return keeps narrowing."""
         raw = inspect.getattr_static(Agent, name)
@@ -295,9 +293,7 @@ class TestAntiFalseGreen:
     ) -> None:
         """A dropped table or entry would make Layer A's subset check pass on nothing."""
         assert _EXPECTED_SYMBOLS, "_EXPECTED_SYMBOLS must not be empty"
-        empty_modules = [
-            module for module, symbols in _EXPECTED_SYMBOLS.items() if not symbols
-        ]
+        empty_modules = [module for module, symbols in _EXPECTED_SYMBOLS.items() if not symbols]
         assert not empty_modules, f"module(s) with an empty symbol set: {empty_modules}"
 
     def test_every_expected_symbols_module_is_still_importable(self) -> None:

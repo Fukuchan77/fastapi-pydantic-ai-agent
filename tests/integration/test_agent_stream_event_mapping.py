@@ -200,9 +200,7 @@ class TestSessionSaveBeforeCompleted:
         """A save_history() failure yields a terminal Error, never a Completed event."""
 
         class _FailingSessionStore(InMemorySessionStore):
-            async def save_history(
-                self, session_id: str, messages: Sequence[ModelMessage]
-            ) -> None:
+            async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
                 raise RuntimeError("simulated session store backend failure")
 
         agent: Agent[AgentDeps, str] = Agent(
@@ -330,8 +328,7 @@ class TestUsageLimitEnforcement:
             agent, chat_request, deps, history=[], settings=settings, usage=usage
         )
         wires = [
-            w
-            async for w in _run_with_lifecycle_guards(_FakeRequest(), agen, settings, usage=usage)
+            w async for w in _run_with_lifecycle_guards(_FakeRequest(), agen, settings, usage=usage)
         ]
 
         parsed = parse_sse_events("".join(wires))

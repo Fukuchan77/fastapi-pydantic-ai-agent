@@ -206,9 +206,7 @@ class TestVectorStoreConformance:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("make_store", ALL_STORE_FACTORIES)
-    async def test_query_with_scores_returns_empty_list_on_empty_corpus(
-        self, make_store
-    ) -> None:
+    async def test_query_with_scores_returns_empty_list_on_empty_corpus(self, make_store) -> None:
         """The scored-query method returns [] on a fresh store, identically across implementors."""
         store = make_store()
         results = await store.query_with_scores("anything", top_k=5)

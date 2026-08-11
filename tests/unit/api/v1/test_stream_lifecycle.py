@@ -195,10 +195,7 @@ class TestUsageLimitExceededDetail:
         usage = RunUsage(requests=3, tool_calls=1, input_tokens=40, output_tokens=10)
 
         wires = [
-            w
-            async for w in _run_with_lifecycle_guards(
-                _FakeRequest(), agen, settings, usage=usage
-            )
+            w async for w in _run_with_lifecycle_guards(_FakeRequest(), agen, settings, usage=usage)
         ]
 
         parsed = parse_sse_events("".join(wires))

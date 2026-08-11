@@ -49,9 +49,7 @@ def test_get_rag_workflow_reads_settings_and_model_from_app_state() -> None:
     from app.deps.workflow import get_rag_workflow
     from app.stores.vector_store import InMemoryVectorStore
 
-    distinguishable_settings = build_test_settings(
-        cors_origins=["https://distinguishable.example"]
-    )
+    distinguishable_settings = build_test_settings(cors_origins=["https://distinguishable.example"])
     distinguishable_model = TestModel()
 
     app = FastAPI()

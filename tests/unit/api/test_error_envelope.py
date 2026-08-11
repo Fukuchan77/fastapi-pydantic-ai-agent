@@ -291,9 +291,7 @@ def test_router_raised_method_not_allowed_renders_flat_body_and_keeps_allow_head
     ErrorResponse.model_validate(body)
 
 
-def test_every_reachable_status_validates_against_the_flat_model_with_no_legacy_nesting() -> (
-    None
-):
+def test_every_reachable_status_validates_against_the_flat_model_with_no_legacy_nesting() -> None:
     """8.7: every reachable status validates against `ErrorResponse`, never nested.
 
     Re-drives 8.7's eight statuses - 401, 403, 413, 422, 429, 500, 502, 504 -

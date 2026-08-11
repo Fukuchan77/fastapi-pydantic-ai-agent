@@ -249,9 +249,7 @@ class InMemoryVectorStore:
             # character limit is more restrictive than the token limit, but
             # this validation guards against future tokenization changes.
             if len(query_tokens) > self.MAX_QUERY_TOKENS:
-                raise ValueError(
-                    f"Query has too many tokens (max {self.MAX_QUERY_TOKENS} tokens)"
-                )
+                raise ValueError(f"Query has too many tokens (max {self.MAX_QUERY_TOKENS} tokens)")
 
             if not query_tokens:
                 return []
