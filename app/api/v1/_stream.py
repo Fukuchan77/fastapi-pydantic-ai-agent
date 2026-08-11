@@ -156,12 +156,7 @@ async def _agent_event_stream(
             async for node in agent_run:
                 if Agent.is_model_request_node(node):
                     yield StepStarted()
-                    # pydantic-ai's graph node typing wraps the run's deps in a
-                    # `Top[...]` marker that `node.stream()` doesn't accept back;
-                    # this is pydantic-ai's own generic variance, inherent to
-                    # driving `Agent.iter()` directly rather than something this
-                    # call site can restructure.
-                    async with node.stream(agent_run.ctx) as request_stream:  # ty: ignore[invalid-argument-type]
+                    async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
                             if is_native_output:
                                 # The streamed text is the raw JSON envelope, not
@@ -180,9 +175,7 @@ async def _agent_event_stream(
                             ):
                                 yield Token(content=event.delta.content_delta)
                 elif Agent.is_call_tools_node(node):
-                    # Same pydantic-ai `Top[...]` variance as the model-request
-                    # branch above.
-                    async with node.stream(agent_run.ctx) as handle_stream:  # ty: ignore[invalid-argument-type]
+                    async with node.stream(agent_run.ctx) as handle_stream:
                         async for event in handle_stream:
                             if isinstance(event, FunctionToolCallEvent):
                                 yield ToolCalled(
