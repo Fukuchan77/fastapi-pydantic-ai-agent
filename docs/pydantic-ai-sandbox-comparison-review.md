@@ -19,6 +19,7 @@
 - [7. 追補: 001-agent-architecture-enhancements ブランチとの照合](#7-追補-001-agent-architecture-enhancements-ブランチとの照合)
 - [8. 追補2: 検証記録と移行準備(002-review-roadmap-remediation)](#8-追補2-検証記録と移行準備002-review-roadmap-remediation)
 - [9. 追補3: §8.3.1–8.3.2 のアダプタ対象バージョン記述の訂正(003-pydantic-ai-v2-migration)](#9-追補3-831832-のアダプタ対象バージョン記述の訂正003-pydantic-ai-v2-migration)
+- [11. 追補5: アダプタ互換性ゲート(Requirement 8)の実行結果(003-pydantic-ai-v2-migration unit 9)](#11-追補5-アダプタ互換性ゲートrequirement-8の実行結果003-pydantic-ai-v2-migration-unit-9)
 
 ---
 
@@ -806,3 +807,47 @@ finding 2 が記録した修正(呼び出し側で `settings.llm_base_url` を `
 [app/deps/workflow.py](../app/deps/workflow.py) `get_rag_workflow`。テスト:
 `tests/unit/deps/test_workflow.py`、`tests/integration/test_rag_fallback_model.py`、
 `tests/integration/test_shared_chain_concurrency.py`。
+
+---
+
+## 11. 追補5: アダプタ互換性ゲート(Requirement 8)の実行結果(003-pydantic-ai-v2-migration unit 9)
+
+追補日: 2026-08-11。本章は `003-pydantic-ai-v2-migration` unit 9 が §9 の訂正で指摘した
+「アダプタは2.x系に対して一度も解決・ロック・CIテストされたことがない」という未検証状態を、
+実際にゲート(Requirement 8)を実行することで解消した結果を記録する追補である。§7・§8・§9・
+§10 追補と同じ方針で、レポート本体を書き換えず追記する(ADR-7)。
+
+**ゲートは実行され、結果は FAILED と記録された。** 完全な証跡(隔離機構、解決済みバージョン
+一式、6ステージそれぞれの実行結果、失敗の分類、判定根拠)は
+[`docs/adapter-probe-report.md`](adapter-probe-report.md) に記録されている
+——`.gitignore` が `.sdd/` ツリー全体を除外するため、このレポート自身が `docs/` に置かれている
+のと同じ理由で、`.sdd/specs/003-pydantic-ai-v2-migration/spec.md` だけでなく本ドキュメントにも
+参照を残す(Requirement 8.6 が要求する「追跡対象ファイルからの参照」)。
+
+要点のみここに記す:
+
+- 予測されていた2件の失敗(`ModelProfile` が dataclass から `TypedDict` になったことに起因する
+  ロックテストのカナリアアサーション、および `app/llm/factory.py:91`
+  `target.profile.supports_json_schema_output` の属性アクセス)は、予測どおりに発生した——
+  後者は `build_chat_agent()` から無条件に呼ばれるため、6ステージ全体で111件のテスト失敗/
+  エラーに波及した。
+- しかし、予測されていなかった**3件目の失敗系列**が見つかった:
+  `tests/unit/agents/test_usage_limit_templates.py` の7件——pydantic-ai 2.27.1 が
+  `UsageLimitExceeded` のメッセージ末尾に案内文を追記するようになったため、厳密一致
+  (`==`)でテンプレート文字列をピン止めしていたテストが壊れる。実際の分類ロジック
+  (`app/agents/guardrails.py::classify_usage_limit_exceeded`)は部分一致
+  (`in`)判定のみを行うため本番動作への影響はないが、Requirement 8.5 の「3件目の失敗が
+  発生した場合はゲートを failed と記録する」という機械的な規則には重大度の閾値がなく、
+  この3件目をもって **ゲートは failed と記録された**。
+- Requirement 8.8 により、Requirement 9・10・11 は unmet と記録され、代替策
+  (アダプタへのパッチ適用・ベンダリング・LiteLLM ルーティングを pydantic-ai
+  ネイティブの OpenAI 互換ルートへ置き換える)の検討は本 spec の範囲外の別 spec に
+  委ねられる。
+- 補足調査(採点対象のゲート実行には含まれない、使い捨てワークツリー内限定の一時的な
+  コード変更による): `app/llm/factory.py:91` の1行修正(task 10.2 が予定している修正と
+  同一)を適用した状態では、Ollama 実機を用いたローカルレーン(5件)が全件成功し、
+  `pydantic-ai-litellm` アダプタの実際のリクエスト/ツールコール/セッション経路が
+  pydantic-ai-slim 2.27.1 下でも機能することを実証した。この事実は §9 が記録した
+  「アダプタは2.x系に対して一度も解決・ロック・CIテストされたことがない」という
+  訂正結論を補完する——上流の解決/ロック/CIは依然として存在しないが、少なくともこの
+  1点(実行時の互換性)については、本ゲートの補足調査により実証的な裏付けが得られた。
