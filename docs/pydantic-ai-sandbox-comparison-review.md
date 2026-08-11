@@ -749,3 +749,60 @@ v2 系そのものを対象に出ている」という前提も、CHANGELOG が�
 Out of Scope 節が明記する通り、別 spec で実行・記録される Requirement 8 のアダプタ互換性ゲート
 (unit 9、`docs/adapter-probe-report.md`)の結果を待つ必要があり、ロック canary の green はこの
 ゲートの代替にならない。
+
+## 10. 追補4: `_get_cached_model` を「解消済み」と記録した5箇所の訂正(003-pydantic-ai-v2-migration unit 5)
+
+追補日: 2026-08-11。本章は `003-pydantic-ai-v2-migration` の unit 5 が `_get_cached_model`
+(`app/deps/workflow.py`)を完全に削除したことを踏まえ、本レポートが同関数を「解消済み」として
+記録していた5箇所を訂正する追補である。§7・§8・§9 追補と同じ方針で、レポート本体を書き換えず
+追記する(ADR-7)。`_get_cached_model` は現在のコードに存在せず、以下いずれの参照も
+`app/deps/workflow.py` の現在の行番号とは対応しない。
+
+### 10.1 §3 M-9 見出しの訂正(本ファイル §3, `_get_cached_model` が自身の引数を無視する)
+
+M-9 が記録した defect(`llm_model`/`llm_base_url` 引数が `lru_cache` のキーとしてのみ機能し、
+本体は `get_settings()` を呼び直す)は記述当時は正確であった。unit 5 はこの関数を「引数を
+実際に使う」方向ではなく **削除する** 方向で解消した: `get_rag_workflow` は現在
+`req.app.state.settings` と `req.app.state.llm_model` を直接読み、モデルを再構築しない
+(実装: [workflow.py](../app/deps/workflow.py) `get_rag_workflow`)。M-9 が提案していた
+「引数を実際に使うか、キー引数をやめて設定ハッシュをキーにする」という2つの選択肢は
+いずれも採用されていない — キャッシュそのものが不要だったため。
+
+### 10.2 §7.3 マトリクスの訂正(「M-9 `_get_cached_model` が引数無視 | ✅ 解消」)
+
+この行は誤りである。「引数が実際のキャッシュキー兼構築入力に」という根拠は、`_get_cached_model`
+の**シグネチャ**が無引数から `(llm_model, llm_base_url)` を受け取る形に変わったことのみを
+指しており、**本体**が実際にそれらを使って `Model` を構築するようになったわけではなかった
+(本体は変更後も `get_settings(); build_model(settings)` のままで、受け取った引数はどちらも
+使われていない)。このマトリクス行が記録された時点で M-9 は未解消であり、その事実は §8.1 が
+「`_get_cached_model` の残存課題(M-9)」として同じレポート内で明記している(10.3 参照)。
+`_get_cached_model` 自体が削除された unit 5 の完了をもって、ようやく真に解消したと記録する。
+
+### 10.3 §8.1 冒頭の記述(「`_get_cached_model` の残存課題(M-9)」)は訂正不要
+
+この一文は §7.3 の「✅ 解消」判定とは逆に、M-9 が実際には未解消の残課題であることを正しく
+記録していた。10.2 の訂正はこの記述と整合する。unit 5 の完了により、この「残存課題」は
+解消された(`_get_cached_model` の削除、`app.state.llm_model` の導入)。
+
+### 10.4 §8.2.1 finding 2 のパーマリンク失効(`_get_cached_model` の `HttpUrl` 残存課題)
+
+finding 2 が記録した修正(呼び出し側で `settings.llm_base_url` を `str` に変換して
+`_get_cached_model` に渡す)は、この finding が対応していた狭い範囲(型注釈の不一致)では
+当時正確であった。しかし unit 5 は `_get_cached_model` とその呼び出し側自体を削除したため、
+この finding が参照する [workflow.py:88-91](../app/deps/workflow.py#L88-L91) という行番号は
+現在のファイルの内容と対応しない — この finding が固定していたテスト
+`tests/unit/deps/test_workflow.py::test_get_rag_workflow_passes_llm_base_url_as_str` も、
+検証対象のコードパスが消滅したため unit 5 で削除された。`app.state.llm_model` は
+`app/lifespan.py` が起動時に一度だけ構築するため、`llm_base_url` の型変換は
+`app/agents/chat_agent.py::build_model` 側の既存の扱いに一本化され、この finding が
+対応していた呼び出し側の変換コード自体が存在しなくなった。
+
+### 10.5 §8.2.3 トレーサビリティ表の訂正(「M-9 `_get_cached_model` の `HttpUrl` 残存課題」)
+
+10.4 と同じ理由により、この表の行が指す実装(finding 2 の変換コード)は unit 5 で消滅した。
+`_get_cached_model` の削除と `app.state.llm_model` の導入により、M-9 は(10.2 が訂正する
+「✅ 解消」判定ではなく)ここで初めて真に解消されたと記録する。実装:
+[app/lifespan.py](../app/lifespan.py) `_startup`(`app.state.llm_model` の代入)、
+[app/deps/workflow.py](../app/deps/workflow.py) `get_rag_workflow`。テスト:
+`tests/unit/deps/test_workflow.py`、`tests/integration/test_rag_fallback_model.py`、
+`tests/integration/test_shared_chain_concurrency.py`。

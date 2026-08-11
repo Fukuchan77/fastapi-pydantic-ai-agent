@@ -305,6 +305,7 @@ Every error response — regardless of status code or which layer raised it — 
 | 429    | `RATE_LIMIT_EXCEEDED`        | Request-rate limit exceeded                                              |
 | 500    | `INTERNAL_ERROR`             | Unhandled exception                                                      |
 | 502    | `UPSTREAM_GROUNDING_FAILED`  | The RAG workflow could not produce a grounded, citable answer            |
+| 503    | `DEPENDENCY_NOT_INITIALIZED` | A required `app.state` singleton (`settings` or `llm_model`) was absent  |
 | 504    | `WORKFLOW_TIMEOUT`           | The RAG workflow exceeded its timeout                                    |
 
 404 and 405 are emitted by Starlette's router itself — no route in this codebase raises either directly. A 405 response additionally carries an `Allow` header naming the HTTP methods the path actually accepts.

@@ -39,7 +39,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 `app/main.py` is the composition root — `create_app()` (factory) is used everywhere; `app = create_app()` at module bottom is the uvicorn entrypoint. Tests always call `create_app(settings=..., model=test_model)` directly, never import the module-level `app` singleton.
 
-**`app/lifespan.py::build_lifespan` owns all shared singletons** (`settings`, `http_client`, `vector_store`, `session_store`, `chat_agent`, `cleanup_task`) on `app.state`; `create_app` keeps middleware, routers, and the global `Exception` handler. Startup is fail-fast: stores are built, probed via `dry_run_stores()`, and the `FallbackModel` chain is built eagerly — a misconfigured provider or unreachable Redis/Ollama kills startup. A test-injected `model` bypasses the fallback build entirely. A failure partway through `_startup` runs the same `_shutdown()` the normal path uses (each close isolated by `_close_quietly`) before re-raising unchanged.
+**`app/lifespan.py::build_lifespan` owns all shared singletons** (`settings`, `http_client`, `vector_store`, `session_store`, `llm_model` — the resolved model shared by the chat agent and the RAG workflow — `chat_agent`, `cleanup_task`) on `app.state`; `create_app` keeps middleware, routers, and the global `Exception` handler. Startup is fail-fast: stores are built, probed via `dry_run_stores()`, and the `FallbackModel` chain is built eagerly — a misconfigured provider or unreachable Redis/Ollama kills startup. A test-injected `model` bypasses the fallback build entirely. A failure partway through `_startup` runs the same `_shutdown()` the normal path uses (each close isolated by `_close_quietly`) before re-raising unchanged.
 
 **One flat error envelope**: `app/api/errors.py` registers on `starlette.exceptions.HTTPException`, **not** `fastapi.HTTPException` — starlette resolves handlers up the MRO, so registering on the subclass would miss the 404/405 the router raises. Validation failures drop the per-field `detail` so responses never echo request content. 413/429 are emitted by their own middleware/handler and never reach `HTTPException`.
 
@@ -71,7 +71,9 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 **RAG sufficiency is structured, not parsed**: `_eval_agent`'s output type is `RelevanceVerdict` (`sufficient: bool` + non-empty `rationale`) — never text-match the reply. Nested retry budgets: pydantic-ai `retries={"output": ...}` for validation failures within one call, `_run_agent_with_retry` for transient failures across calls; a timeout returns the safe `sufficient=False` fallback with no retry.
 
-**RAG workflow cache**: keyed by `sha256(query|max_retries|vector_store.generation)` — the generation counter invalidates pre-ingest entries without disturbing in-flight requests; thundering-herd protection via `_pending_futures`; `get_rag_workflow` caches per vector-store using a `WeakKeyDictionary`. The autouse `clear_workflow_cache` fixture resets both caches before/after every test.
+**RAG workflow cache**: keyed by `sha256(query|max_retries|vector_store.generation)` — the generation counter invalidates pre-ingest entries without disturbing in-flight requests; thundering-herd protection via `_pending_futures`; `get_rag_workflow` caches per vector-store using a `WeakKeyDictionary`. The autouse `clear_workflow_cache` fixture resets that cache before/after every test.
+
+**RAG uses the shared model chain**: `get_rag_workflow` reads `app.state.settings` and `app.state.llm_model` — the same `FallbackModel` chain the chat agent uses — instead of rebuilding a model. Either singleton absent fails the request with a flat-envelope 503 (`code="DEPENDENCY_NOT_INITIALIZED"`), never a silent fallback to process-global settings.
 
 **Session ownership without a lookup table**: session ids are `{principal.id}.{token}.{signature}` (HMAC-signed). `authorize_session()` verifies with `secrets.compare_digest` and 403s on malformed/foreign ids. `POST /v1/agent/stream` can only *authorize* an existing id — no new id can be returned on that endpoint.
 
@@ -117,7 +119,6 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 
 ## Known Active Bugs (tracked in `.sdd/specs/003-pydantic-ai-v2-migration/spec.md`)
 
-- **`_get_cached_model` in `app/deps/workflow.py` ignores its parameters** — body calls `get_settings(); build_model(settings)` regardless of the `llm_model`/`llm_base_url` arguments, so `@lru_cache` keys on values that never affect the result. Also, `get_rag_workflow` calls `get_settings()` directly instead of `req.app.state.settings`, so RAG ignores `create_app(settings=...)` test injection. **Fix (A-3+A-4): delete `_get_cached_model`; read settings and model from `app.state`.**
 - **`InMemorySessionStore` LRU eviction selects from `_last_access` not `_store.keys()`** — ghost entries created by `get_history()` on a never-saved session ID poison the LRU victim pool, making `max_sessions` ineffective until the ghost's TTL expires. **Fix (A-2): change `min` target to `self._store.keys()`.**
 
 ## Adding a New Real Agent Tool
