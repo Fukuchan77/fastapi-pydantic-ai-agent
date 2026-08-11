@@ -32,8 +32,9 @@ async def test_lru_eviction_still_works_when_store_exceeds_capacity() -> None:
     # Verify we're at capacity
     assert len(store._store) == 2
 
-    # Identify LRU session
-    lru_session = min(store._last_access.items(), key=lambda x: x[1])[0]
+    # Identify LRU session using the implementation's own selection rule:
+    # oldest _last_access among *saved* sessions, not all recorded timestamps.
+    lru_session = min(store._store.keys(), key=lambda sid: store._last_access.get(sid, 0.0))
     assert lru_session == "session_1"
 
     # Add a 3rd session, triggering LRU eviction
@@ -71,8 +72,9 @@ async def test_lru_eviction_race_condition_with_concurrent_clear() -> None:
     # Verify all 3 sessions exist
     assert len(store._store) == 3
 
-    # Identify LRU session
-    lru_session = min(store._last_access.items(), key=lambda x: x[1])[0]
+    # Identify LRU session using the implementation's own selection rule:
+    # oldest _last_access among *saved* sessions, not all recorded timestamps.
+    lru_session = min(store._store.keys(), key=lambda sid: store._last_access.get(sid, 0.0))
     assert lru_session == "session_1"
 
     # Create a flag to control timing

@@ -136,8 +136,17 @@ class InMemorySessionStore:
             async with self._store_lock:
                 # Re-check after acquiring store lock (double-checked locking pattern)
                 if len(self._store) > self.max_sessions:
-                    # Find the session with the oldest _last_access time (LRU)
-                    lru_session_id = min(self._last_access.items(), key=lambda x: x[1])[0]
+                    # Find the saved session with the oldest _last_access time (LRU).
+                    # Selection is drawn from _store's keys, not _last_access's: a
+                    # session id can be read (stamping _last_access) but never saved
+                    # (ADR-4, kept deliberately for orphan-lock reclamation), and such
+                    # a phantom id is never a member of _store so it can never be
+                    # chosen here. A saved session missing from _last_access (should
+                    # not happen, but selection must not raise if it does) defaults to
+                    # the oldest possible timestamp.
+                    lru_session_id = min(
+                        self._store.keys(), key=lambda sid: self._last_access.get(sid, 0.0)
+                    )
 
                     # Get victim session's lock reference
                     # This prevents concurrent save_history(lru_session) from resurrecting
