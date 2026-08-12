@@ -123,7 +123,16 @@ _EXPECTED_SYMBOLS: dict[str, frozenset[str]] = {
 # even more severe break than a missing parameter) still names the label.
 _EXPECTED_PARAMS: dict[str, frozenset[str]] = {
     "Agent.__init__": frozenset(
-        {"model", "output_type", "deps_type", "retries", "tools", "toolsets", "system_prompt"}
+        {
+            "model",
+            "output_type",
+            "deps_type",
+            "retries",
+            "tools",
+            "toolsets",
+            "system_prompt",
+            "end_strategy",
+        }
     ),
     "Agent.run": frozenset({"user_prompt", "deps", "message_history", "usage_limits"}),
     "Agent.iter": frozenset({"user_prompt", "deps", "message_history", "usage_limits"}),
@@ -143,6 +152,38 @@ _PARAM_TARGETS: dict[str, typing.Callable[..., object]] = {
     "AbstractToolset.call_tool": AbstractToolset.call_tool,
     "LiteLLMModel.__init__": LiteLLMModel.__init__,
     "Model.request": Model.request,
+}
+
+
+# Layer B' - `__dataclass_fields__` subsets, for real dataclasses whose
+# `__init__` `inspect.signature` cannot reach (or whose kw-only-ness Layer B
+# cannot express).
+_EXPECTED_DATACLASS_FIELDS: dict[str, frozenset[str]] = {
+    "UsageLimits": frozenset({"request_limit", "total_tokens_limit", "tool_calls_limit"}),
+    "ToolsetTool": frozenset(
+        {"toolset", "tool_def", "max_retries", "args_validator", "args_validator_func"}
+    ),
+}
+
+_DATACLASS_FIELD_TARGETS: dict[str, type] = {
+    "UsageLimits": UsageLimits,
+    "ToolsetTool": ToolsetTool,
+}
+
+
+# Layer B' - `__annotations__` subsets. Covers `TypedDict`s, which have no
+# `__dataclass_fields__`, and `ModelProfile`, whose field must resolve
+# whichever of the two shapes the pinned resolution implements it as.
+_EXPECTED_ANNOTATIONS: dict[str, frozenset[str]] = {
+    "ModelProfile": frozenset({"supports_json_schema_output"}),
+    "LiteLLMModelSettings": frozenset({"litellm_api_base"}),
+    "ModelSettings": frozenset({"max_tokens"}),
+}
+
+_ANNOTATION_TARGETS: dict[str, type] = {
+    "ModelProfile": ModelProfile,
+    "LiteLLMModelSettings": LiteLLMModelSettings,
+    "ModelSettings": ModelSettings,
 }
 
 
@@ -182,19 +223,28 @@ class TestParameterNameSubsets:
 class TestDataclassFieldAndAnnotationSubsets:
     """Layer B': fields/annotations for members `inspect.signature` can't reach."""
 
-    def test_usage_limits_has_the_fields_guardrails_relies_on(self) -> None:
-        """`UsageLimits` fields (not its signature, which advertises deprecated params)."""
-        expected = frozenset({"request_limit", "total_tokens_limit", "tool_calls_limit"})
-        actual = set(UsageLimits.__dataclass_fields__)
+    @pytest.mark.parametrize("label", sorted(_EXPECTED_DATACLASS_FIELDS))
+    def test_every_expected_dataclass_field_is_still_present(self, label: str) -> None:
+        """Fail naming the dataclass and the field(s) it lost."""
+        expected = _EXPECTED_DATACLASS_FIELDS[label]
+        actual = set(_DATACLASS_FIELD_TARGETS[label].__dataclass_fields__)
         missing = expected - actual
-        assert not missing, f"UsageLimits field(s) missing: {missing}"
+        assert not missing, f"{label} field(s) missing: {missing}"
 
-    def test_model_profile_has_the_field_the_known_v2_break_lands_on(self) -> None:
-        """`ModelProfile.__init__` reports `(*args, **kwargs)`; fields come from here."""
-        expected = frozenset({"supports_json_schema_output"})
-        actual = set(ModelProfile.__dataclass_fields__)
+    @pytest.mark.parametrize("label", sorted(_EXPECTED_ANNOTATIONS))
+    def test_every_expected_annotation_is_still_present(self, label: str) -> None:
+        """Fail naming the annotated shape and the field(s) it lost.
+
+        Covers `ModelProfile` (`__init__` reports `(*args, **kwargs)` due to a
+        custom `__new__`, so fields must be read some other way, and
+        `__annotations__` resolves whether the pinned resolution implements it
+        as a dataclass or a `TypedDict`) alongside the project's two
+        `TypedDict` settings shapes, which have no `__dataclass_fields__` at all.
+        """
+        expected = _EXPECTED_ANNOTATIONS[label]
+        actual = set(_ANNOTATION_TARGETS[label].__annotations__)
         missing = expected - actual
-        assert not missing, f"ModelProfile field(s) missing: {missing}"
+        assert not missing, f"{label} annotation(s) missing: {missing}"
 
     def test_run_usage_total_tokens_is_reachable_across_the_mro(self) -> None:
         """`total_tokens` is inherited from `UsageBase`; `vars(RunUsage)` alone misses it."""
@@ -203,20 +253,6 @@ class TestDataclassFieldAndAnnotationSubsets:
     def test_fallback_model_declares_models_only_in_annotations(self) -> None:
         """`FallbackModel.models` is an instance attribute; `hasattr` on the class is False."""
         assert "models" in FallbackModel.__annotations__
-
-    def test_litellm_model_settings_has_the_field_the_factory_relies_on(self) -> None:
-        """`LiteLLMModelSettings` is a `TypedDict`; check `__annotations__`, not fields."""
-        expected = frozenset({"litellm_api_base"})
-        actual = set(LiteLLMModelSettings.__annotations__)
-        missing = expected - actual
-        assert not missing, f"LiteLLMModelSettings annotation(s) missing: {missing}"
-
-    def test_model_settings_has_the_field_health_checks_rely_on(self) -> None:
-        """`ModelSettings` is a `TypedDict`; check `__annotations__`, not fields."""
-        expected = frozenset({"max_tokens"})
-        actual = set(ModelSettings.__annotations__)
-        missing = expected - actual
-        assert not missing, f"ModelSettings annotation(s) missing: {missing}"
 
 
 class TestKindAssertions:
@@ -264,9 +300,7 @@ class TestKindAssertions:
 
     def test_toolset_tool_fields_are_keyword_only(self) -> None:
         """`_GuardedToolset.call_tool` receives a `ToolsetTool`; its fields are kw-only."""
-        expected = frozenset(
-            {"toolset", "tool_def", "max_retries", "args_validator", "args_validator_func"}
-        )
+        expected = _EXPECTED_DATACLASS_FIELDS["ToolsetTool"]
         actual = set(ToolsetTool.__dataclass_fields__)
         missing = expected - actual
         assert not missing, f"ToolsetTool field(s) missing: {missing}"
@@ -317,4 +351,30 @@ class TestAntiFalseGreen:
     def test_every_expected_params_label_has_a_resolvable_target(self) -> None:
         """A label present in one table but not the other silently drops that check."""
         missing_targets = set(_EXPECTED_PARAMS) - set(_PARAM_TARGETS)
+        assert not missing_targets, f"label(s) with no resolvable target: {missing_targets}"
+
+    def test_expected_dataclass_fields_table_is_non_empty_and_every_entry_is_non_empty(
+        self,
+    ) -> None:
+        """A dropped table or entry would make Layer B's dataclass-field check pass on nothing."""
+        assert _EXPECTED_DATACLASS_FIELDS, "_EXPECTED_DATACLASS_FIELDS must not be empty"
+        empty_labels = [label for label, fields in _EXPECTED_DATACLASS_FIELDS.items() if not fields]
+        assert not empty_labels, f"label(s) with an empty dataclass field set: {empty_labels}"
+
+    def test_every_expected_dataclass_fields_label_has_a_resolvable_target(self) -> None:
+        """A label present in one table but not the other silently drops that check."""
+        missing_targets = set(_EXPECTED_DATACLASS_FIELDS) - set(_DATACLASS_FIELD_TARGETS)
+        assert not missing_targets, f"label(s) with no resolvable target: {missing_targets}"
+
+    def test_expected_annotations_table_is_non_empty_and_every_entry_is_non_empty(
+        self,
+    ) -> None:
+        """A dropped table or entry would make Layer B's annotation check pass on nothing."""
+        assert _EXPECTED_ANNOTATIONS, "_EXPECTED_ANNOTATIONS must not be empty"
+        empty_labels = [label for label, fields in _EXPECTED_ANNOTATIONS.items() if not fields]
+        assert not empty_labels, f"label(s) with an empty annotation set: {empty_labels}"
+
+    def test_every_expected_annotations_label_has_a_resolvable_target(self) -> None:
+        """A label present in one table but not the other silently drops that check."""
+        missing_targets = set(_EXPECTED_ANNOTATIONS) - set(_ANNOTATION_TARGETS)
         assert not missing_targets, f"label(s) with no resolvable target: {missing_targets}"

@@ -163,3 +163,68 @@ class TestSupportsNativeOutput:
         fallback = FallbackModel(primary, secondary)
 
         assert supports_native_output(fallback) is False
+
+    def test_mapping_shaped_profile_reporting_capability_reports_true(self) -> None:
+        """A v2-style mapping-shaped profile reporting the capability is honored (R2.4).
+
+        `pydantic-ai` 2.x turns `ModelProfile` into a `TypedDict`, so a model's
+        `.profile` can be a plain mapping instead of a dataclass instance.
+        `cached_property` only computes a value when the instance `__dict__`
+        doesn't already hold one under that name, so assigning directly
+        overrides it without going through `Model.profile`'s dataclass-specific
+        internals - exercising exactly the mapping shape the read must tolerate.
+        """
+        model = TestModel()
+        model.profile = {"supports_json_schema_output": True}
+
+        assert supports_native_output(model) is True
+
+    def test_mapping_shaped_profile_missing_field_reports_false(self) -> None:
+        """A mapping-shaped profile omitting the field is treated as unsupported (R2.2).
+
+        `.get(field, False)` must yield `False` directly - no `None` sentinel,
+        no `KeyError` - for a v2-shaped profile that simply never sets the key.
+        """
+        model = TestModel()
+        model.profile = {}
+
+        assert supports_native_output(model) is False
+
+    def test_object_shaped_profile_missing_field_reports_false(self) -> None:
+        """A 1.x-shaped profile object omitting the field is treated as unsupported (R2.2).
+
+        A bare `object()` is attribute-accessed, not mapping-accessed, and has
+        no `supports_json_schema_output` attribute at all - proving the
+        `getattr(obj, field, False)` fallback branch, independent of
+        `ModelProfile`'s own dataclass default for that field.
+        """
+        model = TestModel()
+        model.profile = object()
+
+        assert supports_native_output(model) is False
+
+    def test_fallback_model_reads_primary_mapping_shaped_profile(self) -> None:
+        """FallbackModel's primary-model read holds for a mapping-shaped profile (R2.1, R2.3).
+
+        Combines the `FallbackModel` special case with the v2 mapping shape:
+        the primary model's mapping-shaped profile must still be the one read,
+        even though the secondary's dataclass-shaped profile disagrees.
+        """
+        primary = TestModel()
+        primary.profile = {"supports_json_schema_output": True}
+        secondary = TestModel(profile=ModelProfile(supports_json_schema_output=False))
+        fallback = FallbackModel(primary, secondary)
+
+        assert supports_native_output(fallback) is True
+
+    def test_shared_test_model_fixture_keeps_capability_disabled(
+        self, test_model: FunctionModel
+    ) -> None:
+        """The shared `test_model` fixture stays on the plain-text path (R2.8).
+
+        Guards against this change silently moving the suite onto the
+        native-output path: the fixture's explicit
+        `ModelProfile(supports_json_schema_output=False)` must still read as
+        `False` through `supports_native_output`.
+        """
+        assert supports_native_output(test_model) is False

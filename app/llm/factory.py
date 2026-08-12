@@ -7,6 +7,8 @@ JSON-schema-output capability so the chat agent can gate `NativeOutput`
 accordingly (Req 10).
 """
 
+from collections.abc import Mapping
+
 from pydantic_ai.models import Model
 from pydantic_ai.models.fallback import FallbackModel
 
@@ -73,6 +75,32 @@ def build_fallback_model(settings: Settings) -> FallbackModel:
     return FallbackModel(default_model, *fallback_models)
 
 
+def _read_profile_field(profile: object, field: str) -> bool:
+    """Read `field` off a model profile, tolerating both its 1.x and 2.x shapes.
+
+    `pydantic_ai.profiles.ModelProfile` is a dataclass instance under
+    `pydantic-ai` 1.x but becomes a `TypedDict` under 2.x, so a profile
+    *instance* is a plain `dict` at runtime there — it has no `.get` under
+    1.x and no attribute access under 2.x. `profile` is annotated `object`
+    deliberately: naming either shape statically would make this function
+    correct under only one of the two pydantic-ai major versions this
+    repository must support across the migration (Req 2.1). Dispatch is
+    mapping-first so an absent field yields `False` directly under either
+    shape, with no `None` sentinel to propagate (Req 2.2).
+
+    Args:
+        profile: A model's `.profile` value — a dataclass instance (1.x) or
+            a mapping (2.x, from the `TypedDict` change).
+        field: The profile field name to read.
+
+    Returns:
+        The field's value, or False if absent under either shape.
+    """
+    if isinstance(profile, Mapping):
+        return profile.get(field, False)
+    return getattr(profile, field, False)
+
+
 def supports_native_output(model: Model) -> bool:
     """Report whether `model` can produce grammar-constrained JSON-schema output.
 
@@ -88,4 +116,4 @@ def supports_native_output(model: Model) -> bool:
         True if the model profile reports `supports_json_schema_output`.
     """
     target = model.models[0] if isinstance(model, FallbackModel) else model
-    return target.profile.supports_json_schema_output
+    return _read_profile_field(target.profile, "supports_json_schema_output")
