@@ -328,6 +328,31 @@ class TestBuildChatAgent:
             assert isinstance(agent, Agent)
             assert agent is not None
 
+    def test_build_chat_agent_pins_end_strategy_to_early(self) -> None:
+        """`end_strategy="early"` must be passed explicitly, not left to the default.
+
+        Req 6.1/6.2/9.1: v2 flips `Agent.__init__`'s `end_strategy` default from
+        `"early"` to `"graceful"`. On the pinned 1.x lock, `"early"` is already
+        the default, so asserting only the resulting `agent.end_strategy` value
+        would pass whether or not the keyword is present in the constructor call -
+        it would not distinguish "explicitly pinned" from "happens to match
+        today's default". Mocking the `Agent` constructor and asserting on its
+        exact call kwargs is what actually proves the keyword is passed.
+        """
+        with (
+            patch("app.agents.chat_agent.get_settings") as mock_settings,
+            patch("app.agents.chat_agent.Agent") as mock_agent_cls,
+        ):
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+            )
+
+            build_chat_agent(model=TestModel())
+
+            assert mock_agent_cls.call_args.kwargs["end_strategy"] == "early"
+
 
 class TestAgentIntegration:
     """Integration tests for agent with tools using TestModel."""

@@ -166,6 +166,12 @@ def build_chat_agent(
         # typed overloads (it survives only via **_deprecated_kwargs), so the
         # mapping form is both the supported spelling and the type-checkable one.
         retries={"output": settings.max_output_retries},
+        # pydantic-ai v2 flips this default from "early" to "graceful"; pinning it
+        # explicitly defends guardrail tool-call counts, audit-trail contents, and
+        # token-budget accounting across that bump. The RAG agents (rag_llm.py)
+        # deliberately do NOT carry this - they register no function tools, so
+        # end_strategy is inert there and the omission is not an oversight.
+        end_strategy="early",
     )
 
     # Register dynamic system prompt builder
