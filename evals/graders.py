@@ -14,6 +14,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
@@ -35,6 +36,21 @@ class Rating(BaseModel):
 
     score: Literal[1, 2, 3, 4, 5, "Unknown"]
     rationale: str = Field(min_length=1)
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _coerce_stringified_digit_score(cls, value: object) -> object:
+        """Coerce a stringified digit score (e.g. `'4'`) to its integer form.
+
+        A small local judge model has been observed returning `score` as a
+        stringified digit rather than an integer. Only the exact strings
+        `"1"`-`"5"` are coerced; every other value - including `"Unknown"`
+        and out-of-range or malformed strings - passes through unchanged,
+        so the closed `Literal` domain still rejects it (Req 3.1, 3.2).
+        """
+        if isinstance(value, str) and value in {"1", "2", "3", "4", "5"}:
+            return int(value)
+        return value
 
 
 class TwoAxisResult(BaseModel):

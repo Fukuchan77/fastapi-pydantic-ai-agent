@@ -27,9 +27,46 @@ class TestRating:
         rating = Rating(score=score, rationale="Because.")
         assert rating.score == score
 
-    @pytest.mark.parametrize("score", [0, 6, -1, "unknown", "unrated"])
+    @pytest.mark.parametrize(
+        ("stringified_score", "expected_score"),
+        [("1", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5)],
+    )
+    def test_coerces_stringified_digit_scores_to_int(
+        self, stringified_score: str, expected_score: int
+    ) -> None:
+        """A score arriving as a stringified digit is accepted as the corresponding integer.
+
+        Reproduces, hermetically and through the rating model directly
+        rather than through a live judge, the exact brittleness that
+        exhausted output retries against a small local judge model: it
+        returned `Rating.score` as the string `'4'` instead of the
+        integer `4`. (Req 3.1, 3.5)
+        """
+        rating = Rating(score=stringified_score, rationale="Because.")  # type: ignore[arg-type]
+        assert rating.score == expected_score
+        assert isinstance(rating.score, int)
+
+    def test_leaves_unknown_score_unchanged(self) -> None:
+        """`"Unknown"` is untouched by the digit-coercion validator (Req 3.2).
+
+        The coercion added for Req 3.1 only recognizes the exact strings
+        `"1"`-`"5"`; `"Unknown"` must fall through it unchanged rather than
+        being coerced to some numeric value, since it is not a stringified
+        digit at all.
+        """
+        rating = Rating(score="Unknown", rationale="Because.")
+        assert rating.score == "Unknown"
+        assert isinstance(rating.score, str)
+
+    @pytest.mark.parametrize("score", [0, 6, -1, "unknown", "unrated", "4.5", "four", ""])
     def test_rejects_invalid_scores(self, score: object) -> None:
-        """Values outside the closed vocabulary are rejected."""
+        """Values outside the closed vocabulary are rejected exactly as today (Req 3.3).
+
+        `"4.5"`, `"four"`, and `""` are not in the coercion validator's exact
+        `"1"`-`"5"` set, so they reach the closed `Literal` domain unchanged
+        and are rejected there, the same as the pre-existing `0`/`6`/`-1`
+        cases.
+        """
         with pytest.raises(ValidationError):
             Rating(score=score, rationale="Because.")  # type: ignore[arg-type]
 
@@ -110,7 +147,11 @@ class TestAggregateRatings:
         assert aggregate_ratings(ratings) == pytest.approx(3.0)
 
     def test_returns_none_when_every_rating_is_unknown(self) -> None:
-        """An all-`Unknown` sequence aggregates to `None`, not zero."""
+        """An all-`Unknown` sequence aggregates to `None`, not zero (Req 3.4).
+
+        `"Unknown"` is excluded from the aggregate rather than coerced to a
+        number, so a fully-`"Unknown"` axis is `None`, not `0.0`.
+        """
         ratings = [Rating(score="Unknown", rationale="N/A") for _ in range(3)]
         assert aggregate_ratings(ratings) is None
 
