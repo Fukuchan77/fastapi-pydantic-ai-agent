@@ -1,5 +1,7 @@
 # Adapter-compatibility gate report (Requirement 8, `003-pydantic-ai-v2-migration` unit 9)
 
+**Forward pointer — 2026-08-13:** `004-pydantic-ai-v2-unblock` re-executed this gate under its own Requirement 4 (task 6, run 1) and recorded it **PASSED**; see [`docs/adapter-probe-report-2026-08-13-run1.md`](adapter-probe-report-2026-08-13-run1.md). This report is a dated record of what was true on 2026-08-11 and is not amended to match that later result (Requirement 4.15).
+
 Executed: 2026-08-11. This is the evidence artifact Requirement 8.6 requires: the single
 branch point of `003-pydantic-ai-v2-migration` — whether `pydantic-ai-litellm` works against
 `pydantic-ai-slim` 2.x — determined by execution rather than by reading changelogs. This

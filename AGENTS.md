@@ -123,7 +123,7 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 ## Feature Status (`004-pydantic-ai-v2-unblock` active; `003-pydantic-ai-v2-migration` sealed, both tracked under `.sdd/specs/`)
 
 - No known active bugs. The `InMemorySessionStore` LRU-victim defect previously listed here is fixed — victim selection now comes from `self._store.keys()` (`app/stores/session_store/in_memory.py`, which carries the comment explaining why).
-- `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED** (evidence: `docs/adapter-probe-report.md`), so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` is now the single active spec and re-executes that gate under its own Requirement 4 before re-attempting the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
+- `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED**, so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` is the single active spec and re-executed that gate under its own Requirement 4 (run 1), recording it **PASSED** (evidence: `docs/adapter-probe-report-2026-08-13-run1.md`, cross-referencing the original 2026-08-11 finding at `docs/adapter-probe-report.md`), unblocking the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
 - `pydantic-ai-slim` stays pinned to the 1.x line (`>=1.99.0,<2.0` in `pyproject.toml`) until `004`'s gate is recorded as passed; only `004`'s task 7 retires this pin.
 
 ## Adding a New Real Agent Tool
