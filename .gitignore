@@ -211,3 +211,7 @@ __marimo__/
 .claude/
 .serena/
 .sdd/
+
+# local test artifacts
+dump.rdb
+.worktrees/
