@@ -90,7 +90,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **`asyncio_mode = "auto"`**: all coroutine tests are collected and awaited automatically — no `@pytest.mark.asyncio` needed
 - **`EXPECT_LIVE_TESTS=N`** env var: session fails if the actual executed test count ≠ N — used to guard gated test lanes from silent skips
 - **`chroma` marker**: opt-in (`RUN_CHROMA_INTEGRATION_TESTS` env var); downloads a Hugging Face embedding model — do not run routinely: `RUN_CHROMA_INTEGRATION_TESTS=1 EXPECT_LIVE_TESTS=6 uv run pytest tests/integration/test_chroma_query_with_scores.py` (`6` = `tests/support/chroma.py::CHROMA_LIVE_TEST_COUNT`)
-- **`redis` marker**: gated on live reachability, not an opt-in var — `tests/support/redis.py::redis_reachable()` probes a real server and the lane skips (never fails) when none answers: `EXPECT_LIVE_TESTS=5 mise run test:redis` (`5` = `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`)
+- **`redis` marker**: gated on live reachability, not an opt-in var — `tests/support/redis.py::redis_reachable()` probes a real server and the lane skips (never fails) when none answers: `EXPECT_LIVE_TESTS=7 mise run test:redis` (`7` = `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`)
 - Tests for cloud-provider API key validation must `monkeypatch.delenv("LLM_API_KEY")` explicitly (the autouse fixture sets it by default)
 
 ### Repo-guard tests (assert on project structure, not app behavior)
@@ -108,13 +108,13 @@ These fail on structural drift — understand what they assert before bypassing:
 
 `fastapi<0.137` and `starlette<1.0` in `pyproject.toml` both exist because the newer version **silently disables the global rate limit** (router flattening / slowapi incompatibility) — read the comments there first; `tests/e2e/test_rate_limiting_enforcement.py` is the canary. The starlette pin is also why `mise run audit` carries `--ignore-vuln` entries: each is app-layer-mitigated or unreachable here. Re-run `uv run pip-audit` without them after any starlette bump.
 
-`pydantic-ai-litellm` is pinned `<1.0` in `pyproject.toml` — that pin **should be `<0.3.0`** (it's a 0.x package and depends on six private pydantic-ai APIs; `<1.0` admits 0.3.x–0.9.x unreviewed). The correct bound mirrors how `fastapi` is handled for 0.x versioning.
+`pydantic-ai-litellm` is pinned `>=0.2.3,<0.3.0` in `pyproject.toml` — capped below its next **minor**, not its next major: it's a 0.x package depending on six private pydantic-ai APIs, so its minors are its breaking releases and `<1.0` would admit 0.3.x–0.9.x unreviewed. Mirrors how `fastapi` is handled for 0.x versioning; `tests/unit/test_pydantic_ai_api_lock.py` is what catches such a breakage, not the pin.
 
 A private-API coupling, not a version bound: the rate-limit-exceeded handler (`app/middleware/rate_limit.py`) delegates 429 header construction (`X-RateLimit-*`, delay-seconds `Retry-After`) to slowapi's `Limiter._inject_headers` — a leading-underscore method with no compatibility guarantee. A slowapi upgrade needs re-verification against `tests/unit/test_middleware_rate_limit_global_envelope.py`.
 
 ## CI Gating
 
-- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `test:redis` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). The `redis`-marked lane does run here — CI starts a `redis:7-alpine` service container and sets `EXPECT_LIVE_TESTS=5` so a broken container fails the run instead of passing as a silent zero-collected green. `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
+- **PR CI** (`.github/workflows/pr.yml`): lint → `test:ci` → `test:redis` → `audit`. Never runs live LLM or Ollama tests, nor the `chroma`-marked tests (they self-skip unless `RUN_CHROMA_INTEGRATION_TESTS` is set, since they download a Hugging Face embedding model). The `redis`-marked lane does run here — CI starts a `redis:7-alpine` service container and sets `EXPECT_LIVE_TESTS=7` so a broken container fails the run instead of passing as a silent zero-collected green. `asyncio_mode = "auto"` means an unmarked coroutine test in this lane still runs instead of silently passing unawaited.
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, `no-hardcoded-model-id` pygrep, `real-tool-conventions-guard` (fires on any non-mock `@agent.tool` under `app/agents/`, forcing review of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, opt-in via `git config core.hooksPath .githooks`): probes Ollama, runs `EXPECT_LIVE_TESTS=5 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
@@ -124,7 +124,7 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 
 - No known active bugs. The `InMemorySessionStore` LRU-victim defect previously listed here is fixed — victim selection now comes from `self._store.keys()` (`app/stores/session_store/in_memory.py`, which carries the comment explaining why).
 - `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED**, so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` is the single active spec and re-executed that gate under its own Requirement 4 (run 1), recording it **PASSED** (evidence: `docs/adapter-probe-report-2026-08-13-run1.md`, cross-referencing the original 2026-08-11 finding at `docs/adapter-probe-report.md`), unblocking the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
-- `pydantic-ai-slim` stays pinned to the 1.x line (`>=1.99.0,<2.0` in `pyproject.toml`) until `004`'s gate is recorded as passed; only `004`'s task 7 retires this pin.
+- `pydantic-ai-slim` moved to the 2.x line (`>=2.27.0,<3.0` in `pyproject.toml`) in `004`'s task 7, unblocked by task 6's recorded gate PASS; `pydantic-ai-litellm` bumped alongside it to `>=0.2.3,<0.3.0`.
 
 ## Adding a New Real Agent Tool
 

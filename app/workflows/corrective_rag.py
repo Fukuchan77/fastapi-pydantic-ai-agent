@@ -99,12 +99,12 @@ class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ig
         # prose, with its own output-retry budget (distinct from
         # `_run_agent_with_retry`'s transient-retry loop - see the nested
         # retry budgets note in `rag_llm.py`).
-        self._eval_agent: Agent[None, RelevanceVerdict] = Agent(
+        self._eval_agent: Agent[object, RelevanceVerdict] = Agent(
             model=resolved_model,
             output_type=RelevanceVerdict,
             retries={"output": llm_settings.max_output_retries},
         )
-        self._synth_agent: Agent[None, str] = Agent(
+        self._synth_agent: Agent[object, str] = Agent(
             model=resolved_model,
             output_type=str,
         )

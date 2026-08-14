@@ -47,12 +47,12 @@ class LLMCallMixin(PromptBuildingMixin):
     """
 
     llm_settings: Settings
-    _eval_agent: Agent[None, RelevanceVerdict]
-    _synth_agent: Agent[None, str]
+    _eval_agent: Agent[object, RelevanceVerdict]
+    _synth_agent: Agent[object, str]
 
     async def _run_agent_with_retry[T](
         self,
-        agent: Agent[None, T],
+        agent: Agent[object, T],
         prompt: str,
         *,
         op_name: str,

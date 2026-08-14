@@ -15,6 +15,8 @@ import asyncio
 import uuid
 
 import pytest
+import redis.asyncio as redis
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
@@ -28,6 +30,15 @@ from tests.support.redis import redis_reachable
 
 
 pytestmark = pytest.mark.redis
+
+_PRE_CUTOVER_PREFIX = "session:"
+"""The key prefix in force before the Requirement 7 cutover (task 7.2).
+
+Named as a literal rather than read off `RedisSessionStore.DEFAULT_KEY_PREFIX`,
+so the isolation tests below keep asserting the same fixed pre-cutover value
+once the class default moves to the v2 prefix - only then do the two
+directions actually observe the separation they assert.
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -128,3 +139,53 @@ async def test_startup_dry_run_probe_succeeds_against_a_reachable_server() -> No
         await dry_run_stores(store)
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_pre_cutover_prefix_reader_does_not_observe_v2_written_history() -> None:
+    """A pre-cutover-prefix reader must not see history a v2 instance wrote (Req 7.2, 7.3).
+
+    Red ahead of task 7.2: `RedisSessionStore.DEFAULT_KEY_PREFIX` still equals
+    `_PRE_CUTOVER_PREFIX` today, so the default-constructed "v2 instance" below
+    and the explicit pre-cutover reader collide on the same Redis key and this
+    assertion currently fails. It turns green once 7.2 moves the class default
+    to a distinct value. Reachability is recorded by this module's autouse
+    `_require_redis` fixture - a skipped run is not a demonstrated failure.
+    """
+    v2_store = RedisSessionStore(redis_url=REDIS_URL)
+    pre_cutover_reader = RedisSessionStore(redis_url=REDIS_URL, key_prefix=_PRE_CUTOVER_PREFIX)
+    session_id = v2_store.generate_session_id()
+    messages = [ModelRequest(parts=[UserPromptPart(content="v2 history")])]
+    try:
+        await v2_store.save_history(session_id, messages)
+
+        assert await pre_cutover_reader.get_history(session_id) == []
+    finally:
+        await v2_store.clear(session_id)
+        await v2_store.close()
+        await pre_cutover_reader.close()
+
+
+@pytest.mark.asyncio
+async def test_pre_cutover_key_is_not_observable_via_v2_store() -> None:
+    """A key under the pre-cutover prefix must not surface via the v2 store (Req 7.2, 7.3).
+
+    Red ahead of task 7.2 for the same reason as the sibling test above:
+    `RedisSessionStore.DEFAULT_KEY_PREFIX` has not yet moved off
+    `_PRE_CUTOVER_PREFIX`, so a key written directly under it - bypassing the
+    store entirely, standing in for pre-existing v1 data - is currently visible
+    through a default-constructed (v2) store too.
+    """
+    v2_store = RedisSessionStore(redis_url=REDIS_URL)
+    session_id = v2_store.generate_session_id()
+    messages = [ModelRequest(parts=[UserPromptPart(content="pre-cutover history")])]
+    raw_client = redis.from_url(REDIS_URL, decode_responses=False)
+    pre_cutover_key = f"{_PRE_CUTOVER_PREFIX}{session_id}"
+    try:
+        await raw_client.set(pre_cutover_key, ModelMessagesTypeAdapter.dump_json(messages), ex=60)
+
+        assert await v2_store.get_history(session_id) == []
+    finally:
+        await raw_client.delete(pre_cutover_key)
+        await raw_client.aclose()
+        await v2_store.close()

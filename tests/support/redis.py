@@ -22,11 +22,11 @@ REDIS_UNREACHABLE_SKIP_REASON = (
 )
 """Stated reason reported when the reachability probe finds no server (Req 6.3)."""
 
-REDIS_LIVE_TEST_COUNT = 5
+REDIS_LIVE_TEST_COUNT = 7
 """Number of tests gated behind Redis reachability (Req 6.2).
 
 Pass `EXPECT_LIVE_TESTS=$REDIS_LIVE_TEST_COUNT` alongside a reachable server
-(e.g. `EXPECT_LIVE_TESTS=5 mise run test:redis`) so a lane that silently
+(e.g. `EXPECT_LIVE_TESTS=7 mise run test:redis`) so a lane that silently
 collects zero live cases - for example a marker expression that no longer
 matches anything - fails instead of reporting success (Req 13.8).
 `test_redis_test_gating.py` guards this value against drift as tests are

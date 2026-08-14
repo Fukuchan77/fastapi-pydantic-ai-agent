@@ -126,7 +126,7 @@ class LLMJudge[T]:
             model: The model used to grade - independent of the agent under
                 test, per Req 6.4.
         """
-        self._agent = Agent[None, Rating](
+        self._agent = Agent[object, Rating](
             model=model,
             output_type=Rating,
             # See app/agents/chat_agent.py: `output_retries=` is deprecated in

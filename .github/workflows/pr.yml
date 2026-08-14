@@ -44,7 +44,7 @@ jobs:
 
       - name: Test (Redis session store live lane)
         env:
-          EXPECT_LIVE_TESTS: "5"
+          EXPECT_LIVE_TESTS: "7"
         run: mise run test:redis
 
       - name: Audit dependencies (pip-audit)

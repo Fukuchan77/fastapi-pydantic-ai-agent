@@ -38,14 +38,22 @@ class RedisSessionStore:
     Args:
         redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
         session_ttl: Time-to-live for sessions in seconds (default: 3600)
-        key_prefix: Prefix for all Redis keys (default: "session:")
+        key_prefix: Prefix for all Redis keys (default: "session:v2:")
         max_messages: Maximum number of messages retained per session
             (default: `InMemorySessionStore.DEFAULT_MAX_MESSAGES`, matching
             the in-memory store's effective cap).
+
+    Key-prefix cutover (Req 7.1, 7.4): `DEFAULT_KEY_PREFIX` moved from
+    `"session:"` to `"session:v2:"` alongside the pydantic-ai v2 migration, so
+    a v2 store never reads history a pre-cutover ("v1") instance wrote and
+    vice versa. The accepted cost is that pre-cutover sessions are dropped at
+    cutover — there is deliberately no migration or deletion path for keys
+    under the old prefix; they expire on their own through the TTL that was
+    already set when they were written.
     """
 
     DEFAULT_SESSION_TTL: int = 3600
-    DEFAULT_KEY_PREFIX: str = "session:"
+    DEFAULT_KEY_PREFIX: str = "session:v2:"
     MAX_SESSION_ID_LENGTH: int = 256
 
     def __init__(
@@ -60,7 +68,7 @@ class RedisSessionStore:
         Args:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
             session_ttl: Time-to-live for inactive sessions in seconds (default: 3600)
-            key_prefix: Prefix for all Redis keys (default: "session:")
+            key_prefix: Prefix for all Redis keys (default: "session:v2:")
             max_messages: Maximum number of messages retained per session
                 (default: `InMemorySessionStore.DEFAULT_MAX_MESSAGES`). A save
                 exceeding this cap is trimmed to it rather than rejected —
