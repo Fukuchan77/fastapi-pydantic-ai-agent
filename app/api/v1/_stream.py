@@ -177,6 +177,15 @@ async def _agent_event_stream(
                 elif Agent.is_call_tools_node(node):
                     async with node.stream(agent_run.ctx) as handle_stream:
                         async for event in handle_stream:
+                            # v2 classifies output-tool invocations as their own
+                            # sibling event kinds (`OutputToolCallEvent`/
+                            # `OutputToolResultEvent`, neither a subclass of
+                            # `FunctionToolCallEvent`), so they would stop
+                            # surfacing as `tool_called` if the output mode ever
+                            # became tool-based - inert today under
+                            # `NativeOutput`. Function tools still raise
+                            # `FunctionToolCallEvent`, so this branch is
+                            # unaffected.
                             if isinstance(event, FunctionToolCallEvent):
                                 yield ToolCalled(
                                     name=event.part.tool_name,

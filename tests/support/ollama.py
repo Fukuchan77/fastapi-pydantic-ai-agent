@@ -13,6 +13,28 @@ import pytest
 OLLAMA_BASE_URL = "http://localhost:11434"
 """Default Ollama API base URL (LiteLLM's default for the ollama provider)."""
 
+OLLAMA_LIVE_TEST_COUNT = 6
+"""Number of `ollama`-marked test functions gated behind Ollama reachability (Req 6.7).
+
+Modelled on `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`. Unlike the Redis
+and Chroma lanes, whose live cases each live in one gated module, the
+`ollama` marker is applied per test function across every module in
+`tests/local/`, so this count is the sum across all of them:
+`test_llm_granite41.py` (3), `test_llm_llama32.py` (2), and
+`test_readiness_probe_live.py` (1).
+
+Pass `EXPECT_LIVE_TESTS=$OLLAMA_LIVE_TEST_COUNT` alongside a reachable
+server (e.g. `EXPECT_LIVE_TESTS=6 mise run test:local`) so a lane that
+silently collects zero live cases fails instead of reporting success (Req
+13.8). `tests/unit/test_local_test_gating.py` guards this value against drift
+in four places: `test_ollama_live_test_count_matches_gated_modules` as tests
+are added to or removed from `tests/local/`, and one test each for the
+pre-push hook's `EXPECT_LIVE_TESTS` literal and its prose restatements in
+`CLAUDE.md`/`AGENTS.md`. `docs/adapter-probe-report*.md` also states a count
+and is deliberately excluded - Req 6.8 forbids editing a gate-evidence
+artifact when this count rises.
+"""
+
 
 def list_pulled_models() -> frozenset[str]:
     """Fetch the set of model names currently pulled into the local Ollama server.

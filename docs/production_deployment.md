@@ -511,3 +511,31 @@ Set up uptime monitoring on the `/health` and `/health/ready` endpoints:
 ```bash
 # Example: Kubernetes
 ```
+
+### Redis Key-Prefix Cutover Alerting
+
+The pydantic-ai v2 migration bumped `RedisSessionStore.DEFAULT_KEY_PREFIX` from
+`session:` to `session:v2:` (Req 7.1) so a v2 instance can never read history a
+pre-cutover ("v1") instance wrote, and vice versa (Req 7.2). Pre-cutover keys are
+not deleted — they are left to expire through their existing write-time TTL (Req
+7.4), so the accepted cost of the cutover is that in-flight pre-cutover sessions
+are dropped rather than migrated.
+
+Because the two prefixes are mechanically isolated, a wire-format mismatch (a
+pre-cutover payload read by v2 code, or vice versa, e.g. during a rolling
+deploy or a rollback) cannot surface as one session reading another session's
+history. Instead, `RedisSessionStore.get_history` treats it exactly like any
+other corrupt payload (Req 7.6): it returns an empty history and logs
+
+```
+WARNING: Failed to deserialize session %s
+```
+
+rather than an error response, so the caller only ever sees an empty
+conversation. That warning is silent to API clients and to the `/health/ready`
+probe — **the log line's rate is the only signal a wire-format mismatch is
+occurring at all** (Req 7.7). Alert on a rate increase, not on mere presence
+(isolated deserialization failures from unrelated data corruption are
+expected), for the duration of the cutover — i.e. until the pre-cutover
+`session:` keys have fully expired via `session_ttl` (default 3600s) after the
+last pre-cutover write. Remove the alert once that rollout window has passed.

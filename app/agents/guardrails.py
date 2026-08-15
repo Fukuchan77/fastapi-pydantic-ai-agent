@@ -227,9 +227,11 @@ def classify_usage_limit_exceeded(exc: UsageLimitExceeded) -> StopReason:
     `UsageLimitExceeded` (a bare `pydantic_ai.exceptions.AgentRunError`) carries
     no structured attribute distinguishing which limit fired - only a message
     string built by `pydantic_ai.usage.UsageLimits.check_before_request` /
-    `.check_before_tool_call` / `.check_tokens`. Request-count and
-    tool-call-count limits describe the agentic loop running too many
-    iterations; token limits describe exhausting the token budget.
+    `.check_before_tool_call` / `.check_tokens` / `.check_cost` /
+    `.check_per_request_input_tokens` (the latter two added in v2, Req 5.4).
+    Request-count and tool-call-count limits describe the agentic loop running
+    too many iterations; token and cost limits describe exhausting the run's
+    budget.
 
     Args:
         exc: The exception raised by `UsageLimits` enforcement.

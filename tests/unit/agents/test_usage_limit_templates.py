@@ -17,6 +17,7 @@ site's leading sentence still fails this suite rather than letting
 `classify_usage_limit_exceeded` quietly return the wrong `StopReason`.
 """
 
+from decimal import Decimal
 from typing import ClassVar
 
 import pytest
@@ -29,13 +30,18 @@ from tests.support.usage_limits import assert_usage_limit_message
 
 
 class TestUsageLimitMessageTemplates:
-    """Drive each of `UsageLimits`' seven raise sites and pin its message (Req 1.1-1.5).
+    """Drive each of `UsageLimits`' ten raise sites and pin its message (Req 1.1-1.5).
+
+    v2 widened the site set from the seven `003` recorded: a `cost_limit`
+    branch inside `check_before_request`, and two wholly new methods -
+    `check_cost` and `check_per_request_input_tokens` - each with their own
+    raise site (Req 5.4).
 
     Each assertion goes through `assert_usage_limit_message` rather than exact
     string equality: pinned prefix at every site, plus the keying-substring
     disposition `classify_usage_limit_exceeded` inspects -
     `request_limit`/`tool_calls_limit` positive only at the two sites that
-    must classify as `max_iterations`, both negative at the other five, whose
+    must classify as `max_iterations`, both negative at the other eight, whose
     absence is what makes the classifier fall through to `budget_exceeded`.
     """
 
@@ -135,6 +141,47 @@ class TestUsageLimitMessageTemplates:
             exc_info.value,
             prefix=("The next tool call(s) would exceed the tool_calls_limit of 1 (tool_calls=2)."),
             keying_substrings={"request_limit": False, "tool_calls_limit": True},
+        )
+
+    def test_check_before_request_cost_limit(self) -> None:
+        """`check_before_request` raises with the pre-flight cost_limit template (v2, Req 5.4)."""
+        limits = UsageLimits(request_limit=None, cost_limit=Decimal("5"))
+        usage = RunUsage(cost=Decimal("6"))
+
+        with pytest.raises(UsageLimitExceeded) as exc_info:
+            limits.check_before_request(usage)
+
+        assert_usage_limit_message(
+            exc_info.value,
+            prefix="The next request would exceed the `cost_limit` of 5 (`cost`=Decimal('6'))",
+            keying_substrings={"request_limit": False, "tool_calls_limit": False},
+        )
+
+    def test_check_cost_cost_limit(self) -> None:
+        """`check_cost` raises with the post-response cost_limit template (v2, Req 5.4)."""
+        limits = UsageLimits(cost_limit=Decimal("5"))
+        usage = RunUsage(cost=Decimal("6"))
+
+        with pytest.raises(UsageLimitExceeded) as exc_info:
+            limits.check_cost(usage)
+
+        assert_usage_limit_message(
+            exc_info.value,
+            prefix="Exceeded the `cost_limit` of 5 (`usage.cost`=Decimal('6'))",
+            keying_substrings={"request_limit": False, "tool_calls_limit": False},
+        )
+
+    def test_check_per_request_input_tokens_per_request_input_tokens_limit(self) -> None:
+        """`check_per_request_input_tokens` raises with its own template (v2, Req 5.4)."""
+        limits = UsageLimits(per_request_input_tokens_limit=5)
+
+        with pytest.raises(UsageLimitExceeded) as exc_info:
+            limits.check_per_request_input_tokens(6)
+
+        assert_usage_limit_message(
+            exc_info.value,
+            prefix="Exceeded the per_request_input_tokens_limit of 5 (request_input_tokens=6)",
+            keying_substrings={"request_limit": False, "tool_calls_limit": False},
         )
 
 

@@ -21,7 +21,7 @@ if curl --fail --silent --show-error --max-time 5 "${OLLAMA_BASE_URL}/api/tags" 
   # evals/runner.py directly, not pytest, so the EXPECT_LIVE_TESTS plugin has
   # no session to attach to there; its own golden-set exit-code check is that
   # lane's anti-false-green guard instead.
-  EXPECT_LIVE_TESTS=5 mise run test:local
+  EXPECT_LIVE_TESTS=6 mise run test:local
   mise run evals
 else
   echo "pre-push: WARNING - Ollama not reachable at ${OLLAMA_BASE_URL}; skipping local tests and evals" >&2

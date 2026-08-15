@@ -5,6 +5,12 @@ directly against `mock_web_search` (registered via `register_mock_tools`,
 dev-only per `app.agents.tools_mock`) with a `TestModel` scripted to call it,
 so the disallowed_tool/denied/budget_exceeded branches don't depend on Req 15's
 deferred real-tool work.
+
+At 500-999 lines this module is in the file-size policy's review band; not
+split, since it is the sole test module for the single `app/agents/
+guardrails.py` unit under test and stays well under the 1000-line hard cap.
+The guarded-toolset composition cases at the bottom (Req 6.3-6.5) are what
+last pushed it into that band.
 """
 
 from unittest.mock import AsyncMock
@@ -453,3 +459,194 @@ class TestAuditTrail:
         trail.record(entry)
 
         assert trail.entries == [entry]
+
+
+async def _assert_toolset_composition_is_guarded(agent, guarded, ctx) -> None:
+    """Assert every tool visible on `agent.toolsets` is registered exactly once, only via `guarded`.
+
+    The invariant (Req 6.4) is unverifiable from signatures alone - v2
+    reworked how an active `agent.override()` resolves through
+    `Agent.toolsets` - so this walks that live, resolved list and calls
+    `get_tools()` on each entry instead of inspecting construction
+    arguments.
+
+    Args:
+        agent: The agent whose currently active override is under test.
+        guarded: The one toolset every tool is expected to be reachable through.
+        ctx: A `RunContext` used to resolve each toolset's tools.
+
+    Raises:
+        AssertionError: A tool is registered more than once across
+            `agent.toolsets`, or some toolset other than `guarded` exposes one.
+    """
+    seen: set[str] = set()
+    for toolset in agent.toolsets:
+        tools = await toolset.get_tools(ctx)
+        if toolset is not guarded:
+            assert not tools, f"tool(s) {sorted(tools)} exposed outside the guarded toolset"
+        for name in tools:
+            assert name not in seen, f"tool {name!r} registered more than once"
+            seen.add(name)
+
+
+class TestGuardedToolsetCompositionInvariant:
+    """Req 6.5: prove the composition check has teeth before trusting it at a real install site.
+
+    `AbstractToolset` composition is unverifiable from signatures alone - v2
+    reworked how an active `agent.override()` resolves through
+    `Agent.toolsets` - so an undemonstrated assertion would be
+    indistinguishable from a vacuous one. Each case below builds a
+    deliberately broken install and confirms
+    `_assert_toolset_composition_is_guarded` catches it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_catches_double_registration_when_tools_are_not_emptied(self) -> None:
+        """Omitting `tools=[]` re-exposes the directly-registered tool unguarded and twice.
+
+        This is the exact historical risk `run_guarded`'s own docstring
+        names: without `tools=[]`, `agent.toolsets` keeps the real function
+        toolset holding `mock_web_search` *and* `guarded` wraps a snapshot
+        that already includes it - the tool is reachable both bypassing the
+        guard and through it. Confirmed by direct inspection (not asserted
+        here): with this override active, `agent.toolsets` yields
+        `mock_web_search` from both the unguarded function toolset and from
+        `guarded`.
+        """
+        from pydantic_ai import RunContext
+
+        model = TestModel(call_tools=[])
+        agent = _build_agent(model)
+        audit = AuditTrail()
+        guarded = build_guarded_toolset(agent, limits=UsageLimits(), audit=audit)
+        ctx = RunContext(deps=_build_deps(), model=model, usage=RunUsage())
+
+        with agent.override(toolsets=[guarded]), pytest.raises(AssertionError):  # no tools=[]
+            await _assert_toolset_composition_is_guarded(agent, guarded, ctx)
+
+    @pytest.mark.asyncio
+    async def test_catches_tool_exposed_by_a_sibling_unguarded_toolset(self) -> None:
+        """An extra, unwrapped toolset installed beside the guarded one leaks its tool.
+
+        No duplicate name is involved here - `leaked_tool` exists nowhere
+        else - isolating the "no tool outside the guard" clause from the
+        "registered exactly once" clause the first case already exercises.
+        `tools=[]` is passed correctly, so this variant is broken only by
+        the sibling toolset.
+        """
+        from pydantic_ai import RunContext
+        from pydantic_ai.toolsets import FunctionToolset
+
+        def leaked_tool() -> str:
+            return "leaked"
+
+        model = TestModel(call_tools=[])
+        agent = _build_agent(model)
+        audit = AuditTrail()
+        guarded = build_guarded_toolset(agent, limits=UsageLimits(), audit=audit)
+        sibling = FunctionToolset(tools=[leaked_tool])
+        ctx = RunContext(deps=_build_deps(), model=model, usage=RunUsage())
+
+        with agent.override(tools=[], toolsets=[guarded, sibling]), pytest.raises(AssertionError):
+            await _assert_toolset_composition_is_guarded(agent, guarded, ctx)
+
+
+class TestGuardedToolsetCompositionAtRealInstallSites:
+    """Req 6.3/6.4: the composition invariant holds at both real, unmodified install sites.
+
+    `run_guarded()` and `_agent_event_stream()` each independently build
+    their own guarded toolset and call `agent.override(tools=[],
+    toolsets=[guarded])` (Req 6.4: proving the invariant at one site says
+    nothing about the other, so each gets its own test). Both sites already
+    use the correct idiom today, so these are regression-pinning rather than
+    a defect fix - the existing audit-trail expectations elsewhere in this
+    module passing without re-baselining is the acceptance evidence that v1
+    behaviour survived the bump (Req 6.3).
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_guarded_site_holds_the_invariant(self) -> None:
+        """The non-streaming `run_guarded()` install site never double-registers or leaks a tool.
+
+        `build_guarded_toolset` is patched only to capture the exact
+        instance it returns - the unpatched function still runs underneath
+        - so the check below verifies the genuine `guarded_toolset` object
+        `run_guarded()` installs, not a stand-in built separately by the
+        test.
+        """
+        from pydantic_ai import RunContext
+
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+        captured: dict[str, object] = {}
+
+        def _capturing_build(*args: object, **kwargs: object) -> object:
+            toolset = build_guarded_toolset(*args, **kwargs)
+            captured["guarded"] = toolset
+            return toolset
+
+        real_run = agent.run
+
+        async def _checking_run(*args: object, **kwargs: object) -> object:
+            # Invoked by run_guarded() from inside its own active
+            # `agent.override(...)` block, so `agent.toolsets` already
+            # reflects the real install under test at this point.
+            ctx = RunContext(deps=kwargs["deps"], model=model, usage=kwargs["usage"])
+            await _assert_toolset_composition_is_guarded(agent, captured["guarded"], ctx)
+            return await real_run(*args, **kwargs)
+
+        with (
+            patch("app.agents.guardrails.build_guarded_toolset", side_effect=_capturing_build),
+            patch.object(agent, "run", side_effect=_checking_run),
+        ):
+            result = await run_guarded(
+                agent,
+                "search for something",
+                deps=_build_deps(),
+                limits=UsageLimits(),
+            )
+
+        assert result.stop_reason == "completed"
+        assert "guarded" in captured
+
+    @pytest.mark.asyncio
+    async def test_stream_site_holds_the_invariant(self) -> None:
+        """The streaming `_agent_event_stream()` site never double-registers or leaks a tool.
+
+        Unlike `run_guarded()`, this site is an async generator whose
+        `agent.override(...)` block stays entered across a `yield`
+        (`_drive_to_queue`'s own docstring records the same property for
+        the surrounding cancel scope), so the check runs directly against
+        the live agent right after the first event - no `agent.run`
+        patching needed here.
+        """
+        from pydantic_ai import RunContext
+
+        from app.api.v1._stream import _agent_event_stream
+        from app.models.agent import ChatRequest
+
+        model = TestModel(call_tools=[])
+        chat_agent = _build_agent(model)
+        deps = _build_deps()
+        captured: dict[str, object] = {}
+
+        def _capturing_build(*args: object, **kwargs: object) -> object:
+            toolset = build_guarded_toolset(*args, **kwargs)
+            captured["guarded"] = toolset
+            return toolset
+
+        with patch("app.api.v1._stream.build_guarded_toolset", side_effect=_capturing_build):
+            agen = _agent_event_stream(
+                chat_agent,
+                ChatRequest(message="hi"),
+                deps,
+                history=[],
+                settings=deps.settings,
+            )
+            await agen.__anext__()
+            ctx = RunContext(deps=deps, model=model, usage=RunUsage())
+            await _assert_toolset_composition_is_guarded(chat_agent, captured["guarded"], ctx)
+            async for _ in agen:
+                pass
+
+        assert "guarded" in captured
