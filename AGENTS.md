@@ -20,6 +20,7 @@ mise run evals               # offline LLM-judge golden set; makes REAL LLM call
 mise run lint                # ruff check + ty check (type checker is `ty`, NOT mypy)
 mise run format              # ruff format
 mise run audit               # pip-audit dependency vulnerability scan
+mise run hooks:install       # install pre-commit hook
 mise run build               # docker build
 ```
 
@@ -35,6 +36,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **File size**: <500 lines OK, 500–999 review splitting, ≥1000 **prohibited** — see `.sdd/steering/file-size-policy.md`
 - **No direct `os.environ` reads**: All env access goes through `Settings` / `get_settings()`. Constitution Principle 4.
 - **`evals/`** is production-linted code (not a scratch directory) — Ruff + `ty` cover it.
+- **`filterwarnings = ["error::DeprecationWarning"]`** in `pyproject.toml` — any deprecation warning from any module is a hard test error. Re-census on every pydantic-ai constraint bump.
 
 ## Architecture
 
@@ -46,7 +48,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 **CORS is this project's own middleware** (`app/middleware/cors.py`), not starlette's: it merges `Origin` into an existing `Vary` header instead of replacing it, and a disallowed origin gets no CORS headers rather than an error.
 
-**Middleware order is inverted** — FastAPI executes in *reverse* registration order. `TrustedHostMiddleware` is added last so it runs first (ahead of CORS); SecurityHeaders added first so it runs last. Do not reorder without reading the comments in `main.py`.
+**Middleware order is inverted** — FastAPI executes in *reverse* registration order. `TrustedHostMiddleware` is added last so it runs first (ahead of CORS); SecurityHeaders added first so it runs last. `RequestSizeLimitMiddleware` is registered *before* `RequestIDMiddleware` so the latter runs first and stamps `X-Request-ID` even on 413 responses. Do not reorder without reading the comments in `main.py`.
 
 **Host validation** — `allowed_hosts` defaults to `["*"]` for dev, but `Settings` rejects `"*"` whenever `app_env != "development"` (staging and production both): starlette rebuilds redirect `Location` from the `Host` header and `redirect_slashes` is on, so a wildcard allow-list is an unauthenticated open-redirect. Wildcards use starlette's `*.example.com` form, not Django's `.example.com`.
 
@@ -62,11 +64,17 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 **NativeOutput gating**: `build_chat_agent()` picks `NativeOutput(ChatOutput)` when `supports_json_schema_output` is true, plain `str` otherwise. Under `NativeOutput`, SSE text deltas are suppressed and the parsed `ChatOutput.reply` is emitted as one `Token` at the `End` node. Every downstream consumer (route handler, evals runner) must handle both paths.
 
-**Agent guardrails** (`app/agents/guardrails.py`) wrap every run in one `_GuardedToolset`: allow-list → approval hook → token budget, every refusal recorded into an `AuditTrail`. Outcomes use a closed `StopReason` vocabulary (`completed`/`max_iterations`/`budget_exceeded`/`denied`/`disallowed_tool`); native `UsageLimitExceeded` is mapped in by `classify_usage_limit_exceeded()`. Install idiom is `agent.override(tools=[], toolsets=[guarded])` — omitting `tools=[]` double-registers direct tools because `agent.toolsets` re-includes `@agent.tool` registrations regardless of `override(toolsets=...)`.
+**`end_strategy="early"` is pinned explicitly** in `build_chat_agent()` — v2 flipped `Agent.__init__`'s default to `"graceful"`, which would keep executing pending tool calls after the final result and shift guardrail tool-call counts, audit-trail contents, and token-budget accounting. The RAG agents omit it deliberately (no function tools registered). Its test asserts on the mocked constructor kwargs, since a post-construction read can't distinguish a pin from a matching default.
+
+**Agent guardrails** (`app/agents/guardrails.py`) wrap every run in one `_GuardedToolset`: allow-list → approval hook → token budget, every refusal recorded into an `AuditTrail`. Outcomes use a closed `StopReason` vocabulary (`completed`/`max_iterations`/`budget_exceeded`/`denied`/`disallowed_tool`); native `UsageLimitExceeded` is mapped in by `classify_usage_limit_exceeded()`. Install idiom is `agent.override(tools=[], toolsets=[guarded])` — omitting `tools=[]` double-registers direct tools because `agent.toolsets` re-includes `@agent.tool` registrations regardless of `override(toolsets=...)`. Refused tools remain **visible** in the model's schema (not hidden), so hallucinated calls still reach `call_tool()` and get audited. A stopped run persists **no** session history — only `stop_reason == "completed"` saves. `classify_usage_limit_exceeded()` keys off the exception's message string (no structured attribute exists); v2 widened the raise sites 7 → 10 (`check_cost`, `check_per_request_input_tokens`, plus a `cost_limit` branch in `check_before_request`), so `test_usage_limit_templates.py` matches by prefix **plus** keying-substring containment, not exact template text. Toolset composition is pinned at **both** install sites (`run_guarded` and the SSE stream) — each builds its own toolset, so one test proves nothing about the other.
+
+**v2 output-tool events**: v2 classifies output-tool invocations as sibling event kinds (`OutputToolCallEvent`/`OutputToolResultEvent`, not `FunctionToolCallEvent` subclasses), so they would stop surfacing as `tool_called` if the output mode ever became tool-based — inert today under `NativeOutput`. Function tools still raise `FunctionToolCallEvent`; the wire contract still emits exactly the five typed event kinds.
+
+**v2 usage-instrumentation rename**: `logfire.instrument_pydantic_ai()` is called with no arguments, so agent-**run** spans now emit cumulative token attributes as `gen_ai.aggregated_usage.*` instead of `gen_ai.usage.*` (nested `chat` spans unchanged), and the data format moved 2 → 5. No `app/` code changed for this — see `docs/pydantic-ai-v2-behaviour-notes.md` before building a Logfire dashboard or query.
 
 **SSE `_drive_to_queue` gotcha**: `Agent.iter()` holds an anyio cancel scope open across yields; anyio requires the same task to enter and exit it — driving `__anext__()` through a fresh `asyncio.wait_for()` per iteration raises "Attempted to exit cancel scope in a different task". The driver runs as one persistent task communicating via `asyncio.Queue`.
 
-**Settings cache**: `get_settings()` is `@cache`d and called at module level in `main.py`. Tests must call `get_settings.cache_clear()` after patching env vars — the autouse `clear_settings_cache` fixture in `tests/conftest.py` does this automatically.
+**Settings cache**: `get_settings()` is `@cache`d and called at module level in `main.py`. Tests must call `get_settings.cache_clear()` after patching env vars — the autouse `clear_settings_cache` fixture in `tests/conftest.py` does this automatically. `Settings` has `extra="forbid"` — typos in `.env` cause a `ValidationError` at startup.
 
 **Mock tools are double-guarded**: registered only when `app_env != "production"` AND `enable_mock_tools` is set; import of `app/agents/tools_mock.py` is deferred. Never enable in production config.
 
@@ -76,7 +84,11 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 **RAG uses the shared model chain**: `get_rag_workflow` reads `app.state.settings` and `app.state.llm_model` — the same `FallbackModel` chain the chat agent uses — instead of rebuilding a model. Either singleton absent fails the request with a flat-envelope 503 (`code="DEPENDENCY_NOT_INITIALIZED"`), never a silent fallback to process-global settings.
 
-**Session ownership without a lookup table**: session ids are `{principal.id}.{token}.{signature}` (HMAC-signed). `authorize_session()` verifies with `secrets.compare_digest` and 403s on malformed/foreign ids. `POST /v1/agent/stream` can only *authorize* an existing id — no new id can be returned on that endpoint.
+**Session ownership without a lookup table**: session ids are `{principal.id}.{token}.{signature}` (HMAC-signed). `authorize_session()` verifies with `secrets.compare_digest` and 403s on malformed/foreign ids. `POST /v1/agent/stream` can only *authorize* an existing id — no new id can be returned on that endpoint. **Do not add an ownership table** — the design is stateless-by-intent.
+
+**`verify_api_key`** (`app/deps/auth.py`) is an identity dependency, not just a gate — it validates `X-API-Key` and **returns a `Principal`**. `principal.id` is `sha256(api_key)[:16]`, which seeds session ids.
+
+**Redis session key prefix cut over to `"session:v2:"`** (`RedisSessionStore.DEFAULT_KEY_PREFIX`, was `"session:"`) alongside the pydantic-ai v2 bump, so a v2 instance never deserializes v1-written history. The factory passes no prefix, so that class default *is* the production prefix. Pre-cutover sessions are dropped by design — no migration and no deletion path; old keys expire on their own write-time TTL. During a cutover the deserialization-warning rate is the only signal of a wire-format mismatch (`docs/production_deployment.md`).
 
 **Session trimming**: `trim_history()` (`app/stores/session_store/_trim.py`) is a pure function shared by both `SessionStore` backends, bounded by `session_max_messages` (default `1000`). Cuts land only between messages, never orphan a retained tool-call pair, and always keep `messages[0]` (the system prompt) — which is why the result can be `max_messages + 1` long, not exactly `max_messages`.
 
@@ -91,6 +103,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **`EXPECT_LIVE_TESTS=N`** env var: session fails if the actual executed test count ≠ N — used to guard gated test lanes from silent skips
 - **`chroma` marker**: opt-in (`RUN_CHROMA_INTEGRATION_TESTS` env var); downloads a Hugging Face embedding model — do not run routinely: `RUN_CHROMA_INTEGRATION_TESTS=1 EXPECT_LIVE_TESTS=6 uv run pytest tests/integration/test_chroma_query_with_scores.py` (`6` = `tests/support/chroma.py::CHROMA_LIVE_TEST_COUNT`)
 - **`redis` marker**: gated on live reachability, not an opt-in var — `tests/support/redis.py::redis_reachable()` probes a real server and the lane skips (never fails) when none answers: `EXPECT_LIVE_TESTS=7 mise run test:redis` (`7` = `tests/support/redis.py::REDIS_LIVE_TEST_COUNT`)
+- **`ollama` marker**: applied per test *function* across every module in `tests/local/`, so `tests/support/ollama.py::OLLAMA_LIVE_TEST_COUNT` is a sum, not one module's count. `test_local_test_gating.py` pins it against the pre-push hook literal and the prose restatements in `CLAUDE.md`/`AGENTS.md` — raise all three in lockstep; `docs/adapter-probe-report*.md` deliberately keeps its own run's count
 - Tests for cloud-provider API key validation must `monkeypatch.delenv("LLM_API_KEY")` explicitly (the autouse fixture sets it by default)
 
 ### Repo-guard tests (assert on project structure, not app behavior)
@@ -98,11 +111,11 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 These fail on structural drift — understand what they assert before bypassing:
 
 - `test_file_size_policy.py` — hard-fails any `app/**`/`tests/**` file ≥1000 lines; warns on 500–999
-- `test_contract_drift.py` — README's normative fences must not show classes/fields that no longer exist
+- `test_contract_drift.py` — README's normative fences must not show classes/fields that no longer exist. **One-directional**: README may *omit* newer members, but may not *show* dead ones
 - `test_ci_workflows.py` — every `uses:` in GitHub Actions YAML must be pinned to a 40-char SHA
-- `test_pydantic_ai_api_lock.py` — subset-only lock on the pydantic-ai symbols/params/fields/kinds this project uses (no `app/` imports), so a dependency upgrade fails here by name. Add newly relied-upon symbols to its tables.
+- `test_pydantic_ai_api_lock.py` — subset-only lock on the pydantic-ai symbols/params/fields/kinds this project uses (no `app/` imports), so a dependency upgrade fails here by name. Add newly relied-upon symbols to its tables. `TestAntiFalseGreen` guards against tables being silently emptied.
 - `test_config_dependency_bounds.py` — every production dependency must declare an upper bound
-- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, plus the `chroma`/`local`/`docker`/`redis` gating guards
+- `test_no_hardcoded_model_ids.py`, `test_naming_conventions.py`, `test_pre_push_hook.py`, `test_expect_live_tests_plugin.py`, `test_block_network.py`, `test_pytest_config.py`, plus the gating guards: `test_chroma_test_gating.py`, `test_local_test_gating.py`, `test_docker_deployment_gating.py`, `test_redis_test_gating.py`
 
 ## Dependency Pins That Are Load-Bearing
 
@@ -110,7 +123,9 @@ These fail on structural drift — understand what they assert before bypassing:
 
 `pydantic-ai-litellm` is pinned `>=0.2.3,<0.3.0` in `pyproject.toml` — capped below its next **minor**, not its next major: it's a 0.x package depending on six private pydantic-ai APIs, so its minors are its breaking releases and `<1.0` would admit 0.3.x–0.9.x unreviewed. Mirrors how `fastapi` is handled for 0.x versioning; `tests/unit/test_pydantic_ai_api_lock.py` is what catches such a breakage, not the pin.
 
-A private-API coupling, not a version bound: the rate-limit-exceeded handler (`app/middleware/rate_limit.py`) delegates 429 header construction (`X-RateLimit-*`, delay-seconds `Retry-After`) to slowapi's `Limiter._inject_headers` — a leading-underscore method with no compatibility guarantee. A slowapi upgrade needs re-verification against `tests/unit/test_middleware_rate_limit_global_envelope.py`.
+A private-API coupling, not a version bound: the rate-limit-exceeded handler (`app/middleware/rate_limit.py`) delegates 429 header construction (`X-RateLimit-*`, delay-seconds `Retry-After`) to slowapi's `Limiter._inject_headers` — a leading-underscore method with no compatibility guarantee. A slowapi upgrade needs re-verification against `tests/unit/test_middleware_rate_limit_global_envelope.py` AND `tests/unit/middleware/test_rate_limit_retry_after.py`.
+
+**`rate_limit_exceeded_handler` must be `def`, not `async def`** — slowapi's `SlowAPIMiddleware` uses `inspect.iscoroutinefunction` and silently swaps an `async` handler for its own default `{"error": ...}` handler, bypassing the flat error envelope. The handler body has no `await`, so sync is correct. Do not convert it to `async def`.
 
 ## CI Gating
 
@@ -120,10 +135,11 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 - **pre-push** (`.githooks/pre-push`, opt-in via `git config core.hooksPath .githooks`): probes Ollama, runs `EXPECT_LIVE_TESTS=6 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
 - **Dependabot** (`.github/dependabot.yml`): weekly `uv` + `github-actions`, minors/patches grouped. Its `ignore:` list blocks the forbidden bumps — `starlette` majors and `fastapi` **minors and majors** (Dependabot reads fastapi's 0.x releases by patch position, so `0.136 → 0.137` is a minor) — plus `chromadb`/`redis` majors, shelved pending a client-compatibility pass. Guarded by `tests/unit/test_dependabot_config.py`; `docs/dependency-runbook.md` is the accept/shelve process.
 
-## Feature Status (`004-pydantic-ai-v2-unblock` active; `003-pydantic-ai-v2-migration` sealed, both tracked under `.sdd/specs/`)
+## Feature Status (`004-pydantic-ai-v2-unblock` complete; `003-pydantic-ai-v2-migration` sealed, both tracked under `.sdd/specs/`)
 
 - No known active bugs. The `InMemorySessionStore` LRU-victim defect previously listed here is fixed — victim selection now comes from `self._store.keys()` (`app/stores/session_store/in_memory.py`, which carries the comment explaining why).
-- `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED**, so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` is the single active spec and re-executed that gate under its own Requirement 4 (run 1), recording it **PASSED** (evidence: `docs/adapter-probe-report-2026-08-13-run1.md`, cross-referencing the original 2026-08-11 finding at `docs/adapter-probe-report.md`), unblocking the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
+- `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED**, so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` re-executed that gate under its own Requirement 4 (run 1), recording it **PASSED** (evidence: `docs/adapter-probe-report-2026-08-13-run1.md`, cross-referencing the original 2026-08-11 finding at `docs/adapter-probe-report.md`), unblocking the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
+- **All eight of `004`'s change units (tasks 1–8) have shipped**; the only unchecked subtasks are 6.6–6.8, conditional gate-*failure* branches that never fired. No spec is in flight — new work opens a new one. `CLAUDE.md` and `AGENTS.md` are still edited **as a pair in one change unit** (`004` Req 8.2).
 - `pydantic-ai-slim` moved to the 2.x line (`>=2.27.0,<3.0` in `pyproject.toml`) in `004`'s task 7, unblocked by task 6's recorded gate PASS; `pydantic-ai-litellm` bumped alongside it to `>=0.2.3,<0.3.0`.
 
 ## Adding a New Real Agent Tool
