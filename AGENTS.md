@@ -36,7 +36,8 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **File size**: <500 lines OK, 500–999 review splitting, ≥1000 **prohibited** — see `.sdd/steering/file-size-policy.md`
 - **No direct `os.environ` reads**: All env access goes through `Settings` / `get_settings()`. Constitution Principle 4.
 - **`evals/`** is production-linted code (not a scratch directory) — Ruff + `ty` cover it.
-- **`filterwarnings = ["error::DeprecationWarning"]`** in `pyproject.toml` — any deprecation warning from any module is a hard test error. Re-census on every pydantic-ai constraint bump.
+- **`filterwarnings = ["error::DeprecationWarning"]`** in `pyproject.toml` — any deprecation warning from any module is a hard test error. Re-census on every pydantic-ai constraint bump, **and on every Python version change**.
+- **Python is pinned to 3.13** (`.python-version` + `mise.toml`), not merely floored by `requires-python`. 3.14 deprecates `asyncio.iscoroutinefunction`, which `starlette` 0.52.x and `slowapi` 0.1.10 still call and the `starlette<1.0` pin prevents upgrading away from; with warnings-as-errors that is 63 test failures. Guarded by `tests/unit/test_python_version_pin.py`.
 
 ## Architecture
 

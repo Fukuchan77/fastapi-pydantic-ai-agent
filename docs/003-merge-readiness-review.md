@@ -9,12 +9,21 @@
 
 ## 1. 判定
 
-**修正後のマージを推奨する。** 検出した Blocker 3 件のうち実装欠陥 2 件と High 2 件は
-本レビューで修正済み。残る 1 件（BL1）は PR を開けば解消する手続き上の事項。
+**PR #21 の CI が green になり次第、マージを推奨する。**
+
+当初は Blocker 3 件を検出し、うち実装欠陥 2 件と High 2 件を修正した。
+その後 BL1 の解消のために PR を開いたところ、**PR CI で 4 件目の Blocker（BL0）が
+発覚**した — Python 版数が固定されておらず、CI が 3.14 系を解決した結果
+75 件のテストが同一の DeprecationWarning で落ちる、というものである。
+ローカルでは 3.13 だったため一度も再現しなかった。
+
+これは本レビューの最重要の教訓でもある。**ローカルの green は CI の green ではない。**
+BL1（CI が一度も実行されていない）を「手続き上の事項」と評したのは過小評価であり、
+実際にはそれ自体が未検出の Blocker を隠していた。
 
 | 区分 | 件数 | 状態 |
 |------|------|------|
-| Blocker | 3 | 2 件修正済み / 1 件は PR 作成で解消 |
+| Blocker | 4 | すべて修正済み（BL0 は PR CI で初めて発覚） |
 | High | 3 | 2 件修正済み / 1 件は運用対応 |
 | Medium | 6 | 記録のみ（マージの障害ではない） |
 
@@ -27,13 +36,18 @@
 | Lint | `ruff check app/ evals/ tests/` | All checks passed | All checks passed |
 | Format | `ruff format --check` | clean | clean |
 | 型検査 | `ty check app/ evals/` | All checks passed | All checks passed |
-| テスト | `pytest tests/unit tests/integration tests/e2e` | **1431 passed / 22 skipped** | **1483 passed / 23 skipped** |
+| テスト | `pytest tests/unit tests/integration tests/e2e` | **1431 passed / 22 skipped** | **1490 passed / 23 skipped** |
 | カバレッジ | 80% ゲート | 96.44% | 96.19% |
 | 依存監査 | `pip-audit`（除外 5 件） | No known vulnerabilities | No known vulnerabilities |
 
-解決された実バージョン: `pydantic-ai 2.30.0`。
-未実行のレーン: `tests/integration/test_docker_deployment.py`（Docker 不可）、
-`test:redis`（Redis サーバ不在）、`tests/local`（Ollama 不在）、`evals`（実 LLM 必要）。
+解決された実バージョン: `pydantic-ai 2.30.0` / Python 3.13.12。
+ローカルで未実行のレーン: `test_docker_deployment.py`（Docker 不可）、
+`test:redis`（Redis 不在）、`tests/local`（Ollama 不在）、`evals`（実 LLM 必要）。
+このうち Docker レーン（7 件）と Redis レーンは **PR CI 側で実行され、いずれも通っている**
+（run 31862477318 で Docker 7 件 PASSED、Redis サービスコンテナ起動成功）。
+
+> **この表だけでマージ可否を判断してはならない。** BL0 が示すとおり、
+> ローカルの green は CI の green を意味しない。判定の根拠は PR #21 の CI である。
 
 ---
 
@@ -86,7 +100,66 @@
 
 ## 3. Blocker
 
-### BL1. このブランチの CI は一度も実行されていない（未解消・PR 作成で解消）
+### BL0. Python 版数が固定されておらず、CI で全 RAG/レート制限系テストが落ちる（修正済み）
+
+**BL1 を解消するために PR #21 を作成して初めて発覚した。** つまりこれは
+「CI が一度も走っていない」ことが理論上のリスクではなく実在のリスクだった、という実証である。
+
+初回 run 31862477318 は**失敗ではなく 6 時間のジョブタイムアウトで cancelled**。
+打ち切りはキャンセルとして届くため pytest が失敗サマリに到達できず、
+**その時点で失敗していたテストのトレースバックは 1 件も残らなかった**。
+無制限の `await eval_started.wait()`（`test_rag_cache_generation.py`）が
+高速な失敗を無限ハングに変えていたためである。
+
+そのハングを潰した run 31880991303 で全体像が出た:
+
+```
+63 failed, 1426 passed, 8 skipped, 12 errors
+```
+
+**75 件すべてが同一原因**だった:
+
+```
+DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and
+slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+```
+
+原因の連鎖:
+
+1. `mise.toml` は `uv = "latest"` を固定するが **Python は固定していない**。
+   `pyproject.toml` の `requires-python = ">=3.13"` は下限であって上限ではない。
+2. そのため CI では uv が最新の互換 CPython（3.14 系）を解決し、
+   ローカル開発機は 3.13.12 のままという**インタプリタの不一致**が生じた。
+3. Python 3.14 は `asyncio.iscoroutinefunction` を非推奨化した。
+4. `starlette` 0.52.x（`starlette/routing.py`）と `slowapi` 0.1.10
+   （`slowapi/extension.py`）は依然としてこれを呼ぶ。しかも
+   **`starlette<1.0` は本ブランチが意図的に置いた load-bearing なピン**
+   （slowapi 0.1.10 が starlette 1.x でレート制限を静かに無効化するため）であり、
+   アップグレードで回避できない。
+5. `filterwarnings = ["error::DeprecationWarning"]`（意図的に module 非依存）が
+   その呼び出しを 1 件残らず hard failure に変換した。
+
+**修正**: インタプリタを下限ではなく固定にした。
+
+- `.python-version`（uv が最優先で読む）と `mise.toml [tools] python`（CI の
+  ツールチェーン導入元）の双方を `3.13` に固定。両方揃えたのは、uv の既定
+  `python-preference = managed` が PATH 上の Python より uv 管理版を優先しうるため。
+- `tests/unit/test_python_version_pin.py` を追加。`.python-version` /
+  `mise.toml` / `requires-python` の整合に加え、
+  **実行中のインタプリタ自体が固定版であること**を検証する
+  （CI では無関係な 63 件ではなく、この 1 件が落ちるべきだった）。
+- `CLAUDE.md` / `AGENTS.md`（規約により対で更新）に、
+  deprecation センサスは依存バンプだけでなく**Python 版数変更でも無効化される**
+  ことと、固定を解除してよい条件（starlette と slowapi が
+  `inspect.iscoroutinefunction` へ移行したとき）を明記。
+
+> **診断過程の訂正**: 初回 run の切り詰められたログでは失敗が
+> eval agent の構造化出力系に集中して見えたため、当初その経路を疑うと報告した。
+> これは誤りだった。完全なログでは失敗はレート制限・エラー封筒・Chroma ストア・
+> RAG・e2e に広く分布しており、eval agent とは無関係である。
+> 見えていたのはハング直前までに到達した部分集合にすぎなかった。
+
+### BL1. このブランチの CI は一度も実行されていない（PR 作成で解消済み）
 
 ```
 actions_list(list_workflow_runs, branch=003-pydantic-ai-v2-migration) → {"total_count": 0}
