@@ -2,6 +2,11 @@
 
 from collections.abc import Callable
 from collections.abc import Sequence
+from functools import cache
+from ipaddress import IPv4Network
+from ipaddress import IPv6Network
+from ipaddress import ip_address
+from ipaddress import ip_network
 
 import limits
 from fastapi import FastAPI
@@ -17,12 +22,60 @@ from app.config import get_settings
 from app.models.errors import ErrorResponse
 
 
+@cache
+def _parse_trusted_proxies(entries: tuple[str, ...]) -> tuple[IPv4Network | IPv6Network, ...]:
+    """Parse trusted proxy entries into network objects.
+
+    Entries are validated at settings load time
+    (`SecuritySettingsMixin.validate_trusted_proxies`), so parsing cannot fail
+    here. Cached because this runs on the hot path for every request.
+
+    Args:
+        entries: Tuple of IP address or CIDR network strings.
+
+    Returns:
+        tuple: Parsed network objects for containment checks.
+    """
+    return tuple(ip_network(entry, strict=False) for entry in entries)
+
+
+def _is_trusted_proxy(client_ip: str, trusted_proxies: list[str]) -> bool:
+    """Check whether `client_ip` falls inside any configured trusted proxy network.
+
+    Accepts both bare addresses ("10.0.0.1") and CIDR networks ("10.0.0.0/8").
+    CIDR support is load-bearing: `docs/production_deployment.md` configures
+    whole ranges (an ALB's VPC CIDR, Cloudflare's 15 published ranges), and an
+    exact string comparison never matches any of them - which would silently
+    disable real-client-IP extraction for exactly the deployments the guide
+    describes.
+
+    Args:
+        client_ip: The immediate client IP address (TCP connection source).
+        trusted_proxies: Configured trusted proxy addresses or networks.
+
+    Returns:
+        bool: True if `client_ip` is inside any trusted network.
+    """
+    if not trusted_proxies:
+        return False
+
+    try:
+        address = ip_address(client_ip)
+    except ValueError:
+        # Not a parseable address (e.g. the "unknown" placeholder below, or a
+        # Unix-socket transport reporting a path) - never trusted.
+        return False
+
+    return any(address in network for network in _parse_trusted_proxies(tuple(trusted_proxies)))
+
+
 def get_client_identifier(request: Request) -> str:
     """Get client identifier considering proxy headers with trusted proxy validation.
 
     Only trust X-Forwarded-For header when the immediate client
-    (request.client.host) is in the trusted_proxies list. This prevents
-    header spoofing attacks where untrusted clients set fake X-Forwarded-For values.
+    (request.client.host) falls inside the trusted_proxies allow-list. This
+    prevents header spoofing attacks where untrusted clients set fake
+    X-Forwarded-For values.
 
     When behind a trusted proxy or load balancer, the X-Forwarded-For header contains
     the real client IP. This function extracts the first IP from the header,
@@ -30,8 +83,12 @@ def get_client_identifier(request: Request) -> str:
 
     Security:
         - Only trusts X-Forwarded-For when request comes from a trusted proxy
+        - Accepts CIDR networks, so a documented VPC/CDN range actually matches
         - Prevents attackers from bypassing rate limiting by spoofing the header
         - Empty trusted_proxies list means X-Forwarded-For is never trusted
+        - Validates the forwarded value is an IP address before returning it as
+          a bucket key, so a trusted proxy relaying a malformed header cannot
+          create unbounded distinct rate-limit buckets
 
     Args:
         request: FastAPI request object
@@ -49,11 +106,17 @@ def get_client_identifier(request: Request) -> str:
     # Check for X-Forwarded-For header (set by proxies/load balancers)
     forwarded = request.headers.get("X-Forwarded-For")
 
-    # Only trust X-Forwarded-For if the immediate client is in trusted_proxies
-    if forwarded and direct_client_ip in trusted_proxies:
+    # Only trust X-Forwarded-For if the immediate client is a trusted proxy
+    if forwarded and _is_trusted_proxy(direct_client_ip, trusted_proxies):
         # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
         # The first IP is the actual client
-        return forwarded.split(",")[0].strip()
+        candidate = forwarded.split(",")[0].strip()
+        try:
+            ip_address(candidate)
+        except ValueError:
+            # Malformed forwarded value - fall back to the direct connection IP
+            return direct_client_ip
+        return candidate
 
     # Fall back to direct connection IP (ignore X-Forwarded-For from untrusted sources)
     return direct_client_ip

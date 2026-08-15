@@ -9,6 +9,8 @@ from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 
+from app.config._secret_placeholders import is_placeholder
+
 
 _ALLOWED_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "groq"]
 
@@ -106,22 +108,10 @@ class LLMSettingsMixin(BaseModel):
         if not v_stripped:
             raise ValueError("llm_api_key cannot be empty or whitespace only")
 
-        # Define common placeholder values (case-insensitive)
-        placeholders = {
-            "your-api-key-here",
-            "changeme",
-            "change-me",
-            "test-key",
-            "example",
-            "replace-me",
-            "insert-key-here",
-            "api-key-here",
-        }
-
-        # Check if the key (lowercased) is a known placeholder
+        # Check whether the key is a known placeholder.
         # This check must come BEFORE length check so placeholders are detected
         # even if they happen to be 16+ characters (e.g., "your-api-key-here" is 19 chars)
-        if v_stripped.lower() in placeholders:
+        if is_placeholder(v_stripped):
             raise ValueError(
                 "llm_api_key appears to be a placeholder value. "
                 "Please set a strong LLM API key with at least 16 characters."

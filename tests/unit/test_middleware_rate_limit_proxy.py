@@ -9,13 +9,20 @@ from fastapi.testclient import TestClient
 from app.middleware.rate_limit import add_rate_limiting
 
 
+# Simulates a request arriving from a trusted proxy. `trusted_proxies` accepts
+# only IP addresses and CIDR networks, so TestClient must be given a real source
+# address rather than its default "testclient" host.
+TRUSTED_PROXY_CLIENT = ("10.0.0.1", 12345)
+
+
 @pytest.fixture
 def app_with_rate_limit_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     """Create a FastAPI app with rate limiting that considers proxy headers."""
-    # Configure trusted proxies to include testclient
+    # Configure trusted proxies to cover the simulated proxy address below.
+    # A CIDR network is used here so this fixture also exercises network matching.
     # This allows the test to properly test X-Forwarded-For header handling
     # Note: trusted_proxies is a list[str], so we need to provide JSON format
-    monkeypatch.setenv("TRUSTED_PROXIES", '["testclient"]')
+    monkeypatch.setenv("TRUSTED_PROXIES", '["10.0.0.0/8"]')
 
     # Clear the settings cache so the new environment variable is picked up
     from app.config import get_settings
@@ -43,7 +50,7 @@ def app_with_rate_limit_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 @pytest.fixture
 def client(app_with_rate_limit_proxy: FastAPI) -> TestClient:
     """Create test client."""
-    return TestClient(app_with_rate_limit_proxy)
+    return TestClient(app_with_rate_limit_proxy, client=TRUSTED_PROXY_CLIENT)
 
 
 def test_rate_limit_considers_x_forwarded_for_header(client: TestClient) -> None:

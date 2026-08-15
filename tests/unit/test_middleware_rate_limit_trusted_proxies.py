@@ -14,6 +14,12 @@ from app.config import Settings
 from app.middleware.rate_limit import get_client_identifier
 
 
+# Simulates a request arriving from a trusted proxy. `trusted_proxies` accepts
+# only IP addresses and CIDR networks, so TestClient must be given a real source
+# address rather than its default "testclient" host.
+TRUSTED_PROXY_CLIENT = ("10.0.0.1", 12345)
+
+
 @pytest.fixture
 def mock_settings_with_trusted_proxies(monkeypatch):
     """Create settings with trusted proxies configured (but NOT testclient).
@@ -37,10 +43,12 @@ def mock_settings_with_trusted_proxies(monkeypatch):
 
 @pytest.fixture
 def mock_settings_testclient_is_trusted(monkeypatch):
-    """Create settings where TestClient is a trusted proxy.
+    """Create settings where the simulated proxy address is trusted.
 
-    TestClient always uses "testclient" as request.client.host,
-    so we include it in trusted_proxies to simulate being behind a trusted proxy.
+    Tests using this fixture construct TestClient with
+    `client=TRUSTED_PROXY_CLIENT` so `request.client.host` is a real IP inside
+    the trusted list. `trusted_proxies` only accepts IP addresses and CIDR
+    networks, so the previous "testclient" placeholder is no longer valid.
     """
 
     def mock_get_settings():
@@ -48,7 +56,7 @@ def mock_settings_testclient_is_trusted(monkeypatch):
             api_key=SecretStr("test-api-key-12345678"),
             llm_model="openai:gpt-4o",
             llm_api_key=SecretStr("test-llm-key-1234567890"),
-            trusted_proxies=["10.0.0.1", "10.0.0.2", "192.168.1.1", "testclient"],
+            trusted_proxies=["10.0.0.1", "10.0.0.2", "192.168.1.1"],
         )
 
     monkeypatch.setattr("app.middleware.rate_limit.get_settings", mock_get_settings)
@@ -85,15 +93,15 @@ class TestTrustedProxyValidation:
 
         # Act: Request from trusted proxy (10.0.0.1) with X-Forwarded-For header
         # Simulate: Real client 203.0.113.5 -> Trusted proxy 10.0.0.1 -> Our app
-        with TestClient(app, base_url="http://testserver") as test_client:
-            # Override client.host to simulate proxy
+        with TestClient(
+            app, base_url="http://testserver", client=TRUSTED_PROXY_CLIENT
+        ) as test_client:
             response = test_client.get(
                 "/test",
                 headers={"X-Forwarded-For": "203.0.113.5"},
             )
 
         # Assert: Should use the forwarded IP
-        # Note: This test will fail initially because trusted proxy validation isn't implemented
         assert response.json()["client"] == "203.0.113.5"
 
     def test_ignores_forwarded_for_from_untrusted_client(self, mock_settings_with_trusted_proxies):
@@ -170,17 +178,16 @@ class TestTrustedProxyValidation:
 
         # Act: X-Forwarded-For with multiple IPs (client, proxy1, proxy2)
         # Simulate: Real client 203.0.113.5 -> Proxy1 -> Trusted proxy 10.0.0.1 -> Our app
-        with TestClient(app, base_url="http://testserver") as test_client:
+        with TestClient(
+            app, base_url="http://testserver", client=TRUSTED_PROXY_CLIENT
+        ) as test_client:
             response = test_client.get(
                 "/test",
                 headers={"X-Forwarded-For": "203.0.113.5, 198.51.100.1, 10.0.0.1"},
             )
 
         # Assert: Should extract first IP (the real client)
-        # Note: This assumes request is from trusted proxy
-        result = response.json()["client"]
-        # First IP should be extracted
-        assert "203.0.113.5" in result or result != "198.51.100.1"
+        assert response.json()["client"] == "203.0.113.5"
 
     def test_handles_missing_client_attribute(self, mock_settings_testclient_is_trusted):
         """Should handle gracefully when request.client is None."""

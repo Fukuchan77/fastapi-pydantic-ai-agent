@@ -10,6 +10,7 @@ from fastapi import Request
 from app.deps.auth import verify_api_key
 from app.deps.workflow import get_rag_workflow
 from app.middleware.rate_limit import enforce_llm_rate_limit
+from app.models.errors import ErrorResponse
 from app.models.rag import IngestRequest
 from app.models.rag import IngestResponse
 from app.models.rag import RAGQueryRequest
@@ -41,12 +42,27 @@ async def ingest(
 
     Returns:
         IngestResponse with count of ingested chunks.
+
+    Raises:
+        HTTPException: 422 if the configured store rejects a chunk as oversized.
     """
     # Get vector store from app.state
     vector_store = req.app.state.vector_store
 
-    # Add documents to vector store
-    await vector_store.add_documents(request.chunks)
+    # Add documents to vector store.
+    #
+    # `IngestRequest` already rejects chunks over MAX_CHUNK_CHARS, so this
+    # catches the case where the configured store enforces a *lower* limit than
+    # the wire contract (e.g. an `InMemoryVectorStore(max_chunk_size=...)` built
+    # with a tighter bound). That is still a client input error and belongs in
+    # the flat 422 envelope (Req 8), not the 500 an uncaught ValueError produces.
+    try:
+        await vector_store.add_documents(request.chunks)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=ErrorResponse(message=str(exc), code="INVALID_DOCUMENT_CHUNK").model_dump(),
+        ) from exc
 
     # Return count of ingested chunks
     return IngestResponse(ingested=len(request.chunks))

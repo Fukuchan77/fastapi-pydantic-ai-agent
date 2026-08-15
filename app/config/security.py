@@ -1,6 +1,7 @@
 """Auth, CORS, rate-limiting, HTTP client, and SSE resource-limit settings."""
 
 import json
+from ipaddress import ip_network
 from typing import Literal
 from typing import Self
 
@@ -9,6 +10,8 @@ from pydantic import Field
 from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
+
+from app.config._secret_placeholders import is_placeholder
 
 
 class SecuritySettingsMixin(BaseModel):
@@ -46,22 +49,10 @@ class SecuritySettingsMixin(BaseModel):
         if not v_stripped:
             raise ValueError("api_key cannot be empty or whitespace only")
 
-        # Define common placeholder values (case-insensitive)
-        placeholders = {
-            "your-api-key-here",
-            "changeme",
-            "change-me",
-            "test-key",
-            "example",
-            "replace-me",
-            "insert-key-here",
-            "api-key-here",
-        }
-
-        # Check if the key (lowercased) is a known placeholder
+        # Check whether the key is a known placeholder.
         # This check must come BEFORE length check so placeholders are detected
         # even if they happen to be 16+ characters (e.g., "your-api-key-here" is 19 chars)
-        if v_stripped.lower() in placeholders:
+        if is_placeholder(v_stripped):
             raise ValueError(
                 "api_key appears to be a placeholder value. "
                 "Please set a strong API key with at least 16 characters."
@@ -106,21 +97,14 @@ class SecuritySettingsMixin(BaseModel):
         if not v_stripped:
             raise ValueError("session_signing_key cannot be empty or whitespace only")
 
-        placeholders = {
-            "your-api-key-here",
-            "changeme",
-            "change-me",
-            "test-key",
-            "example",
-            "replace-me",
-            "insert-key-here",
-            "api-key-here",
-        }
-
-        if v_stripped.lower() in placeholders:
+        # `.env.example`'s own `your-session-signing-key-here` is caught by the
+        # shared shape rule, not by an enumerated string - see
+        # `_secret_placeholders` for why enumeration alone was not enough here.
+        if is_placeholder(v_stripped, extra=("your-session-signing-key-here",)):
             raise ValueError(
                 "session_signing_key appears to be a placeholder value. "
-                "Please set a strong signing key with at least 16 characters."
+                "Please set a strong signing key with at least 16 characters "
+                "(e.g. `openssl rand -hex 32`)."
             )
 
         if len(v_stripped) < 16:
@@ -172,8 +156,48 @@ class SecuritySettingsMixin(BaseModel):
 
     trusted_proxies: list[str] = Field(
         default=[],
-        description="List of trusted proxy IP addresses for X-Forwarded-For validation",
+        description="Trusted proxy IP addresses or CIDR networks for X-Forwarded-For "
+        "validation (e.g. '10.0.0.1' or '10.0.0.0/8')",
     )
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def validate_trusted_proxies(cls, v: list[str]) -> list[str]:
+        """Validate every trusted proxy entry parses as an IP address or CIDR network.
+
+        Rejecting an unparseable entry at startup is the point of this
+        validator, not a formality. `get_client_identifier` decides whether to
+        believe `X-Forwarded-For` by testing the connecting address against this
+        list; an entry that can never match makes that test permanently false,
+        so the header is ignored for every request and every client behind the
+        proxy collapses into one rate-limit bucket keyed on the proxy's own
+        address. That takes out both the global limit and the stricter
+        `llm_rate_limit` guarding LLM spend (Req 11.3) - silently, since the
+        service keeps serving traffic. `docs/production_deployment.md`
+        documents CIDR ranges for Nginx, ALB, and Cloudflare, so accepting them
+        is what makes the documented configuration actually work.
+
+        Args:
+            v: The list of trusted proxy entries to validate.
+
+        Returns:
+            list[str]: The validated list of entries.
+
+        Raises:
+            ValueError: If any entry is not a valid IP address or CIDR network.
+        """
+        for entry in v:
+            try:
+                # strict=False accepts host bits being set (e.g. "10.0.0.1/8")
+                # and treats a bare address as a single-host network.
+                ip_network(entry, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"trusted_proxies entry {entry!r} is not a valid IP address or "
+                    f"CIDR network: {exc}"
+                ) from exc
+
+        return v
 
     allowed_hosts: str | list[str] = Field(
         default=["*"],

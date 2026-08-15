@@ -5,6 +5,8 @@ from pydantic import Field
 from pydantic import SecretStr
 from pydantic import field_validator
 
+from app.config._secret_placeholders import is_placeholder
+
 
 class ObservabilitySettingsMixin(BaseModel):
     """Logfire observability settings.
@@ -45,21 +47,10 @@ class ObservabilitySettingsMixin(BaseModel):
         if not v_stripped:
             raise ValueError("logfire_token cannot be empty or whitespace only")
 
-        # Define common placeholder values (case-insensitive)
-        placeholders = {
-            "your-token-here",
-            "your-logfire-token-here",
-            "changeme",
-            "change-me",
-            "test-token",
-            "example",
-            "replace-me",
-            "insert-token-here",
-            "token-here",
-        }
-
-        # Check if the token (lowercased) is a known placeholder
-        if v_stripped.lower() in placeholders:
+        # Check whether the token is a known placeholder. The shared shape rule
+        # covers the `...-here` spellings; only genuinely token-specific strings
+        # need enumerating here.
+        if is_placeholder(v_stripped, extra=("insert-token-here",)):
             raise ValueError(
                 "logfire_token appears to be a placeholder value. "
                 "Please set a valid Logfire token with at least 16 characters."

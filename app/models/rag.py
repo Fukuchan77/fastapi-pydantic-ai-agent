@@ -2,13 +2,23 @@
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
+
+
+# Per-chunk character ceiling enforced at the API boundary. Matches
+# `InMemoryVectorStore.DEFAULT_MAX_CHUNK_SIZE`, but is declared here rather than
+# imported so the wire contract does not depend on which backend happens to be
+# configured - the Chroma and Ollama backends enforce no per-chunk limit of
+# their own, so without this an oversized chunk reached them unchecked.
+MAX_CHUNK_CHARS = 100_000
 
 
 class IngestRequest(BaseModel):
     """Request model for document ingestion.
 
     Attributes:
-        chunks: List of text chunks to ingest into the vector store (1-1000 chunks).
+        chunks: List of text chunks to ingest into the vector store (1-1000
+            chunks, each at most MAX_CHUNK_CHARS characters).
     """
 
     chunks: list[str] = Field(
@@ -17,6 +27,33 @@ class IngestRequest(BaseModel):
         max_length=1000,
         description="List of text chunks to ingest into the vector store",
     )
+
+    @field_validator("chunks")
+    @classmethod
+    def validate_chunk_sizes(cls, v: list[str]) -> list[str]:
+        """Reject oversized chunks at the API boundary.
+
+        Without this the request reached `VectorStore.add_documents()`, whose
+        `ValueError` no handler converts - so a caller-supplied chunk over the
+        store's limit surfaced as a 500 with a logged traceback rather than the
+        flat 422 envelope every other client input error uses (Req 8).
+
+        Args:
+            v: The submitted chunks.
+
+        Returns:
+            list[str]: The validated chunks.
+
+        Raises:
+            ValueError: If any chunk exceeds MAX_CHUNK_CHARS characters.
+        """
+        for index, chunk in enumerate(v):
+            if len(chunk) > MAX_CHUNK_CHARS:
+                raise ValueError(
+                    f"chunk at index {index} is {len(chunk)} characters; "
+                    f"the maximum is {MAX_CHUNK_CHARS}"
+                )
+        return v
 
 
 class IngestResponse(BaseModel):

@@ -23,6 +23,8 @@ class _CorpusSnapshot:
     doc_tokens: tuple[list[str], ...]
     ordinals: tuple[int, ...]
     idf_weights: dict[str, float]
+    doc_vectors: tuple[dict[str, float], ...] | None
+    doc_norms: tuple[float, ...] | None
 
 
 class InMemoryVectorStore:
@@ -95,6 +97,13 @@ class InMemoryVectorStore:
         self._ordinals: list[int] = []  # Stable per-document ordinal (survives FIFO eviction)
         self._next_ordinal: int = 0
         self._idf_cache: dict[str, float] | None = None
+        # Per-document TF-IDF vectors and their magnitudes, derived from
+        # `_idf_cache`. Rebuilt off the event loop on the first query after a
+        # corpus change and reused until the next one: without them every query
+        # re-derived a vector for every stored document, so each request paid
+        # O(corpus) regardless of how few terms it searched for.
+        self._doc_vectors: tuple[dict[str, float], ...] | None = None
+        self._doc_norms: tuple[float, ...] | None = None
         self._memory_usage: int = 0  # Track approximate memory usage in bytes
         self._generation: int = 0
         self._lock = asyncio.Lock()
@@ -158,8 +167,9 @@ class InMemoryVectorStore:
                 while self._memory_usage > self.max_memory_bytes and len(self._documents) > 0:
                     self._evict_oldest(1)
 
-            # Invalidate IDF cache since corpus changed
-            self._idf_cache = None
+            # Invalidate IDF cache and every vector derived from it, since
+            # corpus statistics changed
+            self._invalidate_derived_caches()
             self._generation += 1
 
     async def query(self, query: str, top_k: int = 5) -> list[str]:
@@ -266,19 +276,44 @@ class InMemoryVectorStore:
                 doc_tokens=tuple(self._doc_tokens),
                 ordinals=tuple(self._ordinals),
                 idf_weights=self._idf_cache,
+                doc_vectors=self._doc_vectors,
+                doc_norms=self._doc_norms,
             )
+            generation = self._generation
 
-        return await asyncio.to_thread(self._score_snapshot, query_tokens, snapshot, top_k)
+        ranked, doc_vectors, doc_norms = await asyncio.to_thread(
+            self._score_snapshot, query_tokens, snapshot, top_k
+        )
+
+        # Publish the vectors this query had to derive so the next one reuses
+        # them. Building them happens inside the worker thread, never on the
+        # event loop. The generation guard drops the result if the corpus
+        # changed while scoring was in flight - those vectors describe a corpus
+        # that no longer exists, and `_invalidate_derived_caches()` has already
+        # cleared the fields they would otherwise overwrite.
+        if snapshot.doc_vectors is None:
+            async with self._lock:
+                if self._generation == generation:
+                    self._doc_vectors = doc_vectors
+                    self._doc_norms = doc_norms
+
+        return ranked
 
     @staticmethod
     def _score_snapshot(
         query_tokens: list[str], snapshot: _CorpusSnapshot, top_k: int
-    ) -> list[tuple[str, int, float]]:
+    ) -> tuple[list[tuple[str, int, float]], tuple[dict[str, float], ...], tuple[float, ...]]:
         """Score a corpus snapshot against `query_tokens` (runs off the event loop).
 
         Pure function of its arguments only -- touches no live instance state,
         so it is safe to run in a worker thread via `asyncio.to_thread` while
         the event loop concurrently mutates the store.
+
+        Derives the per-document vectors when the snapshot carries none, and
+        returns them so the caller can cache them for the next query against the
+        same corpus generation. Deriving them here rather than under the store
+        lock keeps that O(corpus) work off the event loop even on the first
+        query after an ingest.
 
         Args:
             query_tokens: Tokenized query.
@@ -286,27 +321,77 @@ class InMemoryVectorStore:
             top_k: Maximum number of results to return.
 
         Returns:
-            List of (document text, ordinal, similarity score) tuples, sorted
-            by score descending and truncated to top_k.
+            A tuple of (ranked results, document vectors, document norms). The
+            ranked results are (document text, ordinal, similarity score)
+            tuples, sorted by score descending and truncated to top_k.
         """
+        doc_vectors = snapshot.doc_vectors
+        doc_norms = snapshot.doc_norms
+        if doc_vectors is None or doc_norms is None:
+            doc_vectors = tuple(
+                InMemoryVectorStore._calculate_tfidf_vector(doc_tokens, snapshot.idf_weights)
+                for doc_tokens in snapshot.doc_tokens
+            )
+            doc_norms = tuple(
+                math.sqrt(sum(value**2 for value in vector.values())) for vector in doc_vectors
+            )
+
         query_tfidf = InMemoryVectorStore._calculate_tfidf_vector(
             query_tokens, snapshot.idf_weights
         )
+        query_norm = math.sqrt(sum(value**2 for value in query_tfidf.values()))
 
+        # A zero magnitude is not an early exit: a single-document corpus gives
+        # every term an IDF of log(N/df) = 0, so every vector is zero and every
+        # pair scores 0.0 - but the caller still expects the top_k slice back.
         scores: list[tuple[int, float]] = []
-        for idx, doc_tokens in enumerate(snapshot.doc_tokens):
-            doc_tfidf = InMemoryVectorStore._calculate_tfidf_vector(
-                doc_tokens, snapshot.idf_weights
+        for idx, doc_vector in enumerate(doc_vectors):
+            similarity = InMemoryVectorStore._cosine_similarity_with_norms(
+                query_tfidf, query_norm, doc_vector, doc_norms[idx]
             )
-            similarity = InMemoryVectorStore._cosine_similarity(query_tfidf, doc_tfidf)
             scores.append((idx, similarity))
 
         # Sort by score (descending) and take top-k
         scores.sort(key=lambda x: x[1], reverse=True)
-        return [
+        ranked = [
             (snapshot.documents[idx], snapshot.ordinals[idx], score)
             for idx, score in scores[:top_k]
         ]
+        return ranked, doc_vectors, doc_norms
+
+    @staticmethod
+    def _cosine_similarity_with_norms(
+        vec1: dict[str, float],
+        norm1: float,
+        vec2: dict[str, float],
+        norm2: float,
+    ) -> float:
+        """Cosine similarity using pre-computed vector magnitudes.
+
+        Identical to `_cosine_similarity` but skips recomputing the magnitudes,
+        which the caller caches alongside the document vectors.
+
+        Args:
+            vec1: First TF-IDF vector.
+            norm1: Pre-computed magnitude of vec1.
+            vec2: Second TF-IDF vector.
+            norm2: Pre-computed magnitude of vec2.
+
+        Returns:
+            Cosine similarity in [0, 1]; 0.0 if either vector is empty or has
+            zero magnitude.
+        """
+        if not vec1 or not vec2 or norm1 == 0.0 or norm2 == 0.0:
+            return 0.0
+
+        # Walk the smaller vector so the intersection scan stays proportional to
+        # the query's term count rather than the document's.
+        smaller, larger = (vec1, vec2) if len(vec1) <= len(vec2) else (vec2, vec1)
+        dot_product = sum(
+            weight * larger[term] for term, weight in smaller.items() if term in larger
+        )
+
+        return dot_product / (norm1 * norm2)
 
     async def clear(self) -> None:
         """Remove all documents from the store.
@@ -318,9 +403,20 @@ class InMemoryVectorStore:
             self._doc_tokens.clear()
             self._ordinals.clear()
             self._next_ordinal = 0
-            self._idf_cache = None
             self._memory_usage = 0
+            self._invalidate_derived_caches()
             self._generation += 1
+
+    def _invalidate_derived_caches(self) -> None:
+        """Drop every cache derived from the corpus.
+
+        IDF weights depend on the whole corpus and the per-document vectors
+        depend on those weights, so all three must be discarded together.
+        Callers hold `self._lock`.
+        """
+        self._idf_cache = None
+        self._doc_vectors = None
+        self._doc_norms = None
 
     async def close(self) -> None:
         """Close the vector store and release any resources.
