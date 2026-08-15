@@ -56,11 +56,43 @@ def test_pr_workflow_triggers_on_pull_request_to_default_branch() -> None:
 
 
 def test_pr_workflow_has_cancel_in_progress_concurrency_group() -> None:
-    """AC 1.9: superseded runs for the same PR are cancelled via concurrency."""
+    """AC 1.9: superseded runs for the same PR are cancelled via concurrency.
+
+    The assertion covers `true` and the event-conditional expression alike.
+    Since this workflow also runs on `push` to `main`, an unconditional `true`
+    would let one merge cancel the run validating the previous merge commit -
+    so the value is allowed to narrow cancellation to `pull_request`, which is
+    exactly the event this AC is about.
+    """
     workflow = _load_workflow(PR_WORKFLOW)
     concurrency = workflow["concurrency"]
     assert "github.ref" in concurrency["group"]
-    assert concurrency["cancel-in-progress"] is True
+
+    cancel = concurrency["cancel-in-progress"]
+    assert cancel is True or (isinstance(cancel, str) and "pull_request" in cancel), (
+        f"PR runs must still be cancellable, got {cancel!r}"
+    )
+
+
+def test_pr_workflow_also_runs_on_push_to_default_branch() -> None:
+    """A merge into `main` is validated too, not just the PR that preceded it.
+
+    Two PRs can each pass on their own and still break once merged together;
+    without a `push` trigger `main` carried no CI signal at all.
+    """
+    workflow = _load_workflow(PR_WORKFLOW)
+    push = workflow["on"]["push"]
+    assert "main" in push.get("branches", [])
+
+
+def test_main_push_runs_are_not_cancelled_by_a_later_merge() -> None:
+    """Every merge commit on `main` gets its own completed CI run."""
+    workflow = _load_workflow(PR_WORKFLOW)
+    cancel = workflow["concurrency"]["cancel-in-progress"]
+    assert cancel is not True, (
+        "cancel-in-progress must not be unconditionally true once the workflow "
+        "runs on push to main, or a merge cancels the previous merge's run"
+    )
 
 
 def test_pr_workflow_actions_are_pinned_to_commit_sha() -> None:

@@ -1,13 +1,26 @@
+# Workflow name is kept as "PR CI" even though it now also runs on `main`:
+# the check name GitHub reports ("PR CI / Lint, Test, Audit") is what any
+# branch-protection required-status-check rule matches on, and renaming the
+# workflow would silently stop satisfying such a rule.
 name: PR CI
 
 on:
   pull_request:
     branches:
       - main
+  # Also run after a merge. Without this, `main` carried no CI signal at all:
+  # a merge whose result differs from what the PR validated (semantic conflict
+  # between two PRs that each passed alone) would land undetected.
+  push:
+    branches:
+      - main
 
 concurrency:
   group: pr-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding an in-flight PR run is fine - only the latest commit matters.
+  # On `main` every merge commit must be validated on its own, so runs there
+  # are never cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

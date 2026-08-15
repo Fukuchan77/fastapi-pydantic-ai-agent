@@ -261,7 +261,12 @@ ignore するため**将来の提案は抑止される**が、設定より前に
    `secrets.token_urlsafe(16)`（128 bit）であって principal 束縛ではない。
    複数キー化に向けた前方互換設計としては妥当。
 5. 実ツールは `tools_mock.py` のみ。`chat_agent.py` の実検索は TODO のまま。
-6. `pr.yml` に `push: branches: [main]` トリガがなく、マージ後の main で CI が走らない。
+6. ~~`pr.yml` に `push: branches: [main]` トリガがなく、マージ後の main で CI が走らない。~~
+   **対応済み**。`push: branches: [main]` を追加し、`cancel-in-progress` を
+   `${{ github.event_name == 'pull_request' }}` に変更した。無条件 `true` のままだと
+   あるマージが 1 つ前のマージコミットを検証中の実行をキャンセルしてしまい、
+   push トリガを足した意味が失われるため。ワークフロー名 `PR CI` は据え置き
+   （branch protection の required status check が名前で照合されるため）。
 
 ---
 
@@ -295,9 +300,11 @@ ignore するため**将来の提案は抑止される**が、設定より前に
 
 ## 7. マージ前の残作業
 
-1. 003 → main の PR を開き、PR CI（Redis レーン含む）を green にする（BL1）。
-2. Dependabot PR #17 / #12 を理由付きでクローズする（H3）。
-3. `pr.yml` に `push: branches: [main]` トリガを追加する（Medium 6）。
+| # | 内容 | 状態 |
+|---|------|------|
+| 1 | 003 → main の PR を開き、PR CI（Redis レーン含む）を green にする（BL1） | PR 作成済み・CI 結果待ち |
+| 2 | Dependabot PR #17 / #12 を理由付きでクローズする（H3） | 対応済み |
+| 3 | `pr.yml` に `push: branches: [main]` トリガを追加する（Medium 6） | 対応済み |
 
 ## 8. 関連ブランチ
 
