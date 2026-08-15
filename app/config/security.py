@@ -388,6 +388,20 @@ class SecuritySettingsMixin(BaseModel):
             )
         return v
 
+    readiness_probe_cache_ttl: int = Field(
+        default=10,
+        ge=0,
+        description="Seconds a /health/ready probe result is reused before the "
+        "dependencies are probed again. `/health/ready` is unauthenticated and "
+        "its LLM probe is a real, billable provider request, so without this "
+        "cache one HTTP request becomes one provider request at up to the "
+        "global 1000/minute limit - an unauthenticated cost amplifier outside "
+        "`llm_rate_limit` entirely. Caching bounds provider traffic to a "
+        "constant rate regardless of inbound volume while keeping the endpoint "
+        "unauthenticated for load balancers. 0 disables caching (every request "
+        "probes live)",
+    )
+
     http_timeout: float = Field(
         default=30.0,
         ge=1.0,

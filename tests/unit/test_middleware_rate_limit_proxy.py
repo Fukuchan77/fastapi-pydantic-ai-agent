@@ -73,21 +73,29 @@ def test_rate_limit_considers_x_forwarded_for_header(client: TestClient) -> None
     assert response.status_code == 200
 
 
-def test_rate_limit_uses_first_ip_in_forwarded_chain(client: TestClient) -> None:
-    """Test that rate limiting uses the first IP in X-Forwarded-For chain.
+def test_rate_limit_uses_last_untrusted_ip_in_forwarded_chain(client: TestClient) -> None:
+    """Test that rate limiting keys on the last untrusted IP in the X-Forwarded-For chain.
 
-    When multiple proxies are involved, X-Forwarded-For contains a comma-separated
-    list of IPs. The first IP is the actual client IP.
+    With multiple proxies, X-Forwarded-For is a comma-separated chain that every
+    documented proxy *appends* to, so its leftmost element is whatever the client
+    itself sent. The chain is walked right-to-left, skipping hops inside
+    `trusted_proxies` (here `10.0.0.0/8`), and the first address that is not
+    becomes the bucket key.
+
+    The third request below varies the leftmost element - the part a caller
+    controls - while keeping the observed address the same, and must still be
+    rate limited. If the leftmost element were the key, a caller could rotate it
+    and never exhaust a budget.
     """
-    # Request with proxy chain: client -> proxy1 -> proxy2
+    # Request with proxy chain: <client claim>, <observed address>, <trusted hop>
     for _ in range(2):
         response = client.get(
-            "/test", headers={"X-Forwarded-For": "10.0.0.1, 192.168.1.1, 172.16.0.1"}
+            "/test", headers={"X-Forwarded-For": "1.1.1.1, 203.0.113.9, 10.0.0.9"}
         )
         assert response.status_code == 200
 
-    # 3rd request from same client IP (first in chain) should be rate limited
-    response = client.get("/test", headers={"X-Forwarded-For": "10.0.0.1, 192.168.2.2, 172.16.0.2"})
+    # 3rd request: different claimed prefix, same observed address -> same bucket
+    response = client.get("/test", headers={"X-Forwarded-For": "9.9.9.9, 203.0.113.9, 10.0.0.9"})
     assert response.status_code == 429
 
 

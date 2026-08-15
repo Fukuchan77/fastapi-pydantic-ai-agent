@@ -69,6 +69,33 @@ def _is_trusted_proxy(client_ip: str, trusted_proxies: list[str]) -> bool:
     return any(address in network for network in _parse_trusted_proxies(tuple(trusted_proxies)))
 
 
+def _resolve_settings(request: Request) -> Settings:
+    """Resolve the `Settings` this request's application was built with.
+
+    `app.state.settings` is authoritative: `create_app(settings=...)` injects an
+    explicit instance, and reading process-global `get_settings()` instead would
+    silently apply an environment-derived `trusted_proxies` to an application
+    configured with a different one - while `enforce_llm_rate_limit`, in this
+    same module, reads the injected instance for the limit itself. One
+    rate-limit decision must not be assembled from two different `Settings`.
+
+    The `get_settings()` fallback covers only an application whose lifespan has
+    not populated `app.state` (bare `FastAPI()` harnesses in unit tests). It can
+    never override an injected value, because it is reached only when there is
+    none.
+
+    Args:
+        request: The incoming request, whose `app.state` is consulted first.
+
+    Returns:
+        Settings: The application's settings.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    if isinstance(settings, Settings):
+        return settings
+    return get_settings()
+
+
 def get_client_identifier(request: Request) -> str:
     """Get client identifier considering proxy headers with trusted proxy validation.
 
@@ -77,17 +104,25 @@ def get_client_identifier(request: Request) -> str:
     prevents header spoofing attacks where untrusted clients set fake
     X-Forwarded-For values.
 
-    When behind a trusted proxy or load balancer, the X-Forwarded-For header contains
-    the real client IP. This function extracts the first IP from the header,
-    which is the actual client IP.
+    When behind a trusted proxy or load balancer, `X-Forwarded-For` is a chain:
+    `client, proxy1, proxy2`. Every proxy this repository documents *appends* to
+    it (Nginx's `$proxy_add_x_forwarded_for`, an ALB, and Cloudflare all do), so
+    the leftmost element is whatever the client itself sent - taking it would let
+    any caller choose its own rate-limit bucket and rotate through unlimited
+    ones. This function therefore walks the chain from the right, skipping hops
+    that are themselves trusted proxies, and takes the first address that is not.
+    That address is the closest hop the trusted infrastructure actually observed
+    and is the last one an untrusted party could not have fabricated.
 
     Security:
         - Only trusts X-Forwarded-For when request comes from a trusted proxy
         - Accepts CIDR networks, so a documented VPC/CDN range actually matches
-        - Prevents attackers from bypassing rate limiting by spoofing the header
+        - Walks the chain right-to-left, so a client-supplied leftmost entry
+          cannot become the bucket key and rate limiting cannot be bypassed by
+          spoofing the header
         - Empty trusted_proxies list means X-Forwarded-For is never trusted
-        - Validates the forwarded value is an IP address before returning it as
-          a bucket key, so a trusted proxy relaying a malformed header cannot
+        - Validates each element is an IP address before returning it as a
+          bucket key, so a trusted proxy relaying a malformed header cannot
           create unbounded distinct rate-limit buckets
 
     Args:
@@ -96,8 +131,8 @@ def get_client_identifier(request: Request) -> str:
     Returns:
         str: Client identifier (IP address)
     """
-    # Get trusted proxy configuration
-    settings = get_settings()
+    # Get trusted proxy configuration from the settings this app was built with
+    settings = _resolve_settings(request)
     trusted_proxies = settings.trusted_proxies
 
     # Get the immediate client IP (the actual TCP connection source)
@@ -108,15 +143,20 @@ def get_client_identifier(request: Request) -> str:
 
     # Only trust X-Forwarded-For if the immediate client is a trusted proxy
     if forwarded and _is_trusted_proxy(direct_client_ip, trusted_proxies):
-        # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-        # The first IP is the actual client
-        candidate = forwarded.split(",")[0].strip()
-        try:
-            ip_address(candidate)
-        except ValueError:
-            # Malformed forwarded value - fall back to the direct connection IP
-            return direct_client_ip
-        return candidate
+        for candidate in reversed([element.strip() for element in forwarded.split(",")]):
+            try:
+                ip_address(candidate)
+            except ValueError:
+                # A malformed element means the chain can no longer be walked
+                # reliably - everything to its left is unverifiable. Stop here
+                # rather than skipping past it, and fall back to the direct
+                # connection IP below.
+                break
+            if not _is_trusted_proxy(candidate, trusted_proxies):
+                return candidate
+        # Every element was a trusted proxy (or the chain was unwalkable):
+        # no untrusted client address is identifiable, so key on the peer.
+        return direct_client_ip
 
     # Fall back to direct connection IP (ignore X-Forwarded-For from untrusted sources)
     return direct_client_ip
@@ -256,7 +296,7 @@ async def enforce_llm_rate_limit(request: Request) -> None:
             by the same exception handler `add_rate_limiting()` registers.
     """
     limiter: Limiter = request.app.state.limiter
-    settings: Settings = request.app.state.settings
+    settings: Settings = _resolve_settings(request)
     item = limits.parse(settings.llm_rate_limit)
     identifier = get_client_identifier(request)
 

@@ -168,7 +168,19 @@ class TestTrustedProxyValidation:
         assert result != "1.2.3.4", "Should not trust X-Forwarded-For when no trusted proxies"
 
     def test_handles_multiple_ips_in_forwarded_for(self, mock_settings_testclient_is_trusted):
-        """Should extract first IP from X-Forwarded-For chain when from trusted proxy."""
+        """Should extract the last untrusted IP from an X-Forwarded-For chain.
+
+        The chain is walked right-to-left, skipping hops that are themselves
+        trusted proxies. Here only `10.0.0.1` is trusted, so `198.51.100.1` -
+        the address that trusted hop actually observed - is the identity.
+
+        `203.0.113.5` is deliberately *not* the answer even though it is the
+        leftmost element: it was relayed by `198.51.100.1`, which is not in the
+        trusted list, so it is an unverified claim. Taking it would let any
+        caller behind a documented appending proxy (Nginx, ALB, Cloudflare) pick
+        its own rate-limit bucket - see
+        `tests/unit/test_middleware_rate_limit_forwarded_chain.py`.
+        """
         # Arrange
         app = FastAPI()
 
@@ -176,8 +188,8 @@ class TestTrustedProxyValidation:
         async def test_route(request: Request):
             return {"client": get_client_identifier(request)}
 
-        # Act: X-Forwarded-For with multiple IPs (client, proxy1, proxy2)
-        # Simulate: Real client 203.0.113.5 -> Proxy1 -> Trusted proxy 10.0.0.1 -> Our app
+        # Act: X-Forwarded-For with multiple IPs (claim, observed, trusted hop)
+        # Simulate: 203.0.113.5 claimed -> 198.51.100.1 observed -> trusted 10.0.0.1 -> app
         with TestClient(
             app, base_url="http://testserver", client=TRUSTED_PROXY_CLIENT
         ) as test_client:
@@ -186,8 +198,8 @@ class TestTrustedProxyValidation:
                 headers={"X-Forwarded-For": "203.0.113.5, 198.51.100.1, 10.0.0.1"},
             )
 
-        # Assert: Should extract first IP (the real client)
-        assert response.json()["client"] == "203.0.113.5"
+        # Assert: the last element the trusted infrastructure actually observed
+        assert response.json()["client"] == "198.51.100.1"
 
     def test_handles_missing_client_attribute(self, mock_settings_testclient_is_trusted):
         """Should handle gracefully when request.client is None."""

@@ -11,6 +11,12 @@ merged, or reports something it did not cover.
 
 ---
 
+> **Status update (same day):** both blockers (V1, V2) and all three Medium items
+> (V3–V5) have been **fixed on `claude/pr21-pydantic-v2-review-bkhxve`**. Section 7
+> records what changed and how each fix is pinned. The finding text below is kept in
+> its original diagnostic form — it is the reason the fixes exist. V6–V10 remain open
+> by choice; none of them blocks.
+
 ## 1. Verdict
 
 **Do not merge as-is. Two security defects found in this pass are, in my
@@ -323,3 +329,121 @@ recommendation is to land them on this branch rather than defer them, because bo
 weaken the same control — `llm_rate_limit`, Req 11.3 — that this PR advertises as its
 LLM cost-abuse defence, and merging as-is ships that control in a state where a
 motivated caller is not subject to it.
+
+---
+
+## 7. Fixes applied
+
+Items 1–4 of §6 are done. V6–V10 are deliberately left open.
+
+### V1 — right-to-left `X-Forwarded-For` walk
+
+`app/middleware/rate_limit.py::get_client_identifier` now walks the chain from the
+right, skipping hops that are themselves in `trusted_proxies`, and returns the first
+address that is not. A malformed element stops the walk rather than being skipped
+past — everything to its left was relayed by something unverifiable, so resuming the
+walk would resume trusting client-supplied values. When every element is trusted, or
+the chain is unwalkable, the peer address is used.
+
+The docstring's "prevents attackers from bypassing rate limiting by spoofing the
+header" claim is now true rather than aspirational, and states the mechanism.
+
+Verified with the same script that demonstrated the defect:
+
+```
+client sent '1.1.1.1'  -> XFF '1.1.1.1, 203.0.113.7'  -> bucket '203.0.113.7'
+client sent '2.2.2.2'  -> XFF '2.2.2.2, 203.0.113.7'  -> bucket '203.0.113.7'
+client sent '3.3.3.3'  -> XFF '3.3.3.3, 203.0.113.7'  -> bucket '203.0.113.7'
+
+distinct rate-limit buckets for ONE real client: 1
+```
+
+Pinned by `tests/unit/test_middleware_rate_limit_forwarded_chain.py` (16 cases): the
+Nginx appended-chain shape, bucket stability across a rotating claimed prefix, a
+multi-hop chain with two trusted networks, the Apache replacing-proxy shape, an
+untrusted peer, an all-trusted chain, a malformed hop mid-chain, and whitespace
+variation.
+
+One pre-existing test encoded the old semantics and was updated rather than deleted:
+`test_handles_multiple_ips_in_forwarded_for` asserted the leftmost element of
+`203.0.113.5, 198.51.100.1, 10.0.0.1` with only `10.0.0.1` trusted. It now asserts
+`198.51.100.1` — the address the one trusted hop actually observed — and its docstring
+explains why the leftmost element is not the answer.
+
+### V2 — `ReadinessProbeCache`
+
+`app/api/health.py` gains `ReadinessProbeCache`, built per application in
+`lifespan._startup` from the new `readiness_probe_cache_ttl` setting (default 10s,
+`0` disables). `/health/ready` serves probe results through it, so provider traffic is
+a constant rate (one probe per TTL) regardless of inbound volume. The lock is held
+across the probe, so a concurrent burst shares one run instead of each caller starting
+their own — without that the cache would not survive the burst it exists for.
+
+The endpoint stays unauthenticated and Kubernetes-friendly; an application built
+without a lifespan has no cache on `app.state` and probes live, which is what keeps
+the existing `MagicMock`-based unit tests exercising the probe path unchanged.
+
+The `app/main.py` comment that justified the 1000/minute limit is corrected in place:
+it is a statement about health-route *availability* and must not be read as one about
+their *cost*, and any future unauthenticated route touching a metered dependency needs
+its own bound.
+
+Pinned by `tests/unit/api/test_readiness_probe_cache.py` (10 cases): repeat calls
+within the TTL, a 50-call burst, 10 concurrent callers sharing one probe, expiry,
+observing a status change after expiry, `ttl=0` restoring live probing, and cached-value
+isolation from caller mutation.
+
+### V3 — one `Settings` per decision
+
+New `app/deps/settings.py::get_request_settings` prefers `app.state.settings` and falls
+back to `get_settings()` only when `app.state` was never populated. `verify_api_key`
+switches to `Depends(get_request_settings)` — its `settings` parameter name and
+signature are unchanged, so the 15 direct-call tests keep working untouched.
+`app/middleware/rate_limit.py` gains the equivalent `_resolve_settings()`, used by both
+`get_client_identifier` and `enforce_llm_rate_limit`, so the key and the limit now come
+from the same object.
+
+The fallback is type-checked (`isinstance(settings, Settings)`) rather than a bare
+`getattr`: unit harnesses build `app.state` from `MagicMock`s, which invent any
+attribute asked for, and a stand-in must never silently become the configuration a
+security check reads.
+
+Pinned by `tests/unit/test_request_scoped_settings.py` (6 cases), including precedence
+in *both* directions — injected settings win whether they are the more permissive or
+the stricter side — plus the no-`app.state` fallback and the mock-rejection case.
+
+### V4 — the single-key constraint, written down
+
+Recorded as a dedicated section in `app/security/principal.py`'s module docstring, the
+file any multi-key change must touch, naming both subsystems that are correct only
+because one principal exists: `/v1/rag/ingest` writing to an unpartitioned store, and
+the RAG result cache keyed without a principal. Restated in `CLAUDE.md` and `AGENTS.md`
+(edited as a pair, per the `004` convention) so it is reachable from the architecture
+docs as well.
+
+No code change: the constraint is real but not yet exploitable, and partitioning the
+vector store per principal is a design change belonging to the work that introduces
+the second key — not something to guess at now.
+
+### V5 — principal attribution
+
+`app/agents/deps.py` gains `bind_principal()`, called by both agent routes right after
+`verify_api_key` resolves the caller. Binding at the route rather than inside
+`get_agent_deps()` is forced: resolving the principal in the dependency requires
+importing `app.deps.auth`, and that import closes a cycle (`app.deps` →
+`app.deps.workflow` → `app.workflows.corrective_rag` → `app.agents.chat_agent` →
+`app.agents.deps`). The constraint is documented at the field, at the helper, and in
+both architecture docs, so the next agent route does not have to rediscover it.
+
+Pinned by `tests/unit/api/v1/test_agent_principal_attribution.py` (4 cases), covering
+both routes separately — they install their guarded toolsets independently, so a
+binding on one proves nothing about the other.
+
+### Verification after the fixes
+
+| Check | Result |
+|---|---|
+| `ruff format` / `ruff check app/ evals/ tests/` | clean |
+| `ty check app/ evals/` | All checks passed |
+| `pytest tests/unit tests/integration tests/e2e` | see the PR comment for the final count |
+| XFF proof-of-concept | 1 bucket (was 3) |

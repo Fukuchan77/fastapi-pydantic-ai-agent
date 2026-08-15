@@ -128,6 +128,10 @@ Session ids are server-issued and self-authenticating: `app/services/session_ser
 
 `POST /v1/agent/chat` mints a new id when none is presented; `POST /v1/agent/stream` can only *authorize* an existing one, because the SSE contract has no field to return a new id on. RAG queries are session-less.
 
+`AgentDeps.principal` is bound by `bind_principal()` at each agent route's entry point, **not** by `get_agent_deps()` — resolving it inside the dependency would import `app.deps.auth` and close a cycle (`app.deps` → `app.deps.workflow` → `app.workflows.corrective_rag` → `app.agents.chat_agent` → `app.agents.deps`). Every `AuditRecord` is attributed through that field, so a new agent route must bind it.
+
+**`Settings.api_key` holds exactly one key, and two subsystems are correct only because of that.** Both must be revisited in the same change that adds a second key — the module docstring of `app/security/principal.py` is the canonical statement: `/v1/rag/ingest` writes into the one process-wide vector store with no principal binding (cross-principal corpus poisoning), and the Corrective RAG result cache is keyed on `(query, max_retries, generation)` alone (cross-principal cache reads). RAG is session-less by design, so Req 11's ownership machinery does not reach either.
+
 ### Session history trimming
 
 `session_max_messages` (`Settings`, default `1000`, `Field(ge=2)`) bounds every `SessionStore.save_history()` through the pure `trim_history()` (`app/stores/session_store/_trim.py`), shared by both backends. Invariants: cuts fall only **between** messages, never inside one; the retained tail never orphans a tool-call pair (every retained `BaseToolReturnPart`/`RetryPromptPart(tool_name is not None)` closer keeps its opening `BaseToolCallPart` too, found by searching forward from the ideal cut); `messages[0]` (the persisted system prompt) is always retained, which is why `len(result)` can be `max_messages + 1` rather than exactly `max_messages`; the result is never empty and never holds a message with `parts == []`.
@@ -179,7 +183,9 @@ Extend by implementing a `typing.Protocol`, not by subclassing (Constitution Pri
 
 LLM-invoking routes (`/agent/chat`, `/agent/stream`, `/rag/query`) additionally carry `Depends(enforce_llm_rate_limit)`, a stricter configurable `llm_rate_limit` that deliberately reuses `app.state.limiter` so it shares the same Redis-or-memory storage as the global limit.
 
-The rate-limit key is `get_client_identifier()`, which trusts `X-Forwarded-For` **only** when the immediate `request.client.host` is in `trusted_proxies` (an empty list means the header is never trusted) — otherwise a client could spoof its way around the limit. The `Limiter` sets `in_memory_fallback_enabled=True`, so a configured-but-unreachable Redis degrades to in-memory counting with a warning instead of failing every request.
+The rate-limit key is `get_client_identifier()`, which trusts `X-Forwarded-For` **only** when the immediate `request.client.host` is in `trusted_proxies` (an empty list means the header is never trusted) — otherwise a client could spoof its way around the limit. Within a trusted chain it walks **right-to-left**, skipping hops that are themselves trusted, and takes the first address that is not: every proxy `docs/production_deployment.md` documents except Apache *appends* to the header (Nginx's `$proxy_add_x_forwarded_for`, ALB, Cloudflare), so the leftmost element is client-supplied and taking it would let any caller rotate through unlimited buckets. The `Limiter` sets `in_memory_fallback_enabled=True`, so a configured-but-unreachable Redis degrades to in-memory counting with a warning instead of failing every request.
+
+**Every request-path settings read resolves `app.state.settings` first**, never process-global `get_settings()`: `Depends` sites use `app/deps/settings.py::get_request_settings`, and `app/middleware/rate_limit.py` uses its own `_resolve_settings()`. `create_app(settings=...)` injects an explicit instance, so reading the environment instead means one half of a decision (the `trusted_proxies` the key is derived from) comes from a different `Settings` object than the other (the limit itself). `get_settings()` remains only as a fallback for an app whose lifespan never populated `app.state`.
 
 ### Observability
 
@@ -190,6 +196,8 @@ Stdlib logging is separate and configured first: `configure_logging()` (`app/log
 ### Health
 
 `/health` is liveness (`{"status": "ok"}`). `/health/ready` runs concurrent live probes of the session store (Redis only), vector store (Ollama only), and LLM provider (a `max_tokens=1` request), returning 200 `ready` or 503 `not_ready` with a per-dependency `checks` map. Backends with no external dependency report `"skipped"`, not `"healthy"`.
+
+Those probes go through **`ReadinessProbeCache`** (`app/api/health.py`, built per app in `lifespan._startup`, TTL from `readiness_probe_cache_ttl`, default 10s, `0` disables). This is a cost control, not a latency optimisation: `/health/ready` is unauthenticated *and* its LLM probe is a billable provider request, so uncached it converts inbound request volume directly into outbound provider volume at up to the global 1000/minute limit — outside `llm_rate_limit`, which only guards authenticated routes. The cache holds its lock across the probe so a burst shares one run. An app built without a lifespan has no cache on `app.state` and probes live. **Any new unauthenticated route that touches a metered dependency needs its own bound.**
 
 ### Evals harness (`evals/`)
 

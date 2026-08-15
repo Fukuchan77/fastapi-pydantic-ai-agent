@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from pydantic_ai.models import Model
 
 from app.agents.chat_agent import build_chat_agent
+from app.api.health import ReadinessProbeCache
 from app.config import Settings
 from app.http_client import build_http_client
 from app.llm.factory import build_fallback_model
@@ -204,6 +205,16 @@ async def _startup(app: FastAPI, settings: Settings, model: Model | str | None) 
     # Initialize chat agent, forwarding the resolved model
     app.state.chat_agent = build_chat_agent(model=resolved_model, settings=settings)
     logger.info("Initialized chat agent")
+
+    # Short-TTL cache in front of /health/ready's dependency probes. That route
+    # is unauthenticated and its LLM check is a real provider request, so the
+    # cache is what stops inbound request volume from becoming outbound provider
+    # volume (see ReadinessProbeCache). Created per application, never shared.
+    app.state.readiness_cache = ReadinessProbeCache(settings.readiness_probe_cache_ttl)
+    logger.info(
+        "Initialized readiness probe cache (ttl=%ds)",
+        settings.readiness_probe_cache_ttl,
+    )
 
     # Configure Logfire observability
     configure_logfire(settings)

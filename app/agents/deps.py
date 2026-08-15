@@ -23,8 +23,13 @@ class AgentDeps:
         settings: Application configuration settings.
         session_store: Session history persistence backend.
         principal: Stable identifier of the calling principal, for audit
-            attribution (Req 4.7). `None` until session ownership (Req 11)
-            resolves a real principal per request.
+            attribution (Req 4.7). Populated by `bind_principal()` at each
+            agent route's entry point, not by `get_agent_deps()`: resolving
+            it inside the dependency would require importing
+            `app.deps.auth`, and that import closes a cycle
+            (`app.deps` -> `app.deps.workflow` -> `app.workflows.corrective_rag`
+            -> `app.agents.chat_agent` -> `app.agents.deps`). Stays `None`
+            for any non-agent caller that builds deps directly.
         audit: Sink refused/denied/budget-blocked tool attempts are recorded
             to by `run_guarded()` (Req 4.7).
     """
@@ -39,6 +44,9 @@ class AgentDeps:
 async def get_agent_deps(request: Request) -> AgentDeps:
     """FastAPI dependency factory that constructs AgentDeps from app.state.
 
+    Leaves `principal` unset; agent routes bind it with `bind_principal()`
+    once `verify_api_key` has resolved the caller.
+
     Args:
         request: The FastAPI request object with app.state populated by lifespan.
 
@@ -50,3 +58,25 @@ async def get_agent_deps(request: Request) -> AgentDeps:
         settings=request.app.state.settings,
         session_store=request.app.state.session_store,
     )
+
+
+def bind_principal(deps: AgentDeps, principal_id: str) -> AgentDeps:
+    """Attach the authenticated caller's id to a per-request `AgentDeps`.
+
+    Every `AuditRecord` a guarded run produces (Req 4.7) is attributed through
+    this field, so an agent route must bind it before running the agent -
+    otherwise the audit trail records *what* was refused but never *for whom*,
+    which is most of its value once more than one API key exists.
+
+    Mutating in place is safe: `get_agent_deps()` constructs a fresh instance
+    per request, so nothing is shared between callers.
+
+    Args:
+        deps: The per-request dependencies to bind onto.
+        principal_id: `Principal.id` of the authenticated caller.
+
+    Returns:
+        AgentDeps: The same instance, with `principal` set.
+    """
+    deps.principal = principal_id
+    return deps

@@ -22,6 +22,7 @@ from pydantic_ai.messages import ToolCallPart
 
 from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
+from app.agents.deps import bind_principal
 from app.agents.deps import get_agent_deps
 from app.agents.guardrails import run_guarded
 from app.api.v1._stream import event_source
@@ -79,6 +80,8 @@ async def chat(
         HTTPException: 403 if session_id belongs to another principal; 504 if
             the request exceeds `chat_request_timeout`.
     """
+    bind_principal(deps, principal.id)
+
     if chat_request.session_id:
         await authorize_session(principal, chat_request.session_id, deps.settings)
         session_id = chat_request.session_id
@@ -217,6 +220,8 @@ async def stream_agent(
     Raises:
         HTTPException: 403 if session_id belongs to another principal.
     """
+    bind_principal(deps, principal.id)
+
     if chat_request.session_id:
         await authorize_session(principal, chat_request.session_id, deps.settings)
 

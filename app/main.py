@@ -88,6 +88,15 @@ def create_app(
     # but set a very high limit (1000/minute) that effectively exempts them in practice.
     # Trade-off: Health checks get rate limited, but at such a high threshold they won't
     # be affected.
+    #
+    # That trade-off is about *availability* of the health routes, and it must not be
+    # read as a statement about their cost. `/health/ready` is unauthenticated and its
+    # LLM check reaches a paid provider, so at this limit it would otherwise convert
+    # inbound request volume directly into billable outbound volume - outside
+    # `llm_rate_limit` (Req 11.3) entirely, since that only guards authenticated LLM
+    # routes. What bounds it is `ReadinessProbeCache` (`app/api/health.py`), not this
+    # limit. Any future unauthenticated route that touches a metered dependency needs
+    # its own bound for the same reason.
     add_rate_limiting(
         app,
         default_limits=["1000/minute"],

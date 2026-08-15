@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from fastapi.security import APIKeyHeader
 
 from app.config import Settings
-from app.config import get_settings
+from app.deps.settings import get_request_settings
 from app.middleware.request_id import request_id_var
 from app.models.errors import ErrorResponse
 from app.security.principal import Principal
@@ -44,7 +44,7 @@ def _unauthorized() -> HTTPException:
 
 async def verify_api_key(
     api_key: str | None = Depends(api_key_header),
-    settings: Settings = Depends(get_settings),  # noqa: B008
+    settings: Settings = Depends(get_request_settings),  # noqa: B008
 ) -> Principal:
     """Verify X-API-Key header matches configured API key.
 
@@ -55,7 +55,10 @@ async def verify_api_key(
 
     Args:
         api_key: API key from X-API-Key header (None if not provided)
-        settings: Application settings containing the expected API key
+        settings: Application settings containing the expected API key.
+            Resolved from `app.state.settings` (the instance
+            `create_app(settings=...)` was built with), not process-global
+            `get_settings()` - see `app.deps.settings`.
 
     Returns:
         Principal: The authenticated caller, derived from the API key (Req 11.1).
