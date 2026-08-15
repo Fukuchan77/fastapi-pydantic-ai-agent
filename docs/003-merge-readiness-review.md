@@ -9,7 +9,9 @@
 
 ## 1. 判定
 
-**PR #21 の CI が green になり次第、マージを推奨する。**
+**マージを推奨する。PR #21 の CI は green になった**
+（run [`31881559587`](https://github.com/Fukuchan77/fastapi-pydantic-ai-agent/actions/runs/31881559587)
+/ commit `39559cc`、全 9 ステップ success、5 分 38 秒）。
 
 当初は Blocker 3 件を検出し、うち実装欠陥 2 件と High 2 件を修正した。
 その後 BL1 の解消のために PR を開いたところ、**PR CI で 4 件目の Blocker（BL0）が
@@ -31,23 +33,28 @@ BL1（CI が一度も実行されていない）を「手続き上の事項」�
 
 ブランチが要求する `pydantic-ai-slim>=2.27.0` を実際に導入し、全レーンを完走させた。
 
-| チェック | コマンド | 修正前 | 修正後 |
-|----------|----------|--------|--------|
-| Lint | `ruff check app/ evals/ tests/` | All checks passed | All checks passed |
-| Format | `ruff format --check` | clean | clean |
-| 型検査 | `ty check app/ evals/` | All checks passed | All checks passed |
-| テスト | `pytest tests/unit tests/integration tests/e2e` | **1431 passed / 22 skipped** | **1490 passed / 23 skipped** |
-| カバレッジ | 80% ゲート | 96.44% | 96.19% |
-| 依存監査 | `pip-audit`（除外 5 件） | No known vulnerabilities | No known vulnerabilities |
+| チェック | コマンド | 修正前（ローカル） | 修正後（ローカル） | **PR CI `31881559587`** |
+|----------|----------|--------|--------|--------|
+| Lint | `ruff check app/ evals/ tests/` | All checks passed | All checks passed | ✅ success |
+| Format | `ruff format --check` | clean | clean | —（lint ステップ外） |
+| 型検査 | `ty check app/ evals/` | All checks passed | All checks passed | ✅ success |
+| テスト | `pytest tests/unit tests/integration tests/e2e` | **1431 passed / 22 skipped** | **1490 passed / 23 skipped** | ✅ **1505 passed / 8 skipped**（249.43s） |
+| カバレッジ | 80% ゲート | 96.44% | 96.19% | ✅ 96.19% |
+| Redis ライブレーン | `test:redis`（`EXPECT_LIVE_TESTS=7`） | 未実行（Redis 不在） | 未実行（Redis 不在） | ✅ **7 passed**（2.05s） |
+| 依存監査 | `pip-audit`（除外 5 件） | No known vulnerabilities | No known vulnerabilities | ✅ No known vulnerabilities, 7 ignored |
 
-解決された実バージョン: `pydantic-ai 2.30.0` / Python 3.13.12。
-ローカルで未実行のレーン: `test_docker_deployment.py`（Docker 不可）、
-`test:redis`（Redis 不在）、`tests/local`（Ollama 不在）、`evals`（実 LLM 必要）。
-このうち Docker レーン（7 件）と Redis レーンは **PR CI 側で実行され、いずれも通っている**
-（run 31862477318 で Docker 7 件 PASSED、Redis サービスコンテナ起動成功）。
+解決された実バージョン: `pydantic-ai 2.30.0` / Python 3.13.12（ローカル）・
+3.13.15（CI — BL0 の修正により、CI もピンした 3.13 系を解決するようになった）。
+
+ローカルと CI のテスト件数差（1490 → 1505）は、ローカルで実行できなかったレーンが
+CI 側で実行されたことによる。ローカル未実行だったのは `test_docker_deployment.py`
+（Docker 不可）、`test:redis`（Redis 不在）、`tests/local`（Ollama 不在）、
+`evals`（実 LLM 必要）で、このうち **Docker レーンと Redis レーンは CI で実行され通った**。
+`tests/local` と `evals` は設計上 CI では走らない（pre-push 専用）。
 
 > **この表だけでマージ可否を判断してはならない。** BL0 が示すとおり、
 > ローカルの green は CI の green を意味しない。判定の根拠は PR #21 の CI である。
+> 本表の CI 列は run `31881559587` の実測値であり、判定はその列に基づく。
 
 ---
 
@@ -159,7 +166,7 @@ slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
 > RAG・e2e に広く分布しており、eval agent とは無関係である。
 > 見えていたのはハング直前までに到達した部分集合にすぎなかった。
 
-### BL1. このブランチの CI は一度も実行されていない（PR 作成で解消済み）
+### BL1. このブランチの CI は一度も実行されていない（解消済み）
 
 ```
 actions_list(list_workflow_runs, branch=003-pydantic-ai-v2-migration) → {"total_count": 0}
@@ -174,11 +181,25 @@ actions_list(list_workflow_runs, branch=003-pydantic-ai-v2-migration) → {"tota
 カバレッジゲート / pip-audit を完走させ、すべて green であることを確認した。
 ただしこれは PR CI の代替ではない（Redis レーンと Docker レーンは未実行）。
 
-**残作業**: 003 → main の PR を開き、Redis サービスコンテナ付きの
-`test:ci` + `test:redis`（`EXPECT_LIVE_TESTS=7`）+ `pip-audit` を green にする。
+**解消**: PR #21 を開き、3 回の run を経て commit `39559cc` で全ステップ green に到達した。
 
-> `pr.yml` に `push: branches: [main]` トリガがないため、マージ後の main では
-> CI が走らない。マージ後の回帰検知のために追加を推奨する。
+| run | commit | 結果 |
+|-----|--------|------|
+| `31862477318` | `b4d4048` | cancelled — ステップ 7 が 5h59m15s でジョブ既定上限 360 分に到達 |
+| `31880991303` | `3dc098d` | failure — 63 failed / 1426 passed / 8 skipped / 12 errors（BL0 の露出） |
+| **`31881559587`** | **`39559cc`** | **success — 全 9 ステップ green（5m38s）** |
+
+green run で初めて到達した 2 ステップが、ローカルでは代替できなかった検証である:
+
+- **`test:redis`** — `EXPECT_LIVE_TESTS=7` を満たして 7 件 PASSED。
+  v2 の `session:` → `session:v2:` キープレフィックス切替を、実 Redis に対して検証した。
+  この 7 件には `test_pre_cutover_prefix_reader_does_not_observe_v2_written_history` と
+  `test_pre_cutover_key_is_not_observable_via_v2_store` が含まれ、
+  v1/v2 の相互不可視性という切替の核心が実サーバで確認された。
+- **`pip-audit`** — `No known vulnerabilities found, 7 ignored`。
+
+> `pr.yml` に `push: branches: [main]` トリガがなかったため、マージ後の main では
+> CI が走らなかった。Medium 6 として本レビューで追加済み（`b4d4048`）。
 
 ### BL2. TRUSTED_PROXIES が CIDR 非対応 — 003 では実害が拡大していた（修正済み）
 
@@ -375,9 +396,15 @@ ignore するため**将来の提案は抑止される**が、設定より前に
 
 | # | 内容 | 状態 |
 |---|------|------|
-| 1 | 003 → main の PR を開き、PR CI（Redis レーン含む）を green にする（BL1） | PR 作成済み・CI 結果待ち |
+| 1 | 003 → main の PR を開き、PR CI（Redis レーン含む）を green にする（BL1） | **対応済み** — PR #21 / run `31881559587` で全 9 ステップ success |
 | 2 | Dependabot PR #17 / #12 を理由付きでクローズする（H3） | 対応済み |
 | 3 | `pr.yml` に `push: branches: [main]` トリガを追加する（Medium 6） | 対応済み |
+
+**マージ前の残作業は無い。** マージの実行そのものは判断者に委ねる。
+
+マージ後に確認すべき点が 1 つある: Medium 6 で追加した `push: branches: [main]`
+トリガにより、マージコミットに対して PR CI が改めて走る。PR の green は
+マージ「前」のブランチ先端に対するものなので、マージ後の run も確認されたい。
 
 ## 8. 関連ブランチ
 
