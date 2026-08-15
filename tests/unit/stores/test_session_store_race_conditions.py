@@ -1,9 +1,8 @@
 """Tests for critical race conditions in session_store.py.
 
-This module tests the three critical issues identified in the code review:
+This module tests the two critical issues identified in the code review:
 1. LRU eviction race condition (line 157)
 2. Lock cleanup race condition (line 187)
-3. SSE  prefix consistency
 """
 
 import asyncio
@@ -123,42 +122,52 @@ class TestLockCleanupRaceCondition:
         # indicate a bug. The important thing is no deadlock or corruption occurred.
 
 
-class TestSSEDataPrefixConsistency:
-    """Test SSE  prefix consistency (issue at line 99)."""
+class TestSaveHistoryClearRaceCondition:
+    """Test that a concurrent clear() can't orphan save_history's _last_access write.
 
-    def test_format_event_with_serialization_error_has_data_prefix(self):
-        r"""Test that error events from serialization failures have 'data: ' prefix.
+    save_history() is blocked on the per-session lock while clear() holds it.
+    """
 
-        Issue: Line 99 in app/api/v1/agent.py returns formatted string without 'data: ' prefix
-        when JSON serialization fails. It returns:
-            f"data: {json.dumps(error_payload)}\\n\\n"
+    @pytest.mark.asyncio
+    async def test_save_history_last_access_survives_concurrent_clear(self):
+        """A concurrent clear() must never leave a _store entry with no matching entry.
 
-        But should return:
-            f"data: {json.dumps(error_payload)}\\n\\n"
+        Issue: save_history() used to write `_last_access[session_id]`
+        *before* acquiring the per-session lock. If something else (e.g.
+        clear()) already held that lock at that moment, clear() could pop
+        both _store and _last_access, release the lock, and then
+        save_history() would resume and write only _store — leaving an
+        orphaned entry invisible to both LRU eviction and
+        cleanup_expired_sessions() (both iterate _last_access), i.e. a
+        permanent leak that also never expires.
 
-        Expected behavior: All SSE events must have 'data: ' prefix for proper parsing.
+        Fix: _last_access is now written inside the same lock acquisition as
+        the _store write, so the two can never be split by a concurrent
+        clear().
         """
-        import json
+        store = InMemorySessionStore()
+        msg = ModelRequest(parts=[UserPromptPart(content="test")])
+        session_id = "session1"
 
-        from app.api.v1.agent import DefaultSSEAdapter
+        # Simulate clear() already holding the per-session lock when
+        # save_history() is invoked.
+        lock = store._locks.setdefault(session_id, asyncio.Lock())
+        await lock.acquire()
 
-        adapter = DefaultSSEAdapter()
+        save_task = asyncio.create_task(store.save_history(session_id, [msg]))
+        await asyncio.sleep(0.001)  # let save_history block on lock acquisition
 
-        # Create an object that json.dumps cannot serialize (set is not JSON serializable)
-        unserializable_content = {"data": set([1, 2, 3])}  # type: ignore
+        # Perform what clear() does while holding the lock, then release —
+        # racing ahead of save_history's still-pending lock acquisition.
+        store._store.pop(session_id, None)
+        store._last_access.pop(session_id, None)
+        lock.release()
 
-        # Try to format an event with unserializable content
-        # This will trigger the exception handler at line 96-99
-        result = adapter.format_event("delta", unserializable_content)  # type: ignore
+        await save_task
 
-        # The result should have ' ' prefix even in error case
-        assert result.startswith("data: "), f"SSE event missing 'data: ' prefix. Got: {result[:50]}"
-
-        # Verify it's properly formatted SSE
-        assert result.endswith("\n\n"), "SSE event should end with \\n\\n"
-
-        # Verify the error payload is valid JSON
-        data_line = result.removeprefix("data: ").removesuffix("\n\n")
-        error_payload = json.loads(data_line)
-        assert error_payload["type"] == "error"
-        assert "content" in error_payload
+        assert session_id in store._store
+        assert session_id in store._last_access, (
+            "_store has an entry with no matching _last_access entry — "
+            "orphaned by the concurrent clear(), invisible to LRU eviction "
+            "and TTL cleanup"
+        )

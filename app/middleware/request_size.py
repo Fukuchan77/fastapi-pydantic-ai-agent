@@ -64,7 +64,8 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             content_length = int(request.headers["content-length"])
             if content_length > self.max_size:
                 error_response = ErrorResponse(
-                    message=f"Request entity too large (max {self.max_size // (1024 * 1024)}MB)"
+                    message=f"Request entity too large (max {self.max_size // (1024 * 1024)}MB)",
+                    code="REQUEST_TOO_LARGE",
                 )
                 return JSONResponse(
                     status_code=413,

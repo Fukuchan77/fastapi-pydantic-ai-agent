@@ -25,10 +25,10 @@ def test_auth_error_has_code() -> None:
 
         assert response.status_code == 401
 
-        # FastAPI wraps the ErrorResponse in a 'detail' key for HTTPException
-        response_json = response.json()
-        assert "detail" in response_json
-        error_data = response_json["detail"]
+        # The unified flat error envelope (Req 8.1, 8.4) has no nested
+        # 'detail' key - message/code sit at the top level of the body.
+        error_data = response.json()
+        assert "detail" not in error_data
 
         # Verify error response structure includes code field
         assert "message" in error_data

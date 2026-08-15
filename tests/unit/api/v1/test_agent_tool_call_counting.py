@@ -19,6 +19,8 @@ from pydantic_ai.messages import UserPromptPart
 
 from app.deps.auth import verify_api_key
 from app.main import app
+from app.security.principal import Principal
+from tests.conftest import build_test_settings
 
 
 class TestToolCallCounting:
@@ -75,7 +77,7 @@ class TestToolCallCounting:
         mock_session_store.get_history = AsyncMock(return_value=[])
 
         # Override authentication dependency
-        app.dependency_overrides[verify_api_key] = lambda: None
+        app.dependency_overrides[verify_api_key] = lambda: Principal(id="test-principal")
 
         try:
             with patch("app.api.v1.agent.get_agent_deps") as mock_get_deps:
@@ -86,7 +88,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)
@@ -145,7 +147,7 @@ class TestToolCallCounting:
         mock_session_store.get_history = AsyncMock(return_value=[])
 
         # Override authentication dependency
-        app.dependency_overrides[verify_api_key] = lambda: None
+        app.dependency_overrides[verify_api_key] = lambda: Principal(id="test-principal")
 
         try:
             with patch("app.api.v1.agent.get_agent_deps") as mock_get_deps:
@@ -156,7 +158,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)
@@ -204,7 +206,7 @@ class TestToolCallCounting:
         mock_session_store.get_history = AsyncMock(return_value=[])
 
         # Override authentication dependency
-        app.dependency_overrides[verify_api_key] = lambda: None
+        app.dependency_overrides[verify_api_key] = lambda: Principal(id="test-principal")
 
         try:
             with patch("app.api.v1.agent.get_agent_deps") as mock_get_deps:
@@ -215,7 +217,7 @@ class TestToolCallCounting:
                 with (
                     patch.object(app.state, "chat_agent", mock_agent, create=True),
                     patch.object(app.state, "http_client", AsyncMock(), create=True),
-                    patch.object(app.state, "settings", MagicMock(), create=True),
+                    patch.object(app.state, "settings", build_test_settings(), create=True),
                     patch.object(app.state, "session_store", mock_session_store, create=True),
                 ):
                     client = TestClient(app)

@@ -1,306 +1,238 @@
-"""Agent API routes and SSE streaming adapter.
+"""Agent API routes and SSE streaming endpoint.
 
 This module provides FastAPI routes for the Pydantic AI chat agent,
 including both standard request/response and Server-Sent Events (SSE)
-streaming endpoints.
+streaming endpoints. The SSE wire contract is the typed 5-event union
+defined in `app.patterns.sse`; stream lifecycle hardening is owned by
+`app.api.v1._stream`.
 """
 
 import asyncio
-import json
 import logging
-from typing import Protocol
-from typing import runtime_checkable
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import StreamingResponse
+from pydantic_ai import UsageLimits
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
 
+from app.agents.chat_agent import ChatOutput
 from app.agents.deps import AgentDeps
+from app.agents.deps import bind_principal
 from app.agents.deps import get_agent_deps
+from app.agents.guardrails import run_guarded
+from app.api.v1._stream import event_source
 from app.deps.auth import verify_api_key
+from app.middleware.rate_limit import enforce_llm_rate_limit
 from app.models.agent import ChatRequest
 from app.models.agent import ChatResponse
+from app.security.principal import Principal
+from app.services.session_service import authorize_session
+from app.services.session_service import start_session
 
 
 logger = logging.getLogger(__name__)
 
-
-@runtime_checkable
-class StreamAdapter(Protocol):
-    r"""Protocol for SSE stream adapters.
-
-    Defines the interface for formatting Server-Sent Events (SSE) in different
-    protocols (standard SSE, Vercel AI Data Stream, AG-UI, etc.).
-    """
-
-    def format_event(self, event_type: str, content: str) -> str:
-        r"""Format an SSE event with the given type and content.
-
-        Args:
-            event_type: Type of the event (e.g., "delta", "done", "error").
-            content: Content payload for the event.
-
-        Returns:
-            Formatted SSE event string.
-        """
-        ...
-
-    def format_done(self) -> str:
-        """Format a terminal "done" event to signal stream completion.
-
-        Returns:
-            Formatted SSE event string for stream completion.
-        """
-        ...
-
-    def format_error(self, message: str) -> str:
-        """Format an error event with the given message.
-
-        Args:
-            message: Error message to include in the event.
-
-        Returns:
-            Formatted SSE event string for error.
-        """
-        ...
-
-
-class DefaultSSEAdapter:
-    r"""Default SSE adapter that emits standard JSON events.
-
-    Produces SSE events in the format:
-        data: {"type": "event_type", "content": "content"}\n\n
-
-    This format is compatible with standard EventSource API clients.
-    """
-
-    def format_event(self, event_type: str, content: str) -> str:
-        r"""Format an SSE event with the given type and content.
-
-        Args:
-            event_type: Type of the event (e.g., "delta", "done", "error").
-            content: Content payload for the event.
-
-        Returns:
-            Formatted SSE event string in the format:
-                 {"type": "...", "content": "..."}\n\n
-        """
-        try:
-            payload = {"type": event_type, "content": content}
-            return f"data: {json.dumps(payload)}\n\n"
-        except (TypeError, ValueError) as e:
-            logger.error("Failed to serialize SSE event: %s", e, exc_info=True)
-            error_payload = {"type": "error", "content": "Serialization failed"}
-            return f"data: {json.dumps(error_payload)}\n\n"
-
-    def format_done(self) -> str:
-        """Format a terminal "done" event to signal stream completion.
-
-        Returns:
-            Formatted SSE event string with type="done" and empty content.
-        """
-        return self.format_event("done", "")
-
-    def format_error(self, message: str) -> str:
-        """Format an error event with the given message.
-
-        Args:
-            message: Error message to include in the event.
-
-        Returns:
-            Formatted SSE event string with type="error" and the error message.
-        """
-        return self.format_event("error", message)
-
+_HEARTBEAT_COMMENT = ": heartbeat\n\n"
 
 # Create router for agent endpoints
 router = APIRouter(tags=["agent"])
 
 
-@router.post("/agent/chat", response_model=ChatResponse)
+@router.post(
+    "/agent/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(enforce_llm_rate_limit)],
+)
 async def chat(
-    request: ChatRequest,
-    req: Request,
+    chat_request: ChatRequest,
+    request: Request,
     deps: AgentDeps = Depends(get_agent_deps),  # noqa: B008
-    _: None = Depends(verify_api_key),
+    principal: Principal = Depends(verify_api_key),  # noqa: B008
 ) -> ChatResponse:
     """Handle chat requests with the Pydantic AI agent.
 
-    This endpoint loads session history if a session_id is provided,
-    runs the agent with the user's message, saves the updated history,
-    and returns the agent's response.
+    Issues a server-side session_id bound to the caller when none is
+    presented, or authorizes an existing one before loading history - a
+    session_id bound to a different principal is rejected with 403
+    (Req 11.1/11.2). Runs the agent with the user's message under
+    `run_guarded` (Req 4.1: native `UsageLimits`; Req 4.4-4.6: tool
+    allow-list/approval/budget checks), saves the updated history on a
+    completed run, and returns the agent's response. The whole request is
+    bounded by `chat_request_timeout` (Req 4.2): a timeout aborts with a 504
+    rather than hanging indefinitely.
 
     Args:
-        request: ChatRequest with message and optional session_id.
-        req: FastAPI Request object for accessing app.state.
+        chat_request: ChatRequest with message and optional session_id.
+        request: FastAPI Request object for accessing app.state.
         deps: AgentDeps with session_store and other dependencies.
-        _: Authentication dependency (validates X-API-Key header).
+        principal: Authenticated caller (validates X-API-Key header, Req 11.1/11.2).
 
     Returns:
-        ChatResponse with the agent's reply, session_id, and tool call count.
+        ChatResponse with the agent's reply, session_id, tool call count,
+        stop reason, and audit trail.
+
+    Raises:
+        HTTPException: 403 if session_id belongs to another principal; 504 if
+            the request exceeds `chat_request_timeout`.
     """
-    # Load session history if session_id provided
-    history = []
-    if request.session_id:
-        history = await deps.session_store.get_history(request.session_id)
+    bind_principal(deps, principal.id)
+
+    if chat_request.session_id:
+        await authorize_session(principal, chat_request.session_id, deps.settings)
+        session_id = chat_request.session_id
+        history = await deps.session_store.get_history(session_id)
+    else:
+        session_id = await start_session(principal, deps.settings)
+        history = []
 
     # Get the chat agent from app.state
-    chat_agent = req.app.state.chat_agent
-
-    # Run the agent with message and history
-    result = await chat_agent.run(
-        request.message,
-        deps=deps,
-        message_history=history,
+    chat_agent = request.app.state.chat_agent
+    settings = deps.settings
+    limits = UsageLimits(
+        request_limit=settings.usage_request_limit,
+        total_tokens_limit=settings.usage_total_tokens_limit,
+        tool_calls_limit=settings.usage_tool_calls_limit,
     )
 
-    # Save updated message history back to session store
-    if request.session_id:
+    try:
+        guarded = await asyncio.wait_for(
+            run_guarded(
+                chat_agent,
+                chat_request.message,
+                deps=deps,
+                message_history=history,
+                limits=limits,
+                audit=deps.audit,
+            ),
+            timeout=settings.chat_request_timeout,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Chat request timed out") from exc
+
+    # Save updated message history back to session store, only for a
+    # completed turn - a refused/denied/budget-blocked turn has no new
+    # messages to persist and must not overwrite existing history.
+    if guarded.stop_reason == "completed":
         await deps.session_store.save_history(
-            request.session_id,
-            result.all_messages(),
+            session_id,
+            guarded.messages,
         )
 
-    # Return response
-    # Count tool calls from message history
     # Count ToolCallPart instances in ModelResponse messages
     tool_calls_made = sum(
         1
-        for m in result.all_messages()
+        for m in guarded.messages
         if isinstance(m, ModelResponse)
         for p in m.parts
         if isinstance(p, ToolCallPart)
     )
 
-    # Extract reply from result - handle both str output and Pydantic model output
-    # When output_type is a Pydantic model with 'reply' field, use result.data.reply
-    # Otherwise use result.output directly (str or other simple types)
-    if hasattr(result, "data") and hasattr(result.data, "reply"):
-        reply = result.data.reply
+    if guarded.stop_reason != "completed":
+        reply = f"Request stopped: {guarded.stop_reason}"
     else:
-        # FunctionModel and simple str outputs use result.output
-        # Simplified - all Python objects have __str__, so no need for conditional
-        reply = str(result.output)
+        # NativeOutput-capable models (Req 10.2) produce a ChatOutput instance;
+        # other models produce plain str (Req 10.3) - see build_chat_agent().
+        reply = (
+            guarded.output.reply if isinstance(guarded.output, ChatOutput) else str(guarded.output)
+        )
 
     return ChatResponse(
         reply=reply,
-        session_id=request.session_id,
+        session_id=session_id,
         tool_calls_made=tool_calls_made,
+        stop_reason=guarded.stop_reason,
+        audit=guarded.audit,
     )
 
 
-@router.post("/agent/stream")
+async def _with_heartbeat(
+    agen: AsyncIterator[str],
+    interval: float,
+) -> AsyncIterator[str]:
+    """Interleave SSE heartbeat comments while `agen` is idle (Req 2.8).
+
+    Uses `asyncio.wait()` (never `asyncio.wait_for()`) around the pending
+    upstream call, so a heartbeat tick only checks readiness — it never
+    cancels the in-flight event `_stream.py` is still producing.
+
+    Args:
+        agen: The SSE wire-text generator to wrap (e.g. from `event_source`).
+        interval: Seconds to wait for the next value before emitting a heartbeat.
+
+    Yields:
+        Values from `agen` in order, interspersed with heartbeat comments.
+    """
+    next_task: asyncio.Task[str] | None = None
+    try:
+        while True:
+            if next_task is None:
+                next_task = asyncio.ensure_future(agen.__anext__())
+            done, _pending = await asyncio.wait({next_task}, timeout=interval)
+            if not done:
+                yield _HEARTBEAT_COMMENT
+                continue
+            try:
+                yield next_task.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                next_task = None
+    finally:
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
+
+
+@router.post(
+    "/agent/stream",
+    dependencies=[Depends(enforce_llm_rate_limit)],
+)
 async def stream_agent(
-    request: ChatRequest,
-    req: Request,
+    chat_request: ChatRequest,
+    request: Request,
     deps: AgentDeps = Depends(get_agent_deps),  # noqa: B008
-    _: None = Depends(verify_api_key),
+    principal: Principal = Depends(verify_api_key),  # noqa: B008
 ) -> StreamingResponse:
     """Stream chat responses from the Pydantic AI agent via Server-Sent Events.
 
-    This endpoint loads session history if a session_id is provided,
-    runs the agent with streaming enabled, emits SSE events as tokens
-    are generated, saves the updated history, and sends a terminal done event.
+    Emits the typed 5-event union (`step_started`/`tool_called`/`token`/
+    `completed`/`error`) defined in `app.patterns.sse`. Session history is
+    loaded and saved by the event source in `app.api.v1._stream`; this route
+    only wires headers and the idle heartbeat. Unlike `/agent/chat`, this
+    endpoint has no wire channel to mint and return a new session_id (the
+    SSE contract carries no such field), so it only authorizes an existing
+    session_id (403 on cross-principal access, Req 11.2) and otherwise runs
+    statelessly, exactly as before.
 
     Args:
-        request: ChatRequest with message and optional session_id.
-        req: FastAPI Request object for accessing app.state.
+        chat_request: ChatRequest with message and optional session_id.
+        request: FastAPI Request object for accessing app.state.
         deps: AgentDeps with session_store and other dependencies.
-        _: Authentication dependency (validates X-API-Key header).
+        principal: Authenticated caller (validates X-API-Key header, Req 11.2).
 
     Returns:
         StreamingResponse with text/event-stream media type.
+
+    Raises:
+        HTTPException: 403 if session_id belongs to another principal.
     """
-    from collections.abc import AsyncIterator
+    bind_principal(deps, principal.id)
 
-    from fastapi.responses import StreamingResponse
+    if chat_request.session_id:
+        await authorize_session(principal, chat_request.session_id, deps.settings)
 
-    adapter = DefaultSSEAdapter()
-
-    async def generate() -> AsyncIterator[str]:
-        """Generate SSE events from agent stream with error handling.
-
-        Distinguishes between validation errors, cancellation, and unexpected
-        errors to provide appropriate error messages without leaking internal details.
-        """
-        try:
-            # Load session history if session_id provided
-            history = []
-            if request.session_id:
-                history = await deps.session_store.get_history(request.session_id)
-
-            # Get the chat agent from app.state
-            chat_agent = req.app.state.chat_agent
-
-            # Run agent with streaming enabled
-            async with chat_agent.run_stream(
-                request.message,
-                deps=deps,
-                message_history=history,
-            ) as result:
-                # Stream deltas as they arrive
-                async for delta in result.stream_text(delta=True):
-                    yield adapter.format_event("delta", delta)
-
-                # Collect all messages for history saving
-                # Must be done inside the context manager while result is still valid
-                all_messages = result.all_messages()
-
-            # Save session BEFORE emitting done event
-            # This ensures clients are only notified of completion if the session
-            # was saved successfully. If save fails, the client won't receive a done event.
-            if request.session_id:
-                try:
-                    await deps.session_store.save_history(
-                        request.session_id,
-                        all_messages,
-                    )
-                except ValueError as e:
-                    # Validation errors (e.g., message count exceeded) - log and notify client
-                    logger.warning(
-                        "Failed to save session history for session %s: %s",
-                        request.session_id,
-                        e,
-                    )
-                    # Emit error event instead of done event
-                    yield adapter.format_error(f"Failed to save session: {e}")
-                    return  # Don't emit done event
-                except Exception as e:
-                    # Unexpected errors during save - log and notify client
-                    logger.error(
-                        "Unexpected error saving session history for session %s: %s",
-                        request.session_id,
-                        e,
-                        exc_info=True,
-                    )
-                    # Emit error event instead of done event
-                    yield adapter.format_error("Failed to save session")
-                    return  # Don't emit done event
-
-            # Emit terminal done event (only if save succeeded or no session_id)
-            yield adapter.format_done()
-
-        except asyncio.CancelledError:
-            # Client disconnected - log but don't send error event
-            # Anonymize user messages - log only message length
-            logger.info("Stream cancelled by client (message_length=%d)", len(request.message))
-            raise
-        except ValueError as e:
-            # Validation errors - safe to expose message
-            logger.warning("Validation error in stream: %s", e)
-            yield adapter.format_error("Invalid request parameters")
-        except Exception as e:
-            # Unexpected errors - log full details, return generic message
-            # Anonymize user messages - log only message length, not content
-            logger.error(
-                "Unexpected error in agent stream: %s",
-                e,
-                exc_info=True,
-                extra={"message_length": len(request.message)},
-            )
-            yield adapter.format_error("An unexpected error occurred")
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    settings = request.app.state.settings
+    chat_agent = request.app.state.chat_agent
+    wire_stream = event_source(request, chat_agent, chat_request, deps, settings)
+    return StreamingResponse(
+        _with_heartbeat(wire_stream, settings.sse_heartbeat_interval),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

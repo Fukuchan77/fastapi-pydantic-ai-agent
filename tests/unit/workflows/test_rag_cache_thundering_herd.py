@@ -46,16 +46,16 @@ async def test_thundering_herd_duplicate_llm_calls():
     # Track how many times the vector store query is called
     # It's called once per workflow execution (from the search step)
     query_count = 0
-    original_query = vector_store.query
+    original_query = vector_store.query_with_scores
 
     async def counting_query(*args, **kwargs):
-        """Wrapper to count vector store query calls."""
+        """Wrapper to count vector store query_with_scores calls."""
         nonlocal query_count
         query_count += 1
         return await original_query(*args, **kwargs)
 
-    # Monkey patch vector_store.query to count calls
-    vector_store.query = counting_query
+    # Monkey patch vector_store.query_with_scores to count calls
+    vector_store.query_with_scores = counting_query
 
     try:
         # Create workflow with TestModel (no real LLM calls)
@@ -88,7 +88,7 @@ async def test_thundering_herd_duplicate_llm_calls():
 
     finally:
         # Restore original method
-        vector_store.query = original_query
+        vector_store.query_with_scores = original_query
 
 
 @pytest.mark.asyncio

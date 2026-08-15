@@ -1,30 +1,144 @@
 """Shared pytest fixtures for all tests."""
 
 import os
+import sys
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from fastapi import Request
 from httpx import ASGITransport
 from httpx import AsyncClient
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.profiles import ModelProfile
+
+from app.config import Settings
+from tests.support.hermetic import block_network
 
 
-# Set minimal environment variables before importing app
-# This is required because app/main.py calls get_settings() at module level
+# Some test modules still import the module-level `app.main.app` singleton
+# directly at module scope (executed at collection time, before any fixture
+# runs). Set minimal environment variables so that import keeps working; the
+# `client` fixture below builds its own app via `create_app()` and does not
+# depend on this.
 if "API_KEY" not in os.environ:
     os.environ["API_KEY"] = "test-api-key-12345"
+if "SESSION_SIGNING_KEY" not in os.environ:
+    os.environ["SESSION_SIGNING_KEY"] = "test-session-signing-key-1234567890"
 if "LLM_MODEL" not in os.environ:
     os.environ["LLM_MODEL"] = "openai:gpt-4"
 if "LLM_API_KEY" not in os.environ:
     os.environ["LLM_API_KEY"] = "test-llm-key-12345"
 
-from app.main import app
+from app.main import create_app
+
+
+_UNIT_TESTS_ROOT = Path(__file__).resolve().parent / "unit"
+
+
+class LiveTestCountGuard:
+    """Counts tests that actually executed (phase `call`) this session (Req 14.3)."""
+
+    def __init__(self) -> None:
+        """Initialize the guard with a zero call count."""
+        self.call_count = 0
+
+    def record(self, when: str) -> None:
+        """Increment the count when a test report reaches the `call` phase."""
+        if when == "call":
+            self.call_count += 1
+
+    def check(self, expected: int) -> str | None:
+        """Return a failure message if `call_count` != `expected`, else `None`."""
+        if self.call_count != expected:
+            return (
+                f"EXPECT_LIVE_TESTS={expected} but {self.call_count} test(s) actually "
+                "executed (phase=call) - a gated lane may have been silently skipped"
+            )
+        return None
+
+
+_live_test_count_guard = LiveTestCountGuard()
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Feed every test report's phase into the anti-false-green guard (Req 14.3)."""
+    _live_test_count_guard.record(report.when)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail the session when `EXPECT_LIVE_TESTS` was set and the count doesn't match.
+
+    Args:
+        session: The pytest session, whose `exitstatus` this hook may override.
+        exitstatus: The exit status pytest computed before this hook ran (unused
+            here - only inspected via `session.exitstatus` when overriding it).
+    """
+    del exitstatus
+    expected_raw = os.environ.get("EXPECT_LIVE_TESTS")
+    if expected_raw is None:
+        return
+    error = _live_test_count_guard.check(int(expected_raw))
+    if error is not None:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        sys.stderr.write(f"\nEXPECT_LIVE_TESTS guard failed: {error}\n")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_unit_network(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Block real network egress for tests under `tests/unit/` (Req 9.1-9.3).
+
+    Scoped to the unit tier only via the test file's own path: integration,
+    e2e, benchmark, and local tests intentionally exercise real stores/
+    providers (Redis, Chroma, Ollama) and must not be blocked.
+    """
+    if _UNIT_TESTS_ROOT not in request.node.path.parents:
+        yield
+        return
+
+    with block_network():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_dotenv_leak_into_unit_settings(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prevent a developer's local .env from leaking into unit-tier Settings() calls.
+
+    Several unit tests instantiate `Settings(...)` directly with only some
+    fields overridden (not via `build_test_settings()`, which passes every
+    field explicitly and so is unaffected either way). Without this fixture,
+    any unset field silently falls back to whatever a developer's local
+    `.env` supplies, via two independent paths that both need blocking:
+
+    1. `uv run` itself auto-loads a project-root `.env` into the *process
+       environment* before Python even starts (see `uv run --help`'s
+       `--env-file`/`--no-env-file`) - a real `os.environ` entry always wins
+       over pydantic-settings' own dotenv source, so disabling that source
+       alone would not stop this path. Deleting every Settings field's
+       default env var name (`FIELD_NAME.upper()`; no field here uses a
+       custom `alias`) from `os.environ` blocks it.
+    2. `Settings.model_config["env_file"] = ".env"` (`app/config/settings.py`)
+       is pydantic-settings' *own* dotenv reader, independent of (1) - it
+       parses the file directly rather than going through `os.environ`, so
+       even a fully clean environment would still leak through it.
+
+    Scoped to the unit tier only, matching `_hermetic_unit_network`'s
+    scoping, since integration/e2e tests build their settings the same
+    explicit way regardless.
+    """
+    if _UNIT_TESTS_ROOT not in request.node.path.parents:
+        return
+
+    for field_name in Settings.model_fields:
+        monkeypatch.delenv(field_name.upper(), raising=False)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)  # type: ignore[arg-type]
 
 
 @pytest.fixture(autouse=True)
@@ -49,16 +163,11 @@ def clear_settings_cache():
 
 @pytest.fixture(autouse=True)
 def clear_workflow_cache():
-    """Clear workflow cache before and after each test to prevent pollution.
+    """Clear the workflow cache before and after each test to prevent pollution.
 
     The _workflow_cache dict in app/deps/workflow.py is a module-level
     global that persists between tests. Without clearing it, tests can see stale
     entries from previous tests, especially if Python reuses id() values after GC.
-
-    Also clear the _get_cached_model LRU cache to prevent settings
-    pollution. When tests change LLM settings via monkeypatch, the @lru_cache
-    decorator on _get_cached_model() causes the old model to persist, leading
-    to tests inadvertently sharing configuration.
 
     This fixture runs automatically (autouse=True) before and after every test
     to ensure test isolation.
@@ -67,11 +176,9 @@ def clear_workflow_cache():
 
     # Clear before test runs
     wf._workflow_cache.clear()
-    wf._get_cached_model.cache_clear()
     yield
     # Clear after test completes
     wf._workflow_cache.clear()
-    wf._get_cached_model.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +195,7 @@ def test_env(monkeypatch):
     Fixed misleading comment - the fixture DOES set LLM_API_KEY.
     """
     monkeypatch.setenv("API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("SESSION_SIGNING_KEY", "test-session-signing-key-1234567890")
     monkeypatch.setenv("LLM_MODEL", "openai:gpt-4")
     monkeypatch.setenv("LLM_API_KEY", "test-llm-key-12345")  # Set for most tests
     # Disable Logfire in tests
@@ -120,6 +228,13 @@ def auth_headers(test_api_key: str) -> dict[str, str]:
 def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
     """Simple LLM function for testing that returns predictable responses.
 
+    Discriminates on `agent_info.output_tools` - whether the agent asked for
+    structured output - rather than on prompt text (Req 10.8, 15.4): prompt
+    sniffing is exactly what Req 10.2 deletes from production code, so this
+    fixture must not reintroduce it. The RAG relevance evaluator is the only
+    structured-output caller here; a terminal tool-call part answers it
+    directly, with no dependence on prompt wording.
+
     Args:
         messages: List of ModelMessage objects.
         agent_info: Agent information.
@@ -127,6 +242,17 @@ def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
     Returns:
         ModelResponse with canned response for testing.
     """
+    if agent_info.output_tools:
+        tool = agent_info.output_tools[0]
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool.name,
+                    {"sufficient": True, "rationale": "The retrieved chunks answer the query."},
+                )
+            ]
+        )
+
     # Extract the last user message content
     user_messages = [
         msg.parts[0].content
@@ -136,12 +262,6 @@ def simple_llm_function(messages: list, agent_info: AgentInfo) -> ModelResponse:
 
     if user_messages:
         last_message = user_messages[-1].lower()
-
-        # Detect RAG evaluation prompts and return "relevant"
-        is_evaluation = "respond with exactly one word" in last_message
-        has_relevance = "relevant" in last_message or "insufficient" in last_message
-        if is_evaluation and has_relevance:
-            return ModelResponse(parts=[TextPart(content="relevant")])
 
         # Detect RAG synthesis prompts and return a contextual answer
         is_synthesis = (
@@ -217,64 +337,56 @@ async def simple_llm_stream_function(messages: list, agent_info: AgentInfo):
 def test_model() -> FunctionModel:
     """Provide a FunctionModel for testing without real LLM calls.
 
+    `simple_llm_function`/`simple_llm_stream_function` return plain text, not
+    JSON matching `ChatOutput` - an explicit `supports_json_schema_output=False`
+    profile keeps this fixture on the plain-output path (Req 10.3) regardless
+    of `FunctionModel`'s own default profile (which reports `True`). The RAG
+    relevance evaluator is a separate, tool-based structured-output agent;
+    `simple_llm_function` answers it with a terminal tool-call part instead
+    (Req 10.8), unaffected by this profile setting.
+
     Returns:
         FunctionModel configured with simple_llm_function and stream support.
     """
-    return FunctionModel(simple_llm_function, stream_function=simple_llm_stream_function)
+    return FunctionModel(
+        simple_llm_function,
+        stream_function=simple_llm_stream_function,
+        profile=ModelProfile(supports_json_schema_output=False),
+    )
 
 
-@asynccontextmanager
-async def test_lifespan_override(test_model: FunctionModel):
-    """Override lifespan to inject test model.
+def build_test_settings(**overrides: object) -> Settings:
+    """Build a `Settings` instance for tests without relying on environment variables.
 
-    This context manager wraps the real lifespan but replaces the
-    chat agent and RAG workflow with ones using FunctionModel to avoid real LLM calls.
+    Passing explicit field values to `Settings(...)` bypasses environment/`.env`
+    lookups for those fields, so callers can construct isolated configurations
+    (e.g. per-test CORS origins) without monkeypatching `os.environ`.
 
     Args:
-        test_model: FunctionModel to use for testing.
+        **overrides: Field overrides layered on top of the minimal valid defaults.
 
-    Yields:
-        None: Control during test app lifetime.
+    Returns:
+        A validated `Settings` instance.
     """
-    from app.agents.chat_agent import build_chat_agent
-    from app.deps.workflow import get_rag_workflow
-    from app.main import lifespan as real_lifespan
-    from app.workflows.corrective_rag import CorrectiveRAGWorkflow
-
-    # Define test workflow factory that uses test_model
-    def get_test_rag_workflow(req: Request):
-        """Test version of get_rag_workflow that uses FunctionModel."""
-        from app.config import get_settings
-
-        return CorrectiveRAGWorkflow(
-            vector_store=req.app.state.vector_store,
-            llm_settings=get_settings(),
-            llm_model=test_model,  # Inject test model here
-        )
-
-    # Run the real lifespan
-    async with real_lifespan(app):
-        # Override the chat agent with test model
-        app.state.chat_agent = build_chat_agent(model=test_model)
-
-        # Override RAG workflow dependency to use test model
-        app.dependency_overrides[get_rag_workflow] = get_test_rag_workflow
-
-        yield
-
-        # Clean up overrides
-        app.dependency_overrides.clear()
+    defaults: dict[str, object] = {
+        "api_key": "test-api-key-12345",
+        "session_signing_key": "test-session-signing-key-1234567890",
+        "llm_model": "openai:gpt-4",
+        "llm_api_key": "test-llm-key-12345",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type]
 
 
 @pytest_asyncio.fixture
 async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     """Provide an async HTTP client for E2E tests.
 
-    This fixture creates an AsyncClient with ASGI transport that communicates
-    directly with the FastAPI app without starting a real HTTP server.
-    The app's lifespan is executed, ensuring proper startup/shutdown.
-
-    The chat agent is overridden with a FunctionModel to avoid real LLM API calls.
+    Builds an isolated app via `create_app(settings=..., model=test_model)` so the
+    chat agent is wired directly with the `FunctionModel`. `app/lifespan.py`
+    publishes that same model on `app.state.llm_model` (Req 3.1), and
+    `get_rag_workflow` now reads it from there (Req 3.3) - no dependency
+    override is needed for RAG to see the injected model either.
 
     Args:
         test_model: FunctionModel fixture for testing.
@@ -282,11 +394,12 @@ async def client(test_model: FunctionModel) -> AsyncIterator[AsyncClient]:
     Yields:
         AsyncClient configured for testing.
     """
-    # Create a test app with overridden lifespan and async client with ASGI transport
+    test_app = create_app(settings=build_test_settings(), model=test_model)
+
     async with (
-        test_lifespan_override(test_model),
+        test_app.router.lifespan_context(test_app),
         AsyncClient(
-            transport=ASGITransport(app=app),
+            transport=ASGITransport(app=test_app),
             base_url="http://test",
         ) as test_client,
     ):

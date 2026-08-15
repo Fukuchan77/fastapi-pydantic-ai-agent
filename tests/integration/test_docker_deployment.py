@@ -10,7 +10,6 @@ Note: These tests require Docker to be installed and available.
 They will be skipped if Docker is not found in the system PATH.
 """
 
-import shutil
 import socket
 import subprocess
 import time
@@ -20,10 +19,14 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.docker import probe_docker_daemon
 
-# Check if Docker is available
-DOCKER_AVAILABLE = shutil.which("docker") is not None
-SKIP_REASON = "Docker not available - these tests run in CI with Docker"
+
+# Probe daemon reachability, not just CLI presence on PATH (Req 13.8, 13.9):
+# a machine with the CLI installed but no running daemon (e.g. Docker
+# Desktop/Rancher Desktop present but not started) must skip cleanly rather
+# than a real `docker build` call erroring out.
+DOCKER_AVAILABLE, SKIP_REASON = probe_docker_daemon()
 
 # Mark all tests in this module to require Docker
 pytestmark = [
@@ -58,7 +61,9 @@ def _wait_for_health(port: int, timeout: int = _STARTUP_TIMEOUT) -> None:
             r = httpx.get(f"http://localhost:{port}/health", timeout=2.0)
             if r.status_code == 200:
                 return
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except httpx.TransportError as e:
+            # Covers ConnectError/TimeoutException (not up yet) and
+            # RemoteProtocolError (container crashed mid-startup).
             last_error = e
         time.sleep(1)
     raise RuntimeError(
@@ -87,7 +92,9 @@ def _start_container(image_name: str, host_port: int) -> str:
             "-p",
             f"{host_port}:8000",
             "-e",
-            "API_KEY=test-docker-key",
+            "API_KEY=test-docker-key-1234567890",
+            "-e",
+            "SESSION_SIGNING_KEY=test-session-signing-key-1234567890",
             "-e",
             "LLM_MODEL=openai:gpt-4o",
             "-e",
@@ -235,7 +242,7 @@ def test_container_health_endpoint_responds(running_container: str, container_po
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "healthy"
+    assert data["status"] == "ok"
 
 
 def test_environment_variables_injected(running_container: str) -> None:
@@ -251,7 +258,7 @@ def test_environment_variables_injected(running_container: str) -> None:
     )
 
     assert result.returncode == 0
-    assert result.stdout.strip() == "test-docker-key"
+    assert result.stdout.strip() == "test-docker-key-1234567890"
 
 
 def test_virtual_environment_in_path(running_container: str) -> None:
@@ -269,6 +276,31 @@ def test_virtual_environment_in_path(running_container: str) -> None:
     assert result.returncode == 0
     uvicorn_path = result.stdout.strip()
     assert "/app/.venv/bin/uvicorn" in uvicorn_path
+
+
+def test_forwarded_allow_ips_default_configured(running_container: str) -> None:
+    """Test that the image sets an explicit uvicorn proxy trust list.
+
+    Uvicorn's `Config` reads `FORWARDED_ALLOW_IPS` from the environment as the
+    default for `forwarded_allow_ips` (the trust list its `ProxyHeadersMiddleware`
+    uses to decide whether to rewrite `scope["scheme"]` from `X-Forwarded-Proto`).
+    Leaving it unset falls back to uvicorn's own implicit "127.0.0.1" default,
+    which silently never matches a real reverse proxy - Strict-Transport-Security
+    (Req 11.4) would then never be emitted in a TLS-terminating deployment. The
+    Dockerfile makes that default explicit so it is documented and overridable
+    via `docker run -e FORWARDED_ALLOW_IPS=...` rather than implicit.
+
+    Requirements: 11.4
+    """
+    result = subprocess.run(
+        ["docker", "exec", running_container, "printenv", "FORWARDED_ALLOW_IPS"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "127.0.0.1"
 
 
 @pytest.fixture

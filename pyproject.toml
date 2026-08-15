@@ -6,22 +6,50 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "chromadb>=0.5.0,<1.0",
-    "fastapi>=0.135.1,<1.0",
+    # Capped below 0.137 (bisected: 0.136.3 flattens, 0.137.2 does not) because
+    # 0.137 wraps included routers in `_IncludedRouter` instead of flattening them
+    # into `app.routes`. slowapi's `_find_route_handler` scans `app.routes`
+    # non-recursively for a `.endpoint` attribute, finds none, and `_should_exempt`
+    # then treats every request as exempt - silently disabling the global rate
+    # limit rather than failing loudly. Revisit when slowapi resolves routes
+    # recursively; `tests/e2e/test_rate_limiting_enforcement.py` is the canary.
+    "fastapi>=0.135.1,<0.137",
     "httpx>=0.28.1,<1.0",
     "llama-index-core>=0.14.18,<1.0",
     "llama-index-workflows>=2.17.0,<3.0",
     "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
-    "pydantic-ai-litellm>=0.2.3,<1.0",
-    "pydantic-ai-slim[logfire,openai]>=1.70.0,<2.0",
+    # Capped below its next minor, not its next major: this is a 0.x package
+    # reaching into six private pydantic-ai APIs, so its minors are its
+    # breaking releases. A `<1.0` bound would admit 0.3.x-0.9.x unreviewed --
+    # the same 0.x classification trap the fastapi bound above closes.
+    "pydantic-ai-litellm>=0.2.3,<0.3.0",
+    # Bumped to the 2.x line only after the adapter-compatibility gate
+    # (docs/adapter-probe-report-2026-08-13-run1.md) recorded a PASS across
+    # all six stages. Capped below 3.0 so a future major can't reintroduce
+    # v1-to-v2-style breaking changes without re-running that gate.
+    "pydantic-ai-slim[logfire,openai]>=2.27.0,<3.0",
     "pydantic-settings>=2.13.1,<3.0",
     "redis>=5.0.0,<6.0",
-    "sentence-transformers>=3.0.0,<4.0",
+    "sentence-transformers>=5.2.0,<6.0",
     "slowapi>=0.1.9,<1.0",
+    # Pinned below 1.0 because slowapi 0.1.10 is not compatible with starlette 1.x:
+    # exception-handler dispatch misroutes (a ValidationError reaches slowapi's
+    # _rate_limit_exceeded_handler and dies on the missing .detail), and
+    # SlowAPIMiddleware stops emitting X-RateLimit-* headers, silently disabling the
+    # global rate limit. Revisit when slowapi supports starlette 1.x.
+    #
+    # The starlette advisories fixed only in 1.x are handled at the app layer
+    # instead: the reachable one (Host header reflected into redirect Location) is
+    # closed by TrustedHostMiddleware in main.py, and the rest are unreachable here
+    # (no request.form(), no HTTPEndpoint, no StaticFiles).
+    "starlette>=0.52.1,<1.0",
     "uvicorn[standard]>=0.42.0,<1.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pip-audit>=2.9,<3",
+    "pre-commit>=4.0,<5",
     "pytest>=9.0.2,<10.0",
     "pytest-asyncio>=1.3.0,<2.0",
     "pytest-cov>=7.0.0,<8.0",
@@ -73,11 +101,52 @@ convention = "google"
 # Pytest Configuration
 # ============================================================================
 [tool.pytest.ini_options]
+# Req 13.1/13.2: collect async tests without requiring an explicit
+# @pytest.mark.asyncio, so an unmarked coroutine test cannot pass without
+# being awaited.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "docker: marks tests that require Docker to be installed and available (skip in local dev, run in CI)",
     "benchmark: marks performance benchmark tests that measure latency, throughput, and cache hit rates",
     "ollama: requires running Ollama instance",
+    "chroma: requires RUN_CHROMA_INTEGRATION_TESTS opt-in (downloads a Hugging Face embedding model)",
+    "redis: requires a reachable Redis server",
 ]
+# Req 7.1/7.2: turn "zero pydantic_ai deprecation warnings" from a
+# measurement into an enforced invariant. Deliberately bare -- not keyed to
+# `pydantic_ai`'s own module -- because pytest's filter `module` field
+# matches the module a warning is *attributed to* (the caller, per
+# `warnings.warn`'s `stacklevel`), not the module that calls `warnings.warn`;
+# a `pydantic_ai`-keyed filter would never fire for a deprecated call
+# attributed to first-party code (demonstrated in
+# tests/unit/test_deprecation_filter.py). Applies to every pytest lane,
+# since this is process-wide pytest config: unit, integration, e2e,
+# benchmark, and the Ollama-gated local lane. `mise run evals` is out of
+# scope by construction -- it invokes evals.runner directly, not pytest.
+# Re-censused 2026-08-14 against pydantic-ai-slim 2.30.0 and
+# pydantic-ai-litellm 0.2.8 (the 2.x lock refreshed in task 7.4) across all
+# five lanes above: zero DeprecationWarning of any origin was observed, so
+# no `ignore::DeprecationWarning:<module>` entries are needed. Task 6's
+# adapter-compatibility gate never triggered task 6.6's Class-B hatch (it
+# recorded a PASS on its first graded run -- docs/adapter-probe-report-
+# 2026-08-13-run1.md), so there was no inherited ignore entry to re-justify
+# or remove here either. Original census taken 2026-08-11 against
+# pydantic-ai-slim 1.107.2, also zero warnings. Re-census (and add ignore
+# entries here as needed, each naming its emitter) on the next pydantic-ai
+# constraint bump.
+filterwarnings = [
+    "error::DeprecationWarning",
+]
+
+# ============================================================================
+# Coverage Configuration - CI gate (Req 1.3: fail PR CI below 80% line coverage)
+# ============================================================================
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 80
 
 # ============================================================================
 # Ty (Type Checker) Configuration - Strict type checking

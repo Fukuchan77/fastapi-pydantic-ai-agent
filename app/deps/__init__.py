@@ -9,10 +9,12 @@ app.deps.
 """
 
 from app.deps.auth import verify_api_key
+from app.deps.settings import get_request_settings
 from app.deps.workflow import get_rag_workflow
 
 
 __all__ = [
     "get_rag_workflow",
+    "get_request_settings",
     "verify_api_key",
 ]

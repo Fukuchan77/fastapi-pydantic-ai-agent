@@ -4,15 +4,27 @@ Verify that rate limiting is actually enforced on all routes.
 Quick workaround (Option C): All routes including health checks have a 1000/minute
 rate limit applied globally via SlowAPIMiddleware. This effectively exempts health
 checks (they'll never hit 1000/min) while still providing protection on protected routes.
+The `X-RateLimit-*` response headers always reflect this global default, regardless
+of endpoint - LLM-invoking endpoints (chat, stream, RAG query) additionally carry
+a stricter, configurable per-route limit (`settings.llm_rate_limit`, Req 11.3) enforced
+via `enforce_llm_rate_limit` (app/middleware/rate_limit.py), which reuses the same
+per-app `Limiter`/storage rather than a second, independently-headered one - so its
+enforcement (a 429 once exceeded) is verified directly rather than via headers.
 
 Tests verify:
 1. Rate limiting headers are present and decrement correctly
 2. Rate limiting is enforced (would return 429 after 1000 requests)
 3. Health checks also have rate limiting but at same high threshold
+4. LLM-invoking endpoints additionally enforce the stricter per-route limit (Req 11.3)
 """
 
 import pytest
 from httpx import AsyncClient
+
+from tests.conftest import build_test_settings
+
+
+_LLM_RATE_LIMIT = int(build_test_settings().llm_rate_limit.split("/")[0])
 
 
 @pytest.mark.asyncio
@@ -129,3 +141,31 @@ async def test_rate_limit_applied_to_health_endpoint_with_high_limit(
         # Verify remaining counter is still high
         remaining = int(response.headers["X-RateLimit-Remaining"])
         assert remaining > 900, f"Remaining count should stay high, got {remaining}"
+
+
+@pytest.mark.asyncio
+async def test_llm_rate_limit_triggers_429_before_global_default(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """The stricter, configurable LLM rate limit (Req 11.3) triggers a 429 on its own.
+
+    `settings.llm_rate_limit` defaults to a value far below the global
+    1000/minute default, so making one more request than that budget allows
+    must be rejected well before the global default would ever trigger.
+    """
+    statuses = []
+    for i in range(_LLM_RATE_LIMIT + 1):
+        response = await client.post(
+            "/v1/agent/chat",
+            json={"message": f"Test message {i}"},
+            headers=auth_headers,
+        )
+        statuses.append(response.status_code)
+
+    assert statuses[:_LLM_RATE_LIMIT] == [200] * _LLM_RATE_LIMIT, (
+        f"All {_LLM_RATE_LIMIT} requests within budget should succeed: {statuses}"
+    )
+    assert statuses[_LLM_RATE_LIMIT] == 429, (
+        f"Request {_LLM_RATE_LIMIT + 1} should be rejected by the stricter LLM rate "
+        f"limit: {statuses}"
+    )

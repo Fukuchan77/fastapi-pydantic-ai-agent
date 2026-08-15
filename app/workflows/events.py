@@ -11,6 +11,7 @@ Each event carries the workflow state to enable stateless step functions.
 from llama_index.core.workflow import Event
 from pydantic import Field
 
+from app.models.rag import RetrievedHit
 from app.workflows.state import WorkflowState
 
 
@@ -34,12 +35,12 @@ class EvaluateEvent(Event):
 
     Attributes:
         query: The original search query (1-10000 characters).
-        chunks: List of retrieved document chunks to evaluate (max 100 chunks).
+        hits: Retrieved hits (with chunk_id/score) to evaluate (max 100).
         state: Current workflow state.
     """
 
     query: str = Field(..., min_length=1, max_length=10000)
-    chunks: list[str] = Field(..., max_length=100)
+    hits: list[RetrievedHit] = Field(..., max_length=100)
     state: WorkflowState
 
 
@@ -48,12 +49,14 @@ class SynthesizeEvent(Event):
 
     Attributes:
         query: The original search query (1-10000 characters).
-        chunks: List of relevant document chunks for synthesis (max 100 chunks).
+        hits: Retrieved hits available for synthesis (max 100). Non-empty even when
+            context_found is False if retries were exhausted with hits still present
+            (degraded synthesis); empty only when no hits were ever retrieved.
         context_found: Whether relevant context was found (True) or retries exhausted (False).
         state: Current workflow state.
     """
 
     query: str = Field(..., min_length=1, max_length=10000)
-    chunks: list[str] = Field(..., max_length=100)
+    hits: list[RetrievedHit] = Field(..., max_length=100)
     context_found: bool
     state: WorkflowState

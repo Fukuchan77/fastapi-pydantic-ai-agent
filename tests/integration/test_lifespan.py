@@ -5,49 +5,49 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from logfire import ScrubbingOptions
+from pydantic_ai.models.test import TestModel
+
+from app.config import Settings
+from app.main import create_app
+
+
+def _build_settings(**overrides: object) -> Settings:
+    """Build a valid Settings instance directly, without touching os.environ."""
+    defaults: dict[str, object] = {
+        "api_key": "test-api-key-12345",
+        "llm_model": "openai:gpt-4o",
+        "llm_api_key": "test-llm-api-key",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type]
 
 
 class TestLifespanManagement:
     """Test application lifespan startup and shutdown behavior."""
 
     @pytest.mark.asyncio
-    async def test_lifespan_initializes_session_store(self, monkeypatch) -> None:
+    async def test_lifespan_initializes_session_store(self) -> None:
         """Lifespan must initialize session_store in app.state."""
-        # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        app = create_app(settings=_build_settings(), model=TestModel())
 
-        # Import app and lifespan to test them directly
-        from app.main import app
-        from app.main import lifespan
-
-        # Manually invoke the lifespan context manager to verify it works
-        async with lifespan(app):
+        # Manually invoke the app's registered lifespan to verify it works
+        async with app.router.lifespan_context(app):
             # During the lifespan context, app.state should have session_store
             assert hasattr(app.state, "session_store"), "session_store should be initialized"
             assert app.state.session_store is not None
 
     @pytest.mark.asyncio
-    async def test_session_cleanup_task_is_running(self, monkeypatch) -> None:
+    async def test_session_cleanup_task_is_running(self) -> None:
         """Lifespan must start a background cleanup task for expired sessions."""
-        # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        app = create_app(settings=_build_settings(), model=TestModel())
 
-        # Import app and lifespan to test them directly
-        from app.main import app
-        from app.main import lifespan
-
-        # Manually invoke the lifespan context manager
-        async with lifespan(app):
+        async with app.router.lifespan_context(app):
             # Verify session_store exists
             assert hasattr(app.state, "session_store")
             session_store = app.state.session_store
 
             # Save a session that will expire quickly
-            # We need a store with short TTL for testing
             await session_store.save_history("test-session", [])
 
             # Verify session exists initially
@@ -60,7 +60,6 @@ class TestLifespanManagement:
             # not practical for testing.
             #
             # Instead, we verify the cleanup mechanism exists and can be called:
-            # The cleanup_expired_sessions method should be callable
             assert hasattr(session_store, "cleanup_expired_sessions")
             assert callable(session_store.cleanup_expired_sessions)
 
@@ -78,25 +77,14 @@ class TestLifespanManagement:
             )
 
     @pytest.mark.asyncio
-    async def test_lifespan_cleanup_cancels_background_task(self, monkeypatch) -> None:
+    async def test_lifespan_cleanup_cancels_background_task(self) -> None:
         """Lifespan shutdown must cancel the cleanup background task."""
-        # Set required environment variables for the lifespan to work
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
+        app = create_app(settings=_build_settings(), model=TestModel())
 
-        # Create a new app instance for this test to have clean state
-        from fastapi import FastAPI
-
-        from app.main import lifespan
-
-        test_app = FastAPI()
-
-        # Manually invoke the lifespan context manager
-        async with lifespan(test_app):
+        async with app.router.lifespan_context(app):
             # Inside the context, cleanup_task should exist and be running
-            assert hasattr(test_app.state, "cleanup_task")
-            cleanup_task = test_app.state.cleanup_task
+            assert hasattr(app.state, "cleanup_task")
+            cleanup_task = app.state.cleanup_task
             assert not cleanup_task.done()
 
         # After exiting the context (lifespan shutdown), task should be cancelled
@@ -116,33 +104,17 @@ class TestLifespanManagement:
         self,
         mock_logfire_configure: MagicMock,
         mock_instrument_pydantic: MagicMock,
-        monkeypatch,
     ) -> None:
         """Lifespan must configure Logfire observability during startup."""
-        # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "openai:gpt-4o")
-        monkeypatch.setenv("LOGFIRE_TOKEN", "test-logfire-token")
+        settings = _build_settings(logfire_token="test-logfire-token")  # noqa: S106
+        app = create_app(settings=settings, model=TestModel())
 
-        # Clear the settings cache so new settings with LOGFIRE_TOKEN are loaded
-        from app.config import get_settings
-
-        get_settings.cache_clear()
-
-        # Create a new app instance for this test
-        from fastapi import FastAPI
-
-        from app.main import lifespan
-
-        test_app = FastAPI()
-
-        # Manually invoke the lifespan context manager
-        async with lifespan(test_app):
+        async with app.router.lifespan_context(app):
             # Verify logfire.configure was called with token and service_name
             mock_logfire_configure.assert_called_once_with(
                 token="test-logfire-token",  # noqa: S106
                 service_name="fastapi-pydantic-ai-agent",
+                scrubbing=ScrubbingOptions(extra_patterns=["prompt", "tool_input", "tool_output"]),
             )
             # Verify logfire.instrument_pydantic_ai was called
             mock_instrument_pydantic.assert_called_once()

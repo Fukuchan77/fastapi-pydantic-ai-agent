@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Availability-gated pre-push hook (Req 1.6/1.7).
+#
+# Ollama-dependent local tests and the evals suite are too slow/flaky for
+# GitHub Actions (AC 1.8), so they run here instead, but only when Ollama is
+# actually reachable. If it isn't, the push proceeds with a warning rather
+# than blocking on infrastructure the developer doesn't have running.
+#
+# Enable this hook with: git config core.hooksPath .githooks
+set -euo pipefail
+
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+if curl --fail --silent --show-error --max-time 5 "${OLLAMA_BASE_URL}/api/tags" >/dev/null 2>&1; then
+  echo "pre-push: Ollama reachable at ${OLLAMA_BASE_URL} - running local tests and evals" >&2
+  # Pinned to `tests/local/`'s current `ollama`-marked test count (Req 13.8) -
+  # without this, a lane that silently collects zero live cases would report
+  # success. Update this count when a test is added to or removed from
+  # tests/local/. Not set on `mise run evals` below: that lane runs
+  # evals/runner.py directly, not pytest, so the EXPECT_LIVE_TESTS plugin has
+  # no session to attach to there; its own golden-set exit-code check is that
+  # lane's anti-false-green guard instead.
+  EXPECT_LIVE_TESTS=6 mise run test:local
+  mise run evals
+else
+  echo "pre-push: WARNING - Ollama not reachable at ${OLLAMA_BASE_URL}; skipping local tests and evals" >&2
+fi

@@ -7,11 +7,13 @@ To set up:
     3. Pull model: ollama pull llama3.2:latest
     4. Run tests: mise run test:local
 
-Tests are automatically skipped if Ollama is not available (via require_ollama fixture).
+Tests are skipped if Ollama is unreachable (via the `require_ollama` fixture)
+or if llama3.2:latest has not been pulled (via `skip_unless_model_pulled`).
 
 Note: llama3.2 (3B parameters) does not support reliable tool calling.
 Mock tools are disabled for these tests to prevent infinite loops.
-For tool calling tests, use larger models like llama3.1:70b or granite3.3:8b.
+For tool calling tests, use larger models like granite4.1:8b (see
+test_llm_granite41.py).
 """
 
 import pytest
@@ -23,21 +25,39 @@ from app.agents.chat_agent import build_model
 from app.agents.deps import AgentDeps
 from app.config import Settings
 from app.stores.session_store import InMemorySessionStore
+from tests.support.ollama import skip_unless_model_pulled
+
+
+LLAMA32_MODEL = "llama3.2:latest"
+"""Bare Ollama model name required by this module."""
 
 
 @pytest.fixture
-def ollama_settings_llama32(monkeypatch: pytest.MonkeyPatch) -> Settings:
+def ollama_settings_llama32(
+    monkeypatch: pytest.MonkeyPatch,
+    require_ollama: frozenset[str],
+) -> Settings:
     """Settings configured for local Ollama with llama3.2:latest.
 
     LLM_BASE_URL is optional — LiteLLM defaults to http://localhost:11434.
     LLM_API_KEY is not required for Ollama (local provider).
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture used to drop LLM_API_KEY.
+        require_ollama: Pulled Ollama model names; the test is skipped when
+            llama3.2:latest is absent.
+
+    Returns:
+        Settings pointing at the local llama3.2:latest model with mock tools disabled.
     """
+    skip_unless_model_pulled(require_ollama, LLAMA32_MODEL)
+
     # Remove LLM_API_KEY from environment to test Ollama without API key
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
     return Settings(
         api_key=SecretStr("local-dev-api-key-12345"),
-        llm_model="ollama:llama3.2:latest",
+        llm_model=f"ollama:{LLAMA32_MODEL}",
         enable_mock_tools=False,  # llama3.2 does not support reliable tool calling
     )
 

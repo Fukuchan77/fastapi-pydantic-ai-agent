@@ -95,26 +95,42 @@ def test_rate_limit_unlimited_endpoint(client: TestClient) -> None:
         assert response.status_code == 200
 
 
-def test_rate_limit_reset_after_window(client: TestClient) -> None:
-    """Test that rate limit resets after the time window expires."""
-    # Exhaust rate limit (3 requests)
+def test_rate_limit_reset_after_window() -> None:
+    """Test that rate limit resets after the time window expires.
+
+    Uses its own 3/second-limited app rather than the shared `client`
+    fixture's 3/minute one: now that `Limiter._inject_headers` actually
+    builds `X-RateLimit-Reset` (Req 1.3), that header holds a real reset
+    timestamp instead of the default `0` this test used to read, and a
+    1-minute window would make this test sleep for up to a minute.
+    """
+    app = FastAPI()
+    limiter = add_rate_limiting(app, default_limits=["3/second"])
+
+    @app.get("/fast")
+    @limiter.limit("3/second")
+    async def fast_endpoint(request: Request) -> JSONResponse:
+        return JSONResponse(content={"status": "ok"})
+
+    client = TestClient(app)
+
     for _ in range(3):
-        response = client.get("/test")
+        response = client.get("/fast")
         assert response.status_code == 200
 
-    # 4th request should be blocked
-    response = client.get("/test")
+    response = client.get("/fast")
     assert response.status_code == 429
 
-    # Get reset time from header
-    reset_time = int(response.headers.get("X-RateLimit-Reset", 0))
-    current_time = int(time.time())
-    wait_time = reset_time - current_time + 1  # Add 1 second buffer
+    # `X-RateLimit-Reset` is a real (float-string) epoch timestamp now, not
+    # the always-0 fallback the old, dead header-computation code path left
+    # behind.
+    reset_time = float(response.headers["X-RateLimit-Reset"])
+    current_time = time.time()
+    wait_time = reset_time - current_time + 1  # 1s buffer
 
-    # If wait time is reasonable (not negative and less than 2 minutes), wait and retry
-    if 0 < wait_time < 120:
-        time.sleep(wait_time)
+    assert 0 < wait_time < 5, f"expected a bounded ~1s wait for a 1-second window, got {wait_time}"
+    time.sleep(wait_time)
 
-        # After reset, request should succeed
-        response = client.get("/test")
-        assert response.status_code == 200
+    # After reset, request should succeed
+    response = client.get("/fast")
+    assert response.status_code == 200

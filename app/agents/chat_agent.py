@@ -1,21 +1,43 @@
 """Chat agent factory and tool registration."""
 
+from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic_ai import Agent
+from pydantic_ai import NativeOutput
 from pydantic_ai import RunContext
 from pydantic_ai.models import Model
+from pydantic_ai.models import infer_model
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai_litellm import LiteLLMModel
+from pydantic_ai_litellm import LiteLLMModelSettings
 
 from app.agents.deps import AgentDeps
 from app.config import Settings
 from app.config import get_settings
+from app.llm.factory import supports_native_output
+
+
+class ChatOutput(BaseModel):
+    """Structured chat reply.
+
+    Used as the `NativeOutput` schema when the active model profile reports
+    `supports_json_schema_output` (Req 10.2).
+
+    Attributes:
+        reply: The agent's response to the user message.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reply: str
 
 
 def build_model(settings: Settings) -> Model:
     """Build a LiteLLMModel instance from settings.
 
     Converts the internal "provider:model" format to LiteLLM's "provider/model"
-    format (e.g. "openai:gpt-4o" → "openai/gpt-4o", "ollama:granite3.3:latest" →
-    "ollama/granite3.3:latest") and delegates all provider routing to LiteLLM.
+    format (e.g. "openai:gpt-4o" → "openai/gpt-4o", "ollama:granite4.1:8b" →
+    "ollama/granite4.1:8b") and delegates all provider routing to LiteLLM.
 
     API key handling:
         - Cloud providers (openai, anthropic, groq): llm_api_key is required
@@ -44,8 +66,10 @@ def build_model(settings: Settings) -> Model:
 
     api_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else None
 
-    # Build optional settings dict (litellm_api_base for custom / Ollama endpoints)
-    model_settings = {}
+    # Build optional settings dict (litellm_api_base for custom / Ollama endpoints).
+    # Typed as LiteLLMModelSettings (not a bare dict) because `litellm_api_base`
+    # is a LiteLLM-specific key absent from pydantic-ai's own `ModelSettings`.
+    model_settings: LiteLLMModelSettings = {}
     if settings.llm_base_url:
         model_settings["litellm_api_base"] = str(settings.llm_base_url)
     elif provider_name == "ollama":
@@ -59,7 +83,7 @@ def build_model(settings: Settings) -> Model:
     return LiteLLMModel(
         model_name=litellm_model_name,
         api_key=api_key,
-        settings=model_settings if model_settings else None,  # type: ignore[arg-type]
+        settings=model_settings if model_settings else None,
     )
 
 
@@ -82,12 +106,13 @@ async def _build_system_prompt(ctx: RunContext[AgentDeps]) -> str:
 def build_chat_agent(
     model: Model | str | None = None,
     settings: Settings | None = None,
-) -> Agent[AgentDeps, str]:
+) -> Agent[AgentDeps, str | ChatOutput]:
     """Build a Pydantic AI chat agent with tool-calling capabilities.
 
     This factory creates an Agent instance configured with:
     - AgentDeps for dependency injection into tools
-    - str as the output type (simple text responses)
+    - str output when the model's profile doesn't support JSON-schema output,
+      or NativeOutput(ChatOutput) when it does (Req 10.2/10.3)
     - Configurable output retries for validation failures
     - Dynamic system prompt builder
     - Registered mock tools (when enabled in non-production environments)
@@ -101,7 +126,7 @@ def build_chat_agent(
         settings: Optional settings to use. If None, loads from environment.
 
     Returns:
-        Configured Agent[AgentDeps, str] instance ready for use.
+        Configured Agent[AgentDeps, str | ChatOutput] instance ready for use.
 
     Example:
         >>> # Build with default settings
@@ -115,12 +140,38 @@ def build_chat_agent(
     """
     settings = settings or get_settings()
     resolved_model = model if model is not None else build_model(settings)
+    output_type: type[str] | NativeOutput[ChatOutput] = (
+        NativeOutput[ChatOutput](ChatOutput)
+        if supports_native_output(infer_model(resolved_model))
+        else str
+    )
 
-    agent: Agent[AgentDeps, str] = Agent(
+    # Agent-level model_settings is the only attachment point transparent to
+    # FallbackModel: member settings survive selection, but an agent-level value
+    # overrides them per key, and this applies uniformly to every model member
+    # actually tried (Req 9.1, 9.3). Do NOT move this to the guardrails install
+    # idiom (`agent.override(...)`) - overriding model_settings there replaces
+    # the agent layer *and* nulls the run layer, silently dropping these values.
+    model_settings: ModelSettings = {
+        "max_tokens": settings.llm_max_output_tokens,
+        "temperature": settings.llm_temperature,
+    }
+
+    agent: Agent[AgentDeps, str | ChatOutput] = Agent(
         model=resolved_model,
         deps_type=AgentDeps,
-        output_type=str,
-        output_retries=settings.max_output_retries,
+        output_type=output_type,
+        model_settings=model_settings,
+        # `output_retries=` was deprecated in pydantic-ai 1.x and removed from the
+        # typed overloads (it survives only via **_deprecated_kwargs), so the
+        # mapping form is both the supported spelling and the type-checkable one.
+        retries={"output": settings.max_output_retries},
+        # pydantic-ai v2 flips this default from "early" to "graceful"; pinning it
+        # explicitly defends guardrail tool-call counts, audit-trail contents, and
+        # token-budget accounting across that bump. The RAG agents (rag_llm.py)
+        # deliberately do NOT carry this - they register no function tools, so
+        # end_strategy is inert there and the omission is not an oversight.
+        end_strategy="early",
     )
 
     # Register dynamic system prompt builder

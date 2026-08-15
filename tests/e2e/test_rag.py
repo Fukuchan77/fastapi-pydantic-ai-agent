@@ -86,6 +86,14 @@ class TestRAGEndpoints:
         assert len(data["answer"]) > 0, "Answer should be non-empty"
         assert data["search_count"] >= 1, "Should have performed at least one search"
 
+        # Assert: Citations should be surfaced (Req 3.3/6.4) referencing retrieved hits
+        assert "citations" in data, "Response should have 'citations' field"
+        assert len(data["citations"]) >= 1, "Should cite at least one retrieved hit"
+        for citation in data["citations"]:
+            assert "chunk_id" in citation
+            assert "text" in citation
+            assert "score" in citation
+
     @pytest.mark.asyncio
     async def test_rag_query_without_context(
         self,

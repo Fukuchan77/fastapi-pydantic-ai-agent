@@ -7,6 +7,8 @@ from app.models.rag import IngestRequest
 from app.models.rag import IngestResponse
 from app.models.rag import RAGQueryRequest
 from app.models.rag import RAGQueryResponse
+from app.models.rag import RelevanceVerdict
+from app.models.rag import RetrievedHit
 
 
 class TestIngestRequest:
@@ -240,6 +242,131 @@ class TestRAGQueryResponse:
             search_count=0,
         )
         assert response.search_count == 0
+
+    def test_rag_query_response_citations_defaults_to_empty_list(self) -> None:
+        """RAGQueryResponse should default citations to an empty list."""
+        response = RAGQueryResponse(
+            answer="Test",
+            context_found=True,
+            search_count=1,
+        )
+        assert response.citations == []
+
+    def test_rag_query_response_accepts_citations(self) -> None:
+        """RAGQueryResponse should accept a list of RetrievedHit citations."""
+        hit = RetrievedHit(chunk_id="memory::0000", text="chunk text", score=0.9)
+        response = RAGQueryResponse(
+            answer="Test",
+            context_found=True,
+            search_count=1,
+            citations=[hit],
+        )
+        assert response.citations == [hit]
+
+
+class TestRetrievedHit:
+    """Test suite for RetrievedHit model."""
+
+    def test_retrieved_hit_with_all_fields(self) -> None:
+        """RetrievedHit should accept chunk_id, text, and score."""
+        hit = RetrievedHit(chunk_id="memory::0000", text="chunk text", score=0.5)
+        assert hit.chunk_id == "memory::0000"
+        assert hit.text == "chunk text"
+        assert hit.score == 0.5
+
+    def test_retrieved_hit_chunk_id_is_required(self) -> None:
+        """RetrievedHit should require chunk_id field."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrievedHit(text="chunk text", score=0.5)  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("chunk_id",) and e["type"] == "missing" for e in errors)
+
+    def test_retrieved_hit_text_is_required(self) -> None:
+        """RetrievedHit should require text field."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrievedHit(chunk_id="memory::0000", score=0.5)  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("text",) and e["type"] == "missing" for e in errors)
+
+    def test_retrieved_hit_score_is_required(self) -> None:
+        """RetrievedHit should require score field."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrievedHit(chunk_id="memory::0000", text="chunk text")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("score",) and e["type"] == "missing" for e in errors)
+
+    def test_retrieved_hit_score_must_be_float(self) -> None:
+        """RetrievedHit score must be a float."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrievedHit(chunk_id="memory::0000", text="chunk text", score="not-a-float")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("score",) for e in errors)
+
+
+class TestRelevanceVerdict:
+    """Test suite for RelevanceVerdict validation."""
+
+    def test_relevance_verdict_with_all_fields(self) -> None:
+        """RelevanceVerdict should accept a sufficient verdict and rationale."""
+        verdict = RelevanceVerdict(sufficient=True, rationale="Chunks directly answer the query.")
+        assert verdict.sufficient is True
+        assert verdict.rationale == "Chunks directly answer the query."
+
+    def test_relevance_verdict_supports_insufficient_verdict(self) -> None:
+        """RelevanceVerdict should accept a False sufficient verdict."""
+        verdict = RelevanceVerdict(sufficient=False, rationale="Chunks are off-topic.")
+        assert verdict.sufficient is False
+
+    def test_relevance_verdict_sufficient_is_required(self) -> None:
+        """RelevanceVerdict should require the sufficient field."""
+        with pytest.raises(ValidationError) as exc_info:
+            RelevanceVerdict(rationale="Missing verdict.")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("sufficient",) and e["type"] == "missing" for e in errors)
+
+    def test_relevance_verdict_rationale_is_required(self) -> None:
+        """RelevanceVerdict should require the rationale field."""
+        with pytest.raises(ValidationError) as exc_info:
+            RelevanceVerdict(sufficient=True)  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("rationale",) and e["type"] == "missing" for e in errors)
+
+    def test_relevance_verdict_rationale_cannot_be_empty(self) -> None:
+        """RelevanceVerdict should reject an empty rationale string.
+
+        A rationale that is present but empty must not satisfy the contract
+        (Req 10.1): the field is required *and* non-empty.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            RelevanceVerdict(sufficient=True, rationale="")
+
+        errors = exc_info.value.errors()
+        assert any(
+            e["loc"] == ("rationale",) and "at least 1 character" in e["msg"].lower()
+            for e in errors
+        )
+
+    def test_relevance_verdict_sufficient_must_be_bool(self) -> None:
+        """RelevanceVerdict sufficient field must be boolean."""
+        with pytest.raises(ValidationError) as exc_info:
+            RelevanceVerdict(sufficient="not-bool", rationale="Test")  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("sufficient",) for e in errors)
+
+    def test_relevance_verdict_rationale_must_be_string(self) -> None:
+        """RelevanceVerdict rationale field must be a string."""
+        with pytest.raises(ValidationError) as exc_info:
+            RelevanceVerdict(sufficient=True, rationale=123)  # type: ignore
+
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("rationale",) for e in errors)
 
 
 class TestRAGModelFieldTypes:

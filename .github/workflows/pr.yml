@@ -1,0 +1,72 @@
+# Workflow name is kept as "PR CI" even though it now also runs on `main`:
+# the check name GitHub reports ("PR CI / Lint, Test, Audit") is what any
+# branch-protection required-status-check rule matches on, and renaming the
+# workflow would silently stop satisfying such a rule.
+name: PR CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Also run after a merge. Without this, `main` carried no CI signal at all:
+  # a merge whose result differs from what the PR validated (semantic conflict
+  # between two PRs that each passed alone) would land undetected.
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: pr-ci-${{ github.ref }}
+  # Superseding an in-flight PR run is fine - only the latest commit matters.
+  # On `main` every merge commit must be validated on its own, so runs there
+  # are never cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Lint, Test, Audit
+    runs-on: ubuntu-latest
+    # Without this the job inherits the GitHub Actions default of 360 minutes.
+    # Run 31862477318 hung on a single unbounded `asyncio.Event.wait()` in the
+    # test suite and burned 5h59m before that limit killed it - and because the
+    # kill arrives as a cancellation, pytest never printed its failure summary,
+    # so the tracebacks for the tests that had already failed were lost too.
+    # The full step takes ~4 minutes here (about half of it the Docker image
+    # build), so 30 leaves ample headroom while capping a hang at minutes.
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise (installs uv per mise.toml)
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Lint (ruff + ty)
+        run: mise run lint
+
+      - name: Test (unit + integration + e2e, coverage gate)
+        run: mise run test:ci
+
+      - name: Test (Redis session store live lane)
+        env:
+          EXPECT_LIVE_TESTS: "7"
+        run: mise run test:redis
+
+      - name: Audit dependencies (pip-audit)
+        run: mise run audit

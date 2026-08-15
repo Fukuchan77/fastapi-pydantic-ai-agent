@@ -1,80 +1,56 @@
 """Integration tests for Wiring components in app/main.py lifespan."""
 
 import pytest
+from fastapi.routing import APIRoute
+from pydantic_ai import Agent
+from pydantic_ai.models.test import TestModel
+
+from app.config import Settings
+from app.main import create_app
+from app.stores.vector_store import InMemoryVectorStore
+
+
+def _build_settings(**overrides: object) -> Settings:
+    """Build a valid Settings instance directly, without touching os.environ."""
+    defaults: dict[str, object] = {
+        "api_key": "test-api-key-12345",
+        "llm_model": "ollama:test-model",
+        "llm_api_key": "test-llm-api-key",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type]
 
 
 class TestTask8ComponentWiring:
     """Test that vector_store, chat_agent, and v1 router are properly initialized."""
 
     @pytest.mark.asyncio
-    async def test_lifespan_initializes_vector_store(self, monkeypatch) -> None:
-        """Lifespan must initialize vector_store in app.state ()."""
-        # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
+    async def test_lifespan_initializes_vector_store(self) -> None:
+        """Lifespan must initialize vector_store in app.state."""
+        app = create_app(settings=_build_settings(), model=TestModel())
 
-        # Import after setting env vars
-        from pydantic_ai.models.test import TestModel
-
-        from app.agents.chat_agent import build_chat_agent
-        from app.main import app
-        from app.main import lifespan
-        from app.stores.vector_store import InMemoryVectorStore
-
-        # Patch build_chat_agent to use TestModel instead of real OpenAI model
-        test_agent = build_chat_agent(model=TestModel())
-
-        # Invoke lifespan and replace the agent with test version
-        async with lifespan(app):
-            # Override the agent that was built during lifespan with our test version
-            app.state.chat_agent = test_agent
-
+        async with app.router.lifespan_context(app):
             assert hasattr(app.state, "vector_store"), "vector_store should be initialized"
             assert app.state.vector_store is not None
             # Verify it's the correct type
             assert isinstance(app.state.vector_store, InMemoryVectorStore)
 
     @pytest.mark.asyncio
-    async def test_lifespan_initializes_chat_agent(self, monkeypatch) -> None:
-        """Lifespan must initialize chat_agent in app.state ()."""
-        # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
+    async def test_lifespan_initializes_chat_agent(self) -> None:
+        """Lifespan must initialize chat_agent in app.state, wired with the injected model."""
+        test_model = TestModel()
+        app = create_app(settings=_build_settings(), model=test_model)
 
-        # Import after setting env vars
-        from pydantic_ai import Agent
-        from pydantic_ai.models.test import TestModel
-
-        from app.agents.chat_agent import build_chat_agent
-        from app.main import app
-        from app.main import lifespan
-
-        # Patch build_chat_agent to use TestModel instead of real OpenAI model
-        test_agent = build_chat_agent(model=TestModel())
-
-        # Invoke lifespan and replace the agent with test version
-        async with lifespan(app):
-            # Override the agent that was built during lifespan with our test version
-            app.state.chat_agent = test_agent
-
+        async with app.router.lifespan_context(app):
             assert hasattr(app.state, "chat_agent"), "chat_agent should be initialized"
             assert app.state.chat_agent is not None
-            # Verify it's a Pydantic AI Agent
+            # Verify it's a Pydantic AI Agent built with the injected model
             assert isinstance(app.state.chat_agent, Agent)
+            assert app.state.chat_agent.model is test_model
 
-    def test_v1_router_is_registered(self, monkeypatch) -> None:
-        """Test that v1 router is included in the app ()."""
-        # Set required environment variables
-        monkeypatch.setenv("API_KEY", "test-api-key-12345")
-        monkeypatch.setenv("LLM_API_KEY", "test-llm-api-key")
-        monkeypatch.setenv("LLM_MODEL", "ollama:test-model")
-
-        # Import the app
-        from fastapi.routing import APIRoute
-
-        from app.main import app
+    def test_v1_router_is_registered(self) -> None:
+        """Test that v1 router is included in the app."""
+        app = create_app(settings=_build_settings(), model=TestModel())
 
         # Check that v1 routes are registered by filtering APIRoute instances
         route_paths = [route.path for route in app.routes if isinstance(route, APIRoute)]

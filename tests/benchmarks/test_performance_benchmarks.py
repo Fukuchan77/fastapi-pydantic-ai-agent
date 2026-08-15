@@ -30,31 +30,31 @@ async def benchmark_client(client: AsyncClient) -> AsyncIterator[AsyncClient]:
 
     Reuses the client fixture from conftest.py which already has:
     - FunctionModel for fast, deterministic responses
-    - Proper lifespan management
+    - Proper lifespan management via `create_app(settings=..., model=...)`
     - Test authentication configured
 
-    This fixture adds benchmark-specific setup like populating the vector store.
+    This fixture adds benchmark-specific setup like populating the vector store
+    through the ingest endpoint, since `client`'s app is a fresh instance built
+    per-test by `create_app()` rather than the `app.main` module-level singleton
+    (see plan.md L1.4) - no cleanup step is needed because each test already
+    gets its own isolated app and vector store.
     """
-    # Populate vector store with test data for benchmarking
-    # Access the app through the client's transport
-    from app.main import app
-
-    await app.state.vector_store.add_documents(
-        [
-            "FastAPI is a modern web framework for Python",
-            "Pydantic AI provides type-safe AI agents",
-            "LlamaIndex Workflows enable event-driven RAG",
-        ]
-    )
-
     # Add authentication header to all requests
     client.headers["X-API-Key"] = "test-api-key-12345"
 
-    yield client
+    # Populate vector store with test data for benchmarking via the real HTTP path
+    await client.post(
+        "/v1/rag/ingest",
+        json={
+            "chunks": [
+                "FastAPI is a modern web framework for Python",
+                "Pydantic AI provides type-safe AI agents",
+                "LlamaIndex Workflows enable event-driven RAG",
+            ]
+        },
+    )
 
-    # Cleanup vector store to prevent test contamination
-    # This ensures benchmark tests don't affect other tests sharing the same app instance
-    await app.state.vector_store.clear()
+    yield client
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,9 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 
+from app.agents.chat_agent import build_model
 from app.deps.workflow import get_rag_workflow
+from tests.conftest import build_test_settings
 
 
 class MockVectorStore:
@@ -26,6 +28,10 @@ class MockVectorStore:
         """Mock query."""
         return []
 
+    async def query_with_scores(self, query: str, top_k: int = 5) -> list[Any]:
+        """Mock query_with_scores."""
+        return []
+
     async def clear(self) -> None:
         """Mock clear."""
         pass
@@ -34,12 +40,37 @@ class MockVectorStore:
         """Mock close."""
         pass
 
+    @property
+    def generation(self) -> int:
+        """Real int content version, so no double leaks a Mock into a cache key."""
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_mock_vector_store_exposes_real_generation_and_scored_query() -> None:
+    """Guard against a hand-written double missing generation/query_with_scores.
+
+    Task 3.2: the generation-keyed RAG cache (task 3.4) reads store.generation
+    and calls query_with_scores() on every store CorrectiveRAGWorkflow.run()
+    receives. A hand-written double missing either would leak an
+    AttributeError-shaped gap into that path instead of a real int.
+    """
+    store = MockVectorStore()
+    assert isinstance(store.generation, int)
+    assert await store.query_with_scores("q") == []
+
 
 @pytest.fixture
 def mock_app() -> FastAPI:
-    """Create a FastAPI app with a mock vector store."""
+    """Create a FastAPI app with a mock vector store, settings, and llm_model.
+
+    `get_rag_workflow` reads all three from `app.state` (Req 3.3).
+    """
     app = FastAPI()
     app.state.vector_store = MockVectorStore()
+    settings = build_test_settings()
+    app.state.settings = settings
+    app.state.llm_model = build_model(settings)
     return app
 
 

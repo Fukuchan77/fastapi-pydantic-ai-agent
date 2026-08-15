@@ -9,6 +9,7 @@ from pydantic_ai import Agent
 from pydantic_ai import RunContext
 from pydantic_ai.models.test import TestModel
 
+from app.agents.chat_agent import ChatOutput
 from app.agents.chat_agent import _build_system_prompt
 from app.agents.chat_agent import build_chat_agent
 from app.agents.chat_agent import build_model
@@ -264,6 +265,51 @@ class TestBuildChatAgent:
             # This is validated at type-check time, so just verify agent exists
             assert agent is not None
 
+    def test_build_chat_agent_wires_max_output_retries_onto_the_agent(self) -> None:
+        """settings.max_output_retries must actually reach the constructed Agent.
+
+        `build_chat_agent` passes `retries={"output": settings.max_output_retries}`
+        rather than the deprecated `output_retries=` kwarg (pydantic-ai 1.x); this
+        pins that the value survives the mapping form, not just that construction
+        doesn't raise. `_max_output_retries` is pydantic-ai's only place this
+        setting is observable post-construction - there is no public accessor.
+        """
+        with patch("app.agents.chat_agent.get_settings") as mock_settings:
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+                max_output_retries=7,
+            )
+
+            agent = build_chat_agent(model=TestModel())
+
+            assert agent._max_output_retries == 7
+
+    def test_build_chat_agent_wires_output_ceiling_and_temperature_onto_the_agent(
+        self,
+    ) -> None:
+        """settings.llm_max_output_tokens/llm_temperature must reach Agent.model_settings.
+
+        Req 9.1/9.2: sourced from Settings (no literal in agent/factory code) and
+        attached once at the Agent layer, so `FallbackModel` transparency carries
+        both values to every model member actually tried (Req 9.3) - proved
+        end-to-end for primary and fallback by
+        test_model_settings_propagation.py (task 5.3).
+        """
+        with patch("app.agents.chat_agent.get_settings") as mock_settings:
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+                llm_max_output_tokens=2048,
+                llm_temperature=0.3,
+            )
+
+            agent = build_chat_agent(model=TestModel())
+
+            assert agent.model_settings == {"max_tokens": 2048, "temperature": 0.3}
+
     def test_build_chat_agent_has_tools(self) -> None:
         """build_chat_agent should have tools available."""
         with patch("app.agents.chat_agent.get_settings") as mock_settings:
@@ -281,6 +327,31 @@ class TestBuildChatAgent:
             # the agent exists and was constructed properly
             assert isinstance(agent, Agent)
             assert agent is not None
+
+    def test_build_chat_agent_pins_end_strategy_to_early(self) -> None:
+        """`end_strategy="early"` must be passed explicitly, not left to the default.
+
+        Req 6.1/6.2/9.1: v2 flips `Agent.__init__`'s `end_strategy` default from
+        `"early"` to `"graceful"`. On the pinned 1.x lock, `"early"` is already
+        the default, so asserting only the resulting `agent.end_strategy` value
+        would pass whether or not the keyword is present in the constructor call -
+        it would not distinguish "explicitly pinned" from "happens to match
+        today's default". Mocking the `Agent` constructor and asserting on its
+        exact call kwargs is what actually proves the keyword is passed.
+        """
+        with (
+            patch("app.agents.chat_agent.get_settings") as mock_settings,
+            patch("app.agents.chat_agent.Agent") as mock_agent_cls,
+        ):
+            mock_settings.return_value = Settings(
+                api_key=SecretStr("test-api-key-12345"),
+                llm_model="openai:gpt-4o",
+                llm_api_key=SecretStr("test-api-key-12345"),
+            )
+
+            build_chat_agent(model=TestModel())
+
+            assert mock_agent_cls.call_args.kwargs["end_strategy"] == "early"
 
 
 class TestAgentIntegration:
@@ -313,3 +384,30 @@ class TestAgentIntegration:
             # just verify it's properly constructed)
             assert isinstance(agent, Agent)
             assert agent is not None
+
+
+class TestNativeOutputGating:
+    """Task 7 (Req 10.2/10.3): conditional NativeOutput via the model profile gate."""
+
+    def test_plain_output_when_model_does_not_support_json_schema(self) -> None:
+        """TestModel's default profile reports False, so output stays plain str."""
+        agent = build_chat_agent(model=TestModel())
+
+        assert agent.output_type is str
+
+    def test_native_output_when_model_supports_json_schema(self) -> None:
+        """A model whose profile reports True gets wrapped in NativeOutput(ChatOutput)."""
+        from pydantic_ai import NativeOutput
+        from pydantic_ai.profiles import ModelProfile
+
+        model = TestModel(profile=ModelProfile(supports_json_schema_output=True))
+        agent = build_chat_agent(model=model)
+
+        assert isinstance(agent.output_type, NativeOutput)
+        assert agent.output_type.outputs is ChatOutput
+
+    def test_chat_output_schema_has_reply_field(self) -> None:
+        """ChatOutput is the minimal schema used for native structured output."""
+        output = ChatOutput(reply="hello")
+
+        assert output.reply == "hello"

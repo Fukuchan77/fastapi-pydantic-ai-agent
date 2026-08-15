@@ -20,9 +20,9 @@ class TestAgentDeps:
         assert hasattr(AgentDeps, "__dataclass_fields__")
 
     def test_agent_deps_has_required_fields(self) -> None:
-        """AgentDeps should have http_client, settings, and session_store fields."""
+        """AgentDeps should have http_client, settings, session_store, principal, audit fields."""
         field_names = {f.name for f in fields(AgentDeps)}
-        expected_fields = {"http_client", "settings", "session_store"}
+        expected_fields = {"http_client", "settings", "session_store", "principal", "audit"}
         assert field_names == expected_fields
 
     def test_agent_deps_field_types(self) -> None:

@@ -1,0 +1,40 @@
+# Req 12.2: automated dependency updates for the Python dependency tree
+# (managed via uv/uv.lock) and the pinned GitHub Actions used in the CI
+# workflows (Req 1.1's SHA-pinning convention needs a way to stay current).
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # fastapi<0.137 and starlette<1.0 are load-bearing pins (see the
+      # dependency-pin comments in pyproject.toml and CLAUDE.md/AGENTS.md):
+      # the newer versions of each silently disable the global rate limit.
+      # Dependabot classifies fastapi's 0.x releases by patch-position, so
+      # 0.136 -> 0.137 is a *minor* bump -- ignoring only majors would let
+      # the rate-limit-breaking bump through unignored.
+      - dependency-name: "starlette"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "fastapi"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # chromadb and redis majors are deliberately shelved pending a
+      # client-compatibility verification pass, not unsupported. See
+      # docs/dependency-runbook.md.
+      - dependency-name: "chromadb"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "redis"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

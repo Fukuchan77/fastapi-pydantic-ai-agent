@@ -7,6 +7,7 @@ This guide covers production deployment considerations for the fastapi-pydantic-
 - [Reverse Proxy Configuration](#reverse-proxy-configuration)
   - [Request Size Limits](#request-size-limits)
   - [Nginx](#nginx)
+  - [SSE Streaming Considerations](#sse-streaming-considerations)
   - [Apache](#apache)
   - [AWS Application Load Balancer (ALB)](#aws-application-load-balancer-alb)
   - [Cloudflare](#cloudflare)
@@ -72,6 +73,17 @@ server {
 
 #### Advanced Configuration with Rate Limiting
 
+The application enforces its own rate limits independently of any reverse-proxy
+configuration below: a global `1000/minute` default (`app/middleware/rate_limit.py`),
+and a stricter, configurable per-route limit on LLM-invoking endpoints (`POST
+/v1/agent/chat`, `/v1/agent/stream`, `/v1/rag/query`) via the `LLM_RATE_LIMIT`
+setting (default `30/minute`, Req 11.3). When `REDIS_URL` is configured, the
+global limit's storage is Redis-backed so it is shared across replicas (Req
+11.4); the stricter per-route limit currently stays in-memory per process (a
+documented trade-off, see `app/middleware/rate_limit.py`'s `enforce_llm_rate_limit`
+docstring). Nginx-level `limit_req` below is a defense-in-depth layer in front
+of these, not a replacement for them.
+
 ```nginx
 # Define rate limiting zone (outside server block)
 limit_req_zone $binary_remote_addr zone=api_limit:10m rate=60r/m;
@@ -121,6 +133,40 @@ TRUSTED_PROXIES=["127.0.0.1", "10.0.0.0/8"]  # Adjust to your Nginx server IPs
 ```
 
 This ensures the application correctly extracts the real client IP from `X-Forwarded-For` headers for rate limiting.
+
+**This is a separate trust list from uvicorn's own proxy trust**, which controls
+whether `Strict-Transport-Security` (Req 11.4) is ever emitted. `SecurityHeadersMiddleware`
+emits HSTS only when `request.url.scheme == "https"` and never reads
+`X-Forwarded-Proto` itself - that header is trusted (or not) entirely at the
+ASGI-server layer, via uvicorn's `ProxyHeadersMiddleware`. The container image
+sets `FORWARDED_ALLOW_IPS=127.0.0.1` (the Dockerfile makes uvicorn's own
+implicit default explicit rather than leaving it undocumented). Behind a real
+reverse proxy, that default will not match the proxy's address, so
+`scope["scheme"]` stays `"http"` and **HSTS is silently never emitted, even
+though the client genuinely connects over HTTPS**.
+
+Override it to your reverse proxy's actual address (a single IP,
+comma-separated IPs, or a CIDR range) when running behind Nginx/ALB/Cloudflare:
+
+```bash
+docker run -e FORWARDED_ALLOW_IPS="10.0.0.0/8" ...
+```
+
+Pair this with setting `TRUST_PROXY_HEADERS=true` in the same change: the
+application logs a startup warning in any non-`development` environment while
+`trust_proxy_headers` stays at its `false` default, so the deployment-level
+trust list (`FORWARDED_ALLOW_IPS`) and the application's confirmation flag
+cannot silently drift out of sync.
+
+---
+
+#### SSE Streaming Considerations
+
+`POST /v1/agent/stream` sends the [typed SSE contract](../README.md#pattern-3-sse-streaming) (`event:`/`data:` frames of `step_started`/`tool_called`/`token`/`completed`/`error`). The application already sets `Cache-Control: no-cache` and `X-Accel-Buffering: no` on the response, but the reverse proxy must not undo that:
+
+- Keep `proxy_buffering off;` on the `/v1/` location (shown above) — buffering defeats streaming even with `X-Accel-Buffering: no` on some proxy configurations.
+- Set `proxy_read_timeout` to at least `sse_send_timeout` (default 60s). The application emits an idle heartbeat comment every `sse_heartbeat_interval` seconds (default 15s) to keep the connection alive within that window; if you raise `SSE_SEND_TIMEOUT`, raise `proxy_read_timeout` (and `SSE_HEARTBEAT_INTERVAL`, which must stay ≤ `SSE_SEND_TIMEOUT`) to match.
+- A single stream is capped at `sse_max_events` events (default 1000) and aborts with a terminal `error` event if no event is produced within `sse_send_timeout` — both are configurable via `.env`.
 
 ---
 
@@ -286,9 +332,50 @@ TRUSTED_PROXIES=["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.3
 # Use secrets management
 docker run -d \
   -e API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)" \
+  -e SESSION_SIGNING_KEY="$(aws secretsmanager get-secret-value --secret-id session-signing-key --query SecretString --output text)" \
   -e LLM_API_KEY="$(aws secretsmanager get-secret-value --secret-id llm-key --query SecretString --output text)" \
+  -e ALLOWED_HOSTS="api.yourdomain.com" \
   fastapi-pydantic-ai-agent:latest
 ```
+
+### Host Header Validation
+
+`ALLOWED_HOSTS` is **required** in `staging` and `production` - `Settings`
+fails fast at startup if it's left at its `*` development default in either
+environment. Set it to the hostname(s) this deployment actually serves,
+comma-separated or as a JSON array (e.g. `api.yourdomain.com` or
+`api.yourdomain.com,*.internal.yourdomain.com` for subdomains, using
+Starlette's `*.example.com` wildcard form - not the Django-style leading dot).
+
+This exists because Starlette's router rebuilds redirect targets from the
+request's `Host` header (`redirect_slashes` defaults to on), so without a host
+allow-list any caller can make the service emit a `Location` header pointing
+at a host of their choosing - an unauthenticated open-redirect, reachable even
+on unauthenticated routes like `/health/`. `TrustedHostMiddleware` (registered
+outermost in `app/main.py`, ahead of even CORS) rejects any request whose
+`Host` isn't on the list with a flat `400` before any other middleware or
+route runs.
+
+If this deployment sits behind a reverse proxy or load balancer (see Reverse
+Proxy Configuration above), set `ALLOWED_HOSTS` to the **public** hostname
+your users connect to - not the proxy's internal address - since the proxy
+forwards the original `Host` header through unless it's configured to
+rewrite it.
+
+### Session Ownership
+
+`session_id` is server-issued, not client-supplied (Req 11.1/11.2): `POST
+/v1/agent/chat` mints one (signed `{principal}.{token}.{signature}`, HMAC'd
+with `SESSION_SIGNING_KEY`) when the request omits `session_id`, and rejects
+a request presenting a `session_id` bound to a different API key with `403`.
+`POST /v1/agent/stream` only authorizes an existing `session_id` this way
+(the SSE wire contract has no field to mint and return a new one); omit it
+there for a stateless, single-turn stream. `SESSION_SIGNING_KEY` must be a
+strong secret (16+ characters, same strength rule as `API_KEY`) - a weak or
+shared-guessable key would let an attacker forge another principal's
+`session_id` and defeat the ownership check entirely. Rotate it like
+`API_KEY` (see API Key Rotation above); rotating it invalidates all
+outstanding session ids, so plan rotations during low-traffic windows.
 
 ### HTTPS Enforcement
 
@@ -424,3 +511,31 @@ Set up uptime monitoring on the `/health` and `/health/ready` endpoints:
 ```bash
 # Example: Kubernetes
 ```
+
+### Redis Key-Prefix Cutover Alerting
+
+The pydantic-ai v2 migration bumped `RedisSessionStore.DEFAULT_KEY_PREFIX` from
+`session:` to `session:v2:` (Req 7.1) so a v2 instance can never read history a
+pre-cutover ("v1") instance wrote, and vice versa (Req 7.2). Pre-cutover keys are
+not deleted — they are left to expire through their existing write-time TTL (Req
+7.4), so the accepted cost of the cutover is that in-flight pre-cutover sessions
+are dropped rather than migrated.
+
+Because the two prefixes are mechanically isolated, a wire-format mismatch (a
+pre-cutover payload read by v2 code, or vice versa, e.g. during a rolling
+deploy or a rollback) cannot surface as one session reading another session's
+history. Instead, `RedisSessionStore.get_history` treats it exactly like any
+other corrupt payload (Req 7.6): it returns an empty history and logs
+
+```
+WARNING: Failed to deserialize session %s
+```
+
+rather than an error response, so the caller only ever sees an empty
+conversation. That warning is silent to API clients and to the `/health/ready`
+probe — **the log line's rate is the only signal a wire-format mismatch is
+occurring at all** (Req 7.7). Alert on a rate increase, not on mere presence
+(isolated deserialization failures from unrelated data corruption are
+expected), for the duration of the cutover — i.e. until the pre-cutover
+`session:` keys have fully expired via `session_ttl` (default 3600s) after the
+last pre-cutover write. Remove the alert once that rollout window has passed.

@@ -24,6 +24,8 @@ class WorkflowState(BaseModel):
             Public API requires minimum 1.
         final_answer: The synthesized answer from the LLM, or None if not yet generated.
         context_found: Whether relevant context was found (True) or retries were exhausted (False).
+        retrieved_hit_ids: Ids of every hit retrieved so far in this run (across all search
+            attempts), used to validate that citations reference only ids actually seen.
     """
 
     query: str
@@ -31,3 +33,4 @@ class WorkflowState(BaseModel):
     max_retries: int = Field(default=3, ge=0, le=10)
     final_answer: str | None = None
     context_found: bool = False
+    retrieved_hit_ids: set[str] = Field(default_factory=set)

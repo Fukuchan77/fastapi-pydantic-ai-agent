@@ -2,7 +2,8 @@
 
 Deep readiness health check at GET /health/ready.
 Tests the endpoint through full HTTP stack using AsyncClient.
-This endpoint requires no authentication and returns detailed dependency status.
+This endpoint requires no authentication and performs live connectivity
+probes against the store/provider selection currently in effect (Req 13.1).
 """
 
 import pytest
@@ -46,11 +47,10 @@ class TestReadinessEndpoint:
         # Act: Request readiness endpoint
         response = await client.get("/health/ready")
 
-        # Assert: Should have vector_store check
+        # Assert: Should have vector_store check (default test settings: in-memory, skipped)
         data = response.json()
         assert "checks" in data
-        assert "vector_store" in data["checks"]
-        assert data["checks"]["vector_store"] in ["healthy", "missing"]
+        assert data["checks"]["vector_store"] in ["healthy", "skipped", "unreachable"]
 
     @pytest.mark.asyncio
     async def test_readiness_endpoint_checks_session_store(self, client: AsyncClient) -> None:
@@ -58,35 +58,21 @@ class TestReadinessEndpoint:
         # Act: Request readiness endpoint
         response = await client.get("/health/ready")
 
-        # Assert: Should have session_store check
+        # Assert: Should have session_store check (default test settings: in-memory, skipped)
         data = response.json()
         assert "checks" in data
-        assert "session_store" in data["checks"]
-        assert data["checks"]["session_store"] in ["healthy", "missing"]
+        assert data["checks"]["session_store"] in ["healthy", "skipped", "unreachable"]
 
     @pytest.mark.asyncio
-    async def test_readiness_endpoint_checks_chat_agent(self, client: AsyncClient) -> None:
-        """Readiness endpoint should include chat_agent in checks."""
+    async def test_readiness_endpoint_checks_llm_provider(self, client: AsyncClient) -> None:
+        """Readiness endpoint should include llm_provider in checks and probe it live."""
         # Act: Request readiness endpoint
         response = await client.get("/health/ready")
 
-        # Assert: Should have chat_agent check
+        # Assert: Should have llm_provider check; the test FunctionModel always succeeds
         data = response.json()
         assert "checks" in data
-        assert "chat_agent" in data["checks"]
-        assert data["checks"]["chat_agent"] in ["healthy", "missing"]
-
-    @pytest.mark.asyncio
-    async def test_readiness_endpoint_checks_cleanup_task(self, client: AsyncClient) -> None:
-        """Readiness endpoint should include cleanup_task in checks."""
-        # Act: Request readiness endpoint
-        response = await client.get("/health/ready")
-
-        # Assert: Should have cleanup_task check
-        data = response.json()
-        assert "checks" in data
-        assert "cleanup_task" in data["checks"]
-        assert data["checks"]["cleanup_task"] in ["healthy", "stopped", "missing"]
+        assert data["checks"]["llm_provider"] == "healthy"
 
     @pytest.mark.asyncio
     async def test_readiness_endpoint_response_has_json_content_type(
@@ -103,20 +89,17 @@ class TestReadinessEndpoint:
         )
 
     @pytest.mark.asyncio
-    async def test_readiness_endpoint_all_checks_healthy_in_normal_operation(
+    async def test_readiness_endpoint_all_checks_pass_in_normal_operation(
         self, client: AsyncClient
     ) -> None:
-        """Readiness endpoint should show all checks as healthy during normal operation."""
+        """Readiness endpoint should be ready with default in-memory test settings."""
         # Act: Request readiness endpoint
         response = await client.get("/health/ready")
 
-        # Assert: All checks should be healthy in test environment
+        # Assert: All checks should be non-failing in the test environment
         data = response.json()
         assert response.status_code == 200
         assert data["status"] == "ready"
-
-        # All critical components should be healthy
-        assert data["checks"]["vector_store"] == "healthy"
-        assert data["checks"]["session_store"] == "healthy"
-        assert data["checks"]["chat_agent"] == "healthy"
-        assert data["checks"]["cleanup_task"] == "healthy"
+        assert data["checks"]["session_store"] == "skipped"
+        assert data["checks"]["vector_store"] == "skipped"
+        assert data["checks"]["llm_provider"] == "healthy"

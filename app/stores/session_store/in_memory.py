@@ -1,0 +1,280 @@
+"""InMemorySessionStore: per-session-locked, TTL + LRU-bounded session history store."""
+
+import asyncio
+import re
+import time
+import uuid
+from collections.abc import Sequence
+
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import ModelResponse
+
+from app.stores.session_store._trim import trim_history
+
+
+class InMemorySessionStore:
+    """In-memory session history store with per-session locking.
+
+    This implementation stores conversation histories in a dictionary,
+    suitable for development and single-instance deployments. For
+    production use with multiple replicas or persistence requirements,
+    consider implementing a Redis-backed or database-backed store.
+
+    Thread safety: Uses per-session asyncio.Lock to prevent race conditions
+    when multiple concurrent operations access the same session. Each session
+    has its own lock to allow concurrent access to different sessions.
+    """
+
+    # Extract magic numbers to class constants for maintainability
+    DEFAULT_MAX_MESSAGES: int = 1000
+    DEFAULT_SESSION_TTL: int = 3600
+    DEFAULT_MAX_SESSIONS: int = 10_000
+    MAX_SESSION_ID_LENGTH: int = 256
+
+    def __init__(
+        self,
+        max_messages: int = DEFAULT_MAX_MESSAGES,
+        session_ttl: int = DEFAULT_SESSION_TTL,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
+    ) -> None:
+        """Initialize an empty in-memory session store with per-session locks and TTL.
+
+        Args:
+            max_messages: Maximum number of messages retained per session
+                (default: 1000). A save exceeding this cap is trimmed to it
+                rather than rejected, bounding memory growth without
+                bricking the session.
+            session_ttl: Time-to-live for inactive sessions in seconds (default: 3600).
+                Sessions not accessed for this duration will be eligible for cleanup.
+            max_sessions: Maximum number of sessions to store (default: 10,000).
+                When exceeded, the least-recently-used session is evicted.
+        """
+        self._store: dict[str, list[ModelMessage]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._last_access: dict[str, float] = {}
+        # Store-level lock to protect metadata operations (LRU eviction, lock cleanup)
+        self._store_lock: asyncio.Lock = asyncio.Lock()
+        # Compile regex pattern for session_id validation (alphanumeric, underscore, hyphen only)
+        self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
+        self.max_messages = max_messages
+        self.session_ttl = session_ttl
+        self.max_sessions = max_sessions
+
+    async def get_history(self, session_id: str) -> list[ModelMessage]:
+        """Retrieve message history for a session.
+
+        Args:
+            session_id: Unique identifier for the conversation session.
+                Must be 1-256 characters, containing only alphanumeric
+                characters, underscores, and hyphens.
+
+        Returns:
+            List of messages in chronological order. Returns empty list
+            if session_id is unknown.
+
+        Raises:
+            ValueError: If session_id is invalid (empty, too long, or contains
+                invalid characters).
+        """
+        self._validate_session_id(session_id)
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            # Update last access time inside lock to prevent race condition
+            # Moving this inside the lock prevents cleanup_expired_sessions() from
+            # deleting the session between _last_access update and lock acquisition,
+            # which would leave an orphaned timestamp entry (memory leak)
+            self._last_access[session_id] = time.time()
+            return self._store.get(session_id, [])
+
+    async def save_history(self, session_id: str, messages: Sequence[ModelMessage]) -> None:
+        """Save message history for a session.
+
+        This operation replaces any existing history for the session. When
+        `messages` exceeds `max_messages`, the oldest surplus is trimmed at a
+        tool-call-pairing-safe boundary (see `app.stores.session_store._trim`)
+        rather than raising — reaching the cap is expected operation for a
+        long conversation, not a failure.
+
+        Args:
+            session_id: Unique identifier for the conversation session.
+                Must be 1-256 characters, containing only alphanumeric
+                characters, underscores, and hyphens.
+            messages: Complete message history to store, in chronological order.
+                All elements must be ModelMessage instances.
+
+        Raises:
+            ValueError: If session_id is invalid (empty, too long, or contains
+                invalid characters).
+            TypeError: If messages list contains non-ModelMessage instances.
+        """
+        self._validate_session_id(session_id)
+        self._validate_messages(messages)
+        trimmed = trim_history(messages, self.max_messages)
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            # Update last access time inside the lock, same as get_history: a
+            # concurrent clear()/cleanup_expired_sessions() holding this lock
+            # could otherwise pop _store+_last_access between an unlocked
+            # _last_access write and the lock acquisition below, leaving a
+            # _store entry with no _last_access entry — invisible to both LRU
+            # eviction and TTL cleanup (permanent leak).
+            self._last_access[session_id] = time.time()
+            self._store[session_id] = trimmed
+
+        # Perform LRU eviction AFTER releasing current session lock
+        # This prevents deadlock when two concurrent save_history() calls try to evict each other:
+        # - Thread A: holds lock for session_1, tries to evict session_2
+        # - Thread B: holds lock for session_2, tries to evict session_1
+        # - DEADLOCK: circular wait for each other's locks
+        # Solution: Never hold one session lock while trying to acquire another
+
+        # Evict LRU session if max_sessions limit exceeded
+        if len(self._store) > self.max_sessions:
+            # Determine which session to evict
+            lru_session_id: str | None = None
+            lru_lock: asyncio.Lock | None = None
+
+            async with self._store_lock:
+                # Re-check after acquiring store lock (double-checked locking pattern)
+                if len(self._store) > self.max_sessions:
+                    # Find the saved session with the oldest _last_access time (LRU).
+                    # Selection is drawn from _store's keys, not _last_access's: a
+                    # session id can be read (stamping _last_access) but never saved
+                    # (ADR-4, kept deliberately for orphan-lock reclamation), and such
+                    # a phantom id is never a member of _store so it can never be
+                    # chosen here. A saved session missing from _last_access (should
+                    # not happen, but selection must not raise if it does) defaults to
+                    # the oldest possible timestamp.
+                    lru_session_id = min(
+                        self._store.keys(), key=lambda sid: self._last_access.get(sid, 0.0)
+                    )
+
+                    # Get victim session's lock reference
+                    # This prevents concurrent save_history(lru_session) from resurrecting
+                    # the session after eviction completes
+                    lru_lock = self._locks.setdefault(lru_session_id, asyncio.Lock())
+
+            # Acquire LRU session lock then perform eviction
+            # (session lock should be acquired before store lock in the locking hierarchy)
+            if lru_lock is not None and lru_session_id is not None:
+                async with lru_lock, self._store_lock:
+                    # Re-check capacity inside critical section to prevent
+                    # over-eviction when concurrent clear() or TTL cleanup reduced store size
+                    # between the initial capacity check and final eviction
+                    if len(self._store) > self.max_sessions and lru_session_id in self._store:
+                        # Cleanup all session data atomically
+                        self._store.pop(lru_session_id, None)
+                        self._last_access.pop(lru_session_id, None)
+                        self._locks.pop(lru_session_id, None)
+
+    async def clear(self, session_id: str) -> None:
+        """Remove all message history for a session.
+
+        This operation acquires the session lock to prevent race conditions
+        with concurrent get_history or save_history operations. After clearing,
+        the lock entry is removed from the _locks dict to prevent memory leaks.
+
+        Clearing a non-existent session does not raise an error.
+
+        Args:
+            session_id: Unique identifier for the conversation session.
+                Must be 1-256 characters, containing only alphanumeric
+                characters, underscores, and hyphens.
+
+        Raises:
+            ValueError: If session_id is invalid (empty, too long, or contains
+                invalid characters).
+        """
+        self._validate_session_id(session_id)
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            self._store.pop(session_id, None)
+            # Remove _last_access entry to prevent memory leak
+            self._last_access.pop(session_id, None)
+        # Protect lock cleanup with store lock to prevent race condition
+        # where concurrent operation creates new lock via setdefault between
+        # releasing session lock and popping lock entry
+        async with self._store_lock:
+            # Clean up lock entry to prevent memory leak in long-running services
+            self._locks.pop(session_id, None)
+
+    def _validate_session_id(self, session_id: str) -> None:
+        """Validate session_id input.
+
+        Args:
+            session_id: The session identifier to validate.
+
+        Raises:
+            ValueError: If session_id is empty, exceeds 256 characters,
+                or contains characters outside [a-zA-Z0-9_.-].
+        """
+        if not session_id:
+            raise ValueError("session_id cannot be empty")
+        if len(session_id) > self.MAX_SESSION_ID_LENGTH:
+            raise ValueError(f"session_id too long (max {self.MAX_SESSION_ID_LENGTH} chars)")
+        if not self._session_id_pattern.match(session_id):
+            raise ValueError("session_id contains invalid characters")
+
+    def _validate_messages(self, messages: Sequence[ModelMessage]) -> None:
+        """Validate messages parameter.
+
+        Capacity is not validated here: exceeding `max_messages` is handled
+        by trimming in `save_history`, not by rejecting the save.
+
+        Args:
+            messages: The messages list to validate.
+
+        Raises:
+            TypeError: If messages list contains non-ModelMessage instances.
+        """
+        # Use strict isinstance check instead of structural validation
+        # This prevents duck-typed objects from bypassing validation
+        for msg in messages:
+            if not isinstance(msg, (ModelRequest, ModelResponse)):
+                raise TypeError("All messages must be ModelMessage instances")
+
+    async def cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions based on TTL.
+
+        This method is public (not private) so it can be called
+        from external code like the lifespan manager.
+
+        Iterates through all sessions and removes those that haven't been
+        accessed for longer than session_ttl seconds.
+
+        Returns:
+            Number of sessions removed.
+        """
+        now = time.time()
+        expired_sessions = []
+
+        # Find expired sessions
+        # FIX: Create snapshot of items to prevent RuntimeError if dict is modified during iteration
+        for session_id, last_access in list(self._last_access.items()):
+            if now - last_access > self.session_ttl:
+                expired_sessions.append(session_id)
+
+        # Remove expired sessions
+        for session_id in expired_sessions:
+            await self.clear(session_id)
+
+        return len(expired_sessions)
+
+    def generate_session_id(self) -> str:
+        """Generate a new UUID v4 session identifier.
+
+        Server-side session ID generation for security.
+        UUIDs are cryptographically strong and prevent session hijacking
+        via guessable or enumerable session IDs.
+
+        Returns:
+            A string containing a UUID v4 in standard hyphenated format
+            (e.g., "550e8400-e29b-41d4-a716-446655440000").
+        """
+        return str(uuid.uuid4())
+
+    async def close(self) -> None:
+        """Close the session store and release any resources.
+
+        InMemorySessionStore doesn't hold external resources, so this is a no-op.
+        Implements the SessionStore Protocol interface for consistency.
+        """
+        pass

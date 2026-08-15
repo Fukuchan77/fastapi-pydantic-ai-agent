@@ -42,6 +42,10 @@ cd fastapi-pydantic-ai-agent
 
 # Install dependencies with uv (via mise)
 mise install
+
+# Install the pre-commit git hook (secret scanning, dependency audit, and
+# repo-specific guards — blocks a commit if gitleaks detects a secret)
+mise run hooks:install
 ```
 
 ### 2. Configure Environment
@@ -53,6 +57,7 @@ cp .env.example .env
 # Edit .env with your settings
 # Required:
 #   - API_KEY: Your API key for X-API-Key authentication
+#   - SESSION_SIGNING_KEY: Secret used to HMAC-sign server-issued session ids
 #   - LLM_MODEL: Model identifier (e.g., "openai:gpt-4o", "anthropic:claude-3-5-sonnet")
 #   - LLM_API_KEY: Your LLM provider API key (or leave empty for Ollama)
 ```
@@ -61,6 +66,7 @@ cp .env.example .env
 
 ```bash
 API_KEY=my-secret-api-key
+SESSION_SIGNING_KEY=my-session-signing-key
 LLM_MODEL=openai:gpt-4o
 LLM_API_KEY=sk-...your-openai-key...
 ```
@@ -69,8 +75,10 @@ LLM_API_KEY=sk-...your-openai-key...
 
 ```bash
 API_KEY=my-secret-api-key
+SESSION_SIGNING_KEY=my-session-signing-key
 LLM_MODEL=ollama:llama3
-LLM_BASE_URL=http://localhost:11434/v1
+# No /v1 suffix: LiteLLM appends it for Ollama (see app/agents/chat_agent.py)
+LLM_BASE_URL=http://localhost:11434
 # LLM_API_KEY not required for Ollama
 ```
 
@@ -87,7 +95,7 @@ mise run dev
 ### 4. Verify Health Check
 
 ```bash
-# Health check endpoint (no authentication required)
+# Liveness check (no authentication required)
 curl http://localhost:8000/health
 ```
 
@@ -95,10 +103,40 @@ curl http://localhost:8000/health
 
 ```json
 {
-  "status": "healthy",
-  "service": "fastapi-pydantic-ai-agent"
+  "status": "ok"
 }
 ```
+
+`/health` is a liveness probe only — it takes no arguments and touches no
+external state, so a 200 means the process is running, not that its
+dependencies are reachable.
+
+```bash
+# Readiness check (no authentication required)
+curl http://localhost:8000/health/ready
+```
+
+For deep dependency checks, use `/health/ready` instead. It runs concurrent
+live probes against the session store, vector store, and LLM provider and
+returns a per-dependency `checks` map:
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "session_store": "healthy",
+    "vector_store": "skipped",
+    "llm_provider": "healthy"
+  }
+}
+```
+
+Each check is `"healthy"`, `"unreachable"`, or `"skipped"` — a backend with
+no external dependency to probe (e.g. the in-memory session/vector stores,
+or embedded Chroma) reports `"skipped"` rather than `"healthy"`, since no
+round-trip was actually made. Responds `200` with `"status": "ready"` when
+every probe passes, or `503` with `"status": "not_ready"` naming the failed
+dependency otherwise.
 
 ## 📚 API Examples
 
@@ -108,13 +146,15 @@ All `/v1/` endpoints require the `X-API-Key` header. Replace `your-api-key-here`
 
 #### Standard Request/Response
 
+`session_id` is server-issued, not client-supplied: omit it to start a new
+conversation, and the server mints one bound to your API key and returns it.
+
 ```bash
 curl -X POST http://localhost:8000/v1/agent/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{
-    "message": "What is the weather like today?",
-    "session_id": "user-123"
+    "message": "What is the weather like today?"
   }'
 ```
 
@@ -123,14 +163,18 @@ curl -X POST http://localhost:8000/v1/agent/chat \
 ```json
 {
   "reply": "I checked the weather using my search tool. Currently it's 72°F and sunny.",
-  "session_id": "user-123",
+  "session_id": "3f1a9c2b8e4d6f01.dQw4w9WgXcQ-1a2b3c.7e6d5c4b3a291807",
   "tool_calls_made": 1
 }
 ```
 
+Present that same `session_id` on a later request to continue the
+conversation - the server echoes it back on success. Presenting a
+`session_id` minted for a different API key is rejected with `403`.
+
 **Features:**
 
-- Conversation history maintained per `session_id`
+- Conversation history maintained per server-issued `session_id` (Req 11.1/11.2)
 - Agent can call registered tools (e.g., `mock_web_search`)
 - Tool invocations are counted and returned
 - Type-safe dependency injection via [`AgentDeps`](app/agents/deps.py)
@@ -199,31 +243,74 @@ curl -X POST http://localhost:8000/v1/agent/stream \
   -N \
   -d '{
     "message": "Write a haiku about Python",
-    "session_id": "user-123"
+    "session_id": "3f1a9c2b8e4d6f01.dQw4w9WgXcQ-1a2b3c.7e6d5c4b3a291807"
   }'
 ```
+
+Unlike `/v1/agent/chat`, this endpoint has no response field to mint and
+return a _new_ `session_id` - only present one already issued by
+`/v1/agent/chat` (a foreign `session_id` is rejected with `403`); omit it for
+a stateless, single-turn stream.
 
 **Response Stream:**
 
 ```
- {"type": "delta", "content": "Code"}
-data: {"type": "delta", "content": " flows"}
- {"type": "delta", "content": " like"}
- {"type": "delta", "content": " water,\n"}
- {"type": "delta", "content": "Types"}
- {"type": "delta", "content": " guide"}
- {"type": "delta", "content": " the"}
- {"type": "delta", "content": " way"}
- {"type": "delta", "content": " forward"}
- {"type": "done", "content": ""}
+event: step_started
+data: {"type":"step_started"}
+
+event: token
+data: {"type":"token","content":"Code"}
+
+event: token
+data: {"type":"token","content":" flows"}
+
+event: token
+data: {"type":"token","content":" like water,\n"}
+
+event: completed
+data: {"type":"completed"}
+
 ```
 
 **Features:**
 
 - Server-Sent Events (SSE) with `text/event-stream` media type
-- Token-by-token streaming via Pydantic AI's [`run_stream()`](app/agents/chat_agent.py)
-- Pluggable adapters (extend [`StreamAdapter`](app/api/v1/agent.py) Protocol for Vercel AI or AG-UI formats)
-- Conversation history saved after stream completes
+- Typed 5-event discriminated union — `step_started` / `tool_called` / `token` / `completed` / `error` — where the SSE `event:` name equals the JSON `type` discriminator; see [`app/patterns/sse.py`](app/patterns/sse.py)
+- Node-level streaming via Pydantic AI's [`Agent.iter()`](app/api/v1/_stream.py), so tool calls surface as `tool_called` events alongside `token` deltas
+- Stream lifecycle hardening ([`app/api/v1/_stream.py`](app/api/v1/_stream.py)): `sse_max_events` cap, client-disconnect detection, `sse_send_timeout` per event, and idle heartbeat comments every `sse_heartbeat_interval` seconds
+- `Cache-Control: no-cache` and `X-Accel-Buffering: no` response headers so reverse proxies don't buffer the stream
+- Conversation history saved before the terminal `completed` event (a save failure yields a terminal `error` event instead)
+
+## ⚠️ Error Responses
+
+Every error response — regardless of status code or which layer raised it — uses the same flat body. There is no nested `{"detail": {...}}` form on any route or status code:
+
+```json
+{
+  "message": "Invalid or missing API key",
+  "code": "UNAUTHORIZED"
+}
+```
+
+`code` is drawn from one stable, documented set, so clients can branch on `code` instead of on body shape:
+
+| Status | `code`                      | Meaning                                                                   |
+| ------ | --------------------------- | -------------------------------------------------------------------------- |
+| 401    | `UNAUTHORIZED`               | Missing or invalid API key                                                |
+| 403    | `FORBIDDEN`                  | Session-ownership rejection                                               |
+| 404    | `NOT_FOUND`                  | No route matches the request path (raised by the router)                 |
+| 405    | `METHOD_NOT_ALLOWED`         | Path exists but not for this HTTP method (raised by the router)          |
+| 413    | `REQUEST_TOO_LARGE`          | Request body exceeds the configured size limit                          |
+| 422    | `VALIDATION_ERROR`           | Request validation failed (message is generic; no per-field detail)      |
+| 429    | `RATE_LIMIT_EXCEEDED`        | Request-rate limit exceeded                                              |
+| 500    | `INTERNAL_ERROR`             | Unhandled exception                                                      |
+| 502    | `UPSTREAM_GROUNDING_FAILED`  | The RAG workflow could not produce a grounded, citable answer            |
+| 503    | `DEPENDENCY_NOT_INITIALIZED` | A required `app.state` singleton (`settings` or `llm_model`) was absent  |
+| 504    | `WORKFLOW_TIMEOUT`           | The RAG workflow exceeded its timeout                                    |
+
+404 and 405 are emitted by Starlette's router itself — no route in this codebase raises either directly. A 405 response additionally carries an `Allow` header naming the HTTP methods the path actually accepts.
+
+**One exception**: a request with an untrusted `Host` header is rejected by `TrustedHostMiddleware` with a plain-text `400 Invalid host header` response, *not* this JSON envelope. That middleware is outermost and returns before FastAPI's exception-handling machinery runs, so no handler here can intercept it.
 
 ## 🏗️ Project Structure
 
@@ -234,11 +321,15 @@ app/
 ├── observability.py            # Logfire initialization helpers
 │
 ├── api/                        # FastAPI route handlers
-│   ├── health.py               # GET /health
+│   ├── health.py               # GET /health, /health/ready
 │   └── v1/
 │       ├── router.py           # Aggregates v1 sub-routers
 │       ├── agent.py            # POST /v1/agent/chat, /v1/agent/stream
+│       ├── _stream.py          # SSE event-source generator + lifecycle hardening
 │       └── rag.py              # POST /v1/rag/query, /v1/rag/ingest
+│
+├── patterns/                   # Reusable, protocol-agnostic wire-format patterns
+│   └── sse.py                  # Typed 5-event SSE union + to_sse()/parse_sse_events()
 │
 ├── agents/                     # Pydantic AI agent layer
 │   ├── deps.py                 # AgentDeps dataclass, dependency factories
@@ -250,7 +341,7 @@ app/
 │   └── corrective_rag.py       # CorrectiveRAGWorkflow (steps)
 │
 ├── models/                     # Request/Response Pydantic schemas
-│   ├── agent.py                # ChatRequest, ChatResponse, StreamEvent
+│   ├── agent.py                # ChatRequest, ChatResponse
 │   ├── rag.py                  # RAGQueryRequest, RAGQueryResponse, IngestRequest
 │   └── errors.py               # ErrorResponse, structured error models
 │
@@ -329,20 +420,27 @@ All configuration is managed via environment variables or `.env` file. See [`.en
 
 ### Required Variables
 
-| Variable    | Description            | Example                                        |
-| ----------- | ---------------------- | ---------------------------------------------- |
-| `API_KEY`   | X-API-Key header value | `my-secret-key`                                |
-| `LLM_MODEL` | LLM provider and model | `openai:gpt-4o`, `anthropic:claude-3-5-sonnet` |
+| Variable              | Description                                                | Example                                        |
+| --------------------- | ---------------------------------------------------------- | ---------------------------------------------- |
+| `API_KEY`             | X-API-Key header value                                     | `my-secret-key`                                |
+| `SESSION_SIGNING_KEY` | HMAC key binding server-issued session ids to a principal  | `my-session-signing-key`                       |
+| `LLM_MODEL`           | LLM provider and model                                     | `openai:gpt-4o`, `anthropic:claude-3-5-sonnet` |
+
+Both `API_KEY` and `SESSION_SIGNING_KEY` must be at least 16 characters and must not be
+a placeholder value — startup fails with a validation error otherwise.
 
 ### Optional Variables
 
 | Variable               | Default                     | Description                                                    |
 | ---------------------- | --------------------------- | -------------------------------------------------------------- |
 | `LLM_API_KEY`          | `None`                      | Provider API key (not required for Ollama)                     |
-| `LLM_BASE_URL`         | `None`                      | Custom endpoint (e.g., `http://localhost:11434/v1` for Ollama) |
+| `LLM_BASE_URL`         | `None`                      | Custom endpoint (e.g., `http://localhost:11434` for Ollama, no `/v1`) |
 | `MAX_OUTPUT_RETRIES`   | `3`                         | Pydantic AI output validation retries                          |
 | `LOGFIRE_TOKEN`        | `None`                      | Pydantic Logfire observability token                           |
 | `LOGFIRE_SERVICE_NAME` | `fastapi-pydantic-ai-agent` | Service name for traces                                        |
+| `APP_ENV`              | `development`               | Deployment environment — see below                             |
+
+`APP_ENV` accepts exactly `development`, `staging`, or `production` — no case variants (`Production`), abbreviations (`prod`), or aliasing. Any other value fails settings construction before any store, model, or agent is built, with an error naming the field and listing the three permitted values.
 
 ## 🔌 Extension Points
 
@@ -350,7 +448,7 @@ The framework is designed for extensibility via Protocol-based interfaces:
 
 ### Custom Vector Store
 
-Implement [`VectorStore`](app/stores/vector_store.py) Protocol:
+Implement [`VectorStore`](app/stores/vector_store/protocol.py) Protocol:
 
 ```python
 from app.stores.vector_store import VectorStore
@@ -366,7 +464,7 @@ app.state.vector_store = ChromaVectorStore()
 
 ### Custom Session Store
 
-Implement [`SessionStore`](app/stores/session_store.py) Protocol:
+Implement [`SessionStore`](app/stores/session_store/protocol.py) Protocol:
 
 ```python
 from app.stores.session_store import SessionStore
@@ -376,33 +474,23 @@ class RedisSessionStore:
     async def get_history(self, session_id: str) -> list[ModelMessage]: ...
     async def save_history(self, session_id: str, messages: list[ModelMessage]) -> None: ...
     async def clear(self, session_id: str) -> None: ...
+    async def cleanup_expired_sessions(self) -> int: ...
+    def generate_session_id(self) -> str: ...
+    async def close(self) -> None: ...
 
 # Replace in app/main.py lifespan
 app.state.session_store = RedisSessionStore()
 ```
 
-### Custom Stream Adapter
+### SSE Wire Contract
 
-Implement [`StreamAdapter`](app/api/v1/agent.py) Protocol:
-
-```python
-class VercelAIAdapter:
-    def format_event(self, event_type: str, content: str) -> str:
-        # Vercel AI SDK format
-        return f"0:{json.dumps({'type': event_type, 'content': content})}\n"
-
-    def format_done(self) -> str:
-        return "d:{}\n"
-
-    def format_error(self, message: str) -> str:
-        return f"3:{json.dumps({'error': message})}\n"
-
-# Use in route handler
-@router.post("/agent/stream")
-async def stream_agent(...):
-    adapter = VercelAIAdapter()  # Replace DefaultSSEAdapter
-    ...
-```
+The `/v1/agent/stream` wire format is a fixed typed contract, not a pluggable
+adapter: [`app/patterns/sse.py`](app/patterns/sse.py) defines the 5-event
+discriminated union (`StepStarted` / `ToolCalled` / `Token` / `Completed` /
+`Error`) and the `to_sse()`/`parse_sse_events()` codec. To emit a different
+wire format (e.g. Vercel AI Data Stream or AG-UI), change `to_sse()` — the
+stream lifecycle logic in [`app/api/v1/_stream.py`](app/api/v1/_stream.py)
+is decoupled from the codec and does not need to change.
 
 ## 🏛️ Architecture
 
@@ -418,7 +506,6 @@ async def stream_agent(...):
 
 - `VectorStore` Protocol — swap TF-IDF for Chroma, pgvector, or custom backends
 - `SessionStore` Protocol — replace in-memory with Redis or database-backed stores
-- `StreamAdapter` Protocol — support multiple SSE formats without changing agent logic
 
 **Zero Lock-In Design**
 

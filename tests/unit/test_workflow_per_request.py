@@ -12,15 +12,23 @@ import pytest
 from fastapi import FastAPI
 from fastapi import Request
 
+from app.agents.chat_agent import build_model
 from app.deps.workflow import get_rag_workflow
 from app.stores.vector_store import InMemoryVectorStore
+from tests.conftest import build_test_settings
 
 
 @pytest.fixture
 def mock_app() -> FastAPI:
-    """Create a mock FastAPI app with vector_store in state."""
+    """Create a mock FastAPI app with vector_store, settings, and llm_model in state.
+
+    `get_rag_workflow` reads all three from `app.state` (Req 3.3).
+    """
     app = FastAPI()
     app.state.vector_store = InMemoryVectorStore()
+    settings = build_test_settings()
+    app.state.settings = settings
+    app.state.llm_model = build_model(settings)
     return app
 
 
@@ -71,11 +79,18 @@ def test_different_vector_stores_get_different_workflows(
     Verifies that the cache key is the vector_store identity,
     so apps with different vector stores each get their own workflow instance.
     """
+    settings = build_test_settings()
+    model = build_model(settings)
+
     app1 = FastAPI()
     app1.state.vector_store = InMemoryVectorStore()
+    app1.state.settings = settings
+    app1.state.llm_model = model
 
     app2 = FastAPI()
     app2.state.vector_store = InMemoryVectorStore()
+    app2.state.settings = settings
+    app2.state.llm_model = model
 
     def make_request(app: FastAPI) -> Request:
         scope = {

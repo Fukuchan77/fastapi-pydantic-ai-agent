@@ -1,5 +1,22 @@
 [tools]
 uv = "latest"
+# Pinned, not merely floored by `requires-python = ">=3.13"`.
+#
+# Python 3.14 deprecates `asyncio.iscoroutinefunction`, and both `starlette`
+# 0.52.x (`starlette/routing.py`) and `slowapi` 0.1.10 (`slowapi/extension.py`)
+# still call it. This project holds starlette below 1.0 deliberately - slowapi
+# 0.1.10 is incompatible with starlette 1.x and silently disables the global
+# rate limit there (see pyproject.toml) - so those call sites cannot be moved
+# off the deprecated API by upgrading. Combined with the intentionally bare
+# `filterwarnings = ["error::DeprecationWarning"]`, every one of those calls
+# becomes a hard test failure on 3.14.
+#
+# Left unpinned, CI resolved a newer interpreter than local development had and
+# 63 tests failed with 12 errors for that reason alone (PR CI run 31880991303),
+# while the identical commit passed locally on 3.13. Pin the toolchain so CI,
+# local development, and `uv.lock` all agree. Revisit when starlette and slowapi
+# migrate to `inspect.iscoroutinefunction`.
+python = "3.13"
 
 [tasks.dev]
 description = "Start FastAPI development server with hot reload"
@@ -29,13 +46,47 @@ run = "uv run pytest tests/benchmarks/ -v -s"
 description = "Run local tests (requires running Ollama instance)"
 run = "uv run pytest tests/local/ -v -m ollama"
 
+[tasks."test:redis"]
+description = "Run the Redis session store live lane (requires a reachable Redis server)"
+run = "uv run pytest -m redis -v"
+
+[tasks."test:ci"]
+description = "PR CI test stage: unit+integration+e2e with coverage gate (TestModel/FunctionModel only, no live LLM/Ollama)"
+run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --cov-report=term-missing"
+
+[tasks.audit]
+description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
+# Ignored IDs are all on `starlette`, held below 1.0 (pyproject.toml) because
+# `slowapi` 0.1.10 is incompatible with starlette 1.x (see tasks.md Task 20.3).
+# Assessed in .sdd/specs/001-agent-architecture-enhancements/tasks.md Task 20.3:
+#   PYSEC-2026-161 - reachable (Host header into redirect Location), but
+#     mitigated at the app layer by TrustedHostMiddleware (app/main.py, Task
+#     20.1) regardless of the starlette version installed.
+#   PYSEC-2026-248 - unreachable: no `HTTPEndpoint` usage in this codebase.
+#   PYSEC-2026-249 - unreachable: no `request.form()` call; `python-multipart`
+#     isn't even installed (plain `fastapi`, not `fastapi[standard]`).
+#   PYSEC-2026-2280 - unreachable: no `HTTPEndpoint` usage.
+#   PYSEC-2026-2281 - unreachable: no `StaticFiles` usage; Windows-only UNC
+#     path issue besides.
+# Re-run `uv run pip-audit` (without --ignore-vuln) after any starlette bump
+# to confirm these still apply before renewing the ignore list.
+run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281"
+
+[tasks."hooks:install"]
+description = "Install the pre-commit git hook (gitleaks/pip-audit/model-id/tool-conventions guards, Req 12.4)"
+run = "uv run pre-commit install"
+
+[tasks.evals]
+description = "Run the offline evals suite against the golden dataset (Req 6.5); pre-push only, never on GitHub Actions"
+run = "uv run python -m evals.runner"
+
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
-run = ["uv run ruff check app/ tests/", "uv run ty check app/"]
+run = ["uv run ruff check app/ evals/ tests/", "uv run ty check app/ evals/"]
 
 [tasks.format]
 description = "Run ruff formatter"
-run = "uv run ruff format app/ tests/"
+run = "uv run ruff format app/ evals/ tests/"
 
 [tasks.build]
 description = "Build Docker image"

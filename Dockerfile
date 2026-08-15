@@ -11,6 +11,11 @@ FROM python:3.13-slim AS builder
 # Install uv package manager
 RUN pip install --no-cache-dir uv
 
+# Install build toolchain: chroma-hnswlib has no prebuilt wheel for some
+# platforms (e.g. linux/arm64) and compiles a C++ extension from sdist.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory for build
 WORKDIR /app
 
@@ -45,6 +50,17 @@ USER app
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+# Requirement 11.4: explicit uvicorn proxy-trust list. Uvicorn's Config reads
+# this env var as the default for forwarded_allow_ips - the address(es) its
+# ProxyHeadersMiddleware trusts to rewrite scope["scheme"] from
+# X-Forwarded-Proto. This pins uvicorn's own implicit default (127.0.0.1)
+# explicitly rather than leaving it undocumented; behind a real reverse proxy
+# (nginx/ALB/Cloudflare), override at `docker run`/compose time with the
+# proxy's actual address or CIDR, e.g. `-e FORWARDED_ALLOW_IPS=10.0.0.0/8` -
+# otherwise Strict-Transport-Security is silently never emitted (see
+# docs/production_deployment.md, "Trusted Proxies Configuration").
+ENV FORWARDED_ALLOW_IPS="127.0.0.1"
 
 # Expose port 8000 (documentation only)
 EXPOSE 8000

@@ -6,6 +6,7 @@ Tests cover resource management, error handling, and basic functionality.
 import pytest
 from httpx import AsyncClient
 
+from app.models.rag import RetrievedHit
 from app.stores.vector_store import OllamaEmbeddingVectorStore
 
 
@@ -232,5 +233,148 @@ async def test_embed_response_with_missing_embedding_field():
     # Should raise ValueError with descriptive message about missing 'embedding' key
     with pytest.raises(ValueError, match="Missing 'embedding' in response item"):
         await store.add_documents(["test doc"])
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_query_with_scores_returns_retrieved_hit_instances():
+    """query_with_scores returns a list of RetrievedHit with the ollama source."""
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._documents = ["doc one", "doc two"]
+    store._embeddings = [[1.0, 0.0], [0.0, 1.0]]
+
+    from unittest.mock import AsyncMock
+
+    store._embed = AsyncMock(return_value=[[1.0, 0.0]])
+
+    results = await store.query_with_scores("doc one", top_k=2)
+
+    assert len(results) == 2
+    assert all(isinstance(hit, RetrievedHit) for hit in results)
+    assert results[0].chunk_id == "ollama::0000"
+    assert results[0].text == "doc one"
+    assert results[0].score > results[1].score
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_query_with_scores_chunk_id_is_stable_across_repeated_queries():
+    """The same document keeps the same chunk_id across repeated queries."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._documents = ["doc one", "doc two", "doc three"]
+    store._embeddings = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
+    store._embed = AsyncMock(return_value=[[1.0, 0.0]])
+
+    first_pass = await store.query_with_scores("doc one", top_k=3)
+    second_pass = await store.query_with_scores("doc one", top_k=3)
+
+    first_ids = {hit.text: hit.chunk_id for hit in first_pass}
+    second_ids = {hit.text: hit.chunk_id for hit in second_pass}
+    assert first_ids == second_ids
+    assert first_ids["doc one"] == "ollama::0000"
+    assert first_ids["doc two"] == "ollama::0001"
+    assert first_ids["doc three"] == "ollama::0002"
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_query_with_scores_returns_empty_list_on_empty_corpus():
+    """query_with_scores returns empty list when no documents are stored."""
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+
+    results = await store.query_with_scores("test query", top_k=5)
+
+    assert results == []
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_query_with_scores_top_k_validation():
+    """query_with_scores raises ValueError for invalid top_k values, matching query()."""
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+
+    with pytest.raises(ValueError, match="top_k must be at least 1"):
+        await store.query_with_scores("test", top_k=0)
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_query_contract_unchanged_after_query_with_scores_added():
+    """query() keeps returning bare strings after query_with_scores is added."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._documents = ["doc one"]
+    store._embeddings = [[1.0, 0.0]]
+    store._embed = AsyncMock(return_value=[[1.0, 0.0]])
+
+    results = await store.query("doc one", top_k=1)
+
+    assert results == ["doc one"]
+
+
+# Generation content-version counter (Req 2.1, 2.2, 2.4). Boundary correction
+# for task 3.1 (`.sdd/specs/002-review-roadmap-remediation/tasks.md`): 3.1's
+# own boundary has no test file, so this section is the RED step ahead of
+# task 3.3's formal parametrized conformance widening.
+
+
+def test_generation_starts_at_zero():
+    """A freshly constructed store starts at generation 0."""
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    assert store.generation == 0
+
+
+@pytest.mark.asyncio
+async def test_generation_increments_after_successful_add():
+    """A successful add_documents() call advances generation."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(return_value=[[0.1, 0.2]])
+
+    await store.add_documents(["doc one"])
+    assert store.generation == 1
+    await store.add_documents(["doc two"])
+    assert store.generation == 2
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_increments_after_clear():
+    """A clear() call advances generation."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(return_value=[[0.1, 0.2]])
+
+    await store.add_documents(["doc one"])
+    await store.clear()
+    assert store.generation == 2
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_generation_unchanged_on_failed_add():
+    """A failed add_documents() call (embedding API error) leaves generation unchanged."""
+    from unittest.mock import AsyncMock
+
+    store = OllamaEmbeddingVectorStore(embedding_model="test-model")
+    store._embed = AsyncMock(side_effect=ValueError("embedding API failed"))
+
+    with pytest.raises(ValueError, match="embedding API failed"):
+        await store.add_documents(["doc one"])
+    assert store.generation == 0
+
+    await store.close()
 
     await store.close()

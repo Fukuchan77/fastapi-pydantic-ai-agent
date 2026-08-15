@@ -94,6 +94,47 @@ async def test_get_history_uses_json_deserialization_not_pickle(session_store, m
 
 
 @pytest.mark.asyncio
+async def test_get_history_deserializes_v1_shaped_payload(session_store, mock_redis):
+    """Verify get_history deserializes history written by pydantic-ai v1.
+
+    Req 5.7: the v2-adapter migration's Redis key-prefix cutover (Req 7.1)
+    means a v2 store never again reads a key a pre-cutover ("v1") instance
+    wrote, so no production read path can exercise this once the cutover
+    lands — a fixture is the only way left to demonstrate the claim.
+
+    The payload below is not round-tripped through the current (v2) adapter;
+    it is the literal bytes `ModelMessagesTypeAdapter.dump_json()` produced
+    under the pinned pre-migration `pydantic-ai-slim==1.107.2` for two
+    messages equivalent to this module's other fixtures. Diffing it against
+    the v2 shape shows exactly what v2 added: a `state` key on
+    `ModelRequest` and a `cost` key inside `usage`, both optional with
+    defaults, so a v1 payload omitting them must still validate cleanly.
+    """
+    v1_shaped_json = (
+        b'[{"parts":[{"content":"Hello","timestamp":"2026-08-11T00:00:00Z",'
+        b'"part_kind":"user-prompt"}],"timestamp":null,"instructions":null,'
+        b'"kind":"request","run_id":null,"conversation_id":null,"metadata":null},'
+        b'{"parts":[{"content":"Hi there","id":null,"provider_name":null,'
+        b'"provider_details":null,"part_kind":"text"}],"usage":{"input_tokens":0,'
+        b'"cache_write_tokens":0,"cache_read_tokens":0,"output_tokens":0,'
+        b'"input_audio_tokens":0,"cache_audio_read_tokens":0,"output_audio_tokens":0,'
+        b'"details":{}},"model_name":null,"timestamp":"2026-08-11T00:00:01Z",'
+        b'"kind":"response","provider_name":null,"provider_url":null,'
+        b'"provider_details":null,"provider_response_id":null,"finish_reason":null,'
+        b'"run_id":null,"conversation_id":null,"metadata":null,"state":"complete"}]'
+    )
+    mock_redis.get.return_value = v1_shaped_json
+
+    result = await session_store.get_history("test-session")
+
+    assert len(result) == 2
+    assert isinstance(result[0], ModelRequest)
+    assert isinstance(result[1], ModelResponse)
+    assert result[0].parts[0].content == "Hello"
+    assert result[1].parts[0].content == "Hi there"
+
+
+@pytest.mark.asyncio
 async def test_get_history_returns_empty_list_on_invalid_json(session_store, mock_redis):
     """Verify graceful handling of corrupted JSON data.
 

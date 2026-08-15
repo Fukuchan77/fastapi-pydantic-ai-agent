@@ -23,8 +23,39 @@ import time
 from unittest.mock import Mock
 
 import pytest
+from fastapi import FastAPI
+from fastapi import Request
 
+from app.agents.chat_agent import build_model
 from app.deps.workflow import get_rag_workflow
+from tests.conftest import build_test_settings
+
+
+def _make_mock_request() -> Request:
+    """Build a real `Request` with `app.state.settings`/`llm_model` populated.
+
+    `get_rag_workflow` reads both from `app.state` (Req 3.3) - a bare
+    `Mock()` request would auto-vivify both as `Mock` objects instead of
+    raising the 503 this dependency now raises for a genuinely absent
+    singleton, and passing a `Mock` through as `llm_model` breaks
+    `pydantic_ai.models.infer_model()` downstream. `vector_store` stays a
+    plain `Mock()`: it is only ever used as a `WeakKeyDictionary` cache key
+    here, never called.
+    """
+    app = FastAPI()
+    app.state.vector_store = Mock()
+    settings = build_test_settings()
+    app.state.settings = settings
+    app.state.llm_model = build_model(settings)
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "headers": [],
+        "app": app,
+    }
+    return Request(scope=scope, receive=None)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -34,9 +65,7 @@ async def test_workflow_instances_should_be_reused_across_requests() -> None:
     Currently creates new workflow per request - test will FAIL.
     After fix: Should return the same workflow instance - test will PASS.
     """
-    # Create mock request with vector_store in app.state
-    mock_request = Mock()
-    mock_request.app.state.vector_store = Mock()
+    mock_request = _make_mock_request()
 
     # Call get_rag_workflow multiple times
     workflow1 = get_rag_workflow(mock_request)
@@ -63,8 +92,7 @@ async def test_llm_model_should_be_reused_across_workflows() -> None:
     Test will FAIL before fix, PASS after fix.
     """
     # Create mock request with vector_store
-    mock_request = Mock()
-    mock_request.app.state.vector_store = Mock()
+    mock_request = _make_mock_request()
 
     # Get workflow instances
     workflow1 = get_rag_workflow(mock_request)
@@ -86,8 +114,7 @@ async def test_agent_instances_should_be_reused_across_workflows() -> None:
     Test will FAIL before fix, PASS after fix.
     """
     # Create mock request with vector_store
-    mock_request = Mock()
-    mock_request.app.state.vector_store = Mock()
+    mock_request = _make_mock_request()
 
     # Get workflow instances
     workflow1 = get_rag_workflow(mock_request)
@@ -111,8 +138,7 @@ async def test_workflow_caching_performance_improvement() -> None:
     After caching, subsequent calls should be significantly faster.
     """
     # Create mock request with vector_store
-    mock_request = Mock()
-    mock_request.app.state.vector_store = Mock()
+    mock_request = _make_mock_request()
 
     # Measure time for first call (uncached)
     start_uncached = time.perf_counter()

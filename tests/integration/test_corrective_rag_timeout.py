@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.models.function import FunctionModel
 
@@ -57,12 +58,16 @@ async def test_evaluation_times_out_after_llm_agent_timeout(
     result = await workflow.run(query="test query", max_retries=1)
     elapsed = asyncio.get_event_loop().time() - start_time
 
-    # Verify timeout occurred (should complete in ~5 seconds, not 10 seconds)
-    assert elapsed < 7, f"Expected timeout at 5s, but took {elapsed:.1f}s"
+    # Verify timeout occurred. With max_retries=1, evaluation is exhausted after a
+    # single timed-out attempt, and since a hit exists the workflow now attempts a
+    # degraded synthesis (AC 3.6) against the same slow model, which also times out —
+    # two independent 5s timeouts, ~10s total, not 15+.
+    assert elapsed < 12, f"Expected ~10s (two 5s timeouts), but took {elapsed:.1f}s"
 
-    # Verify graceful fallback (evaluation timeout returns "insufficient")
+    # Verify graceful fallback: the degraded synthesis attempt also times out,
+    # so the answer is the synthesis-timeout fallback message.
     assert result["context_found"] is False
-    assert "couldn't find relevant information" in result["answer"].lower()
+    assert "encountered an error" in result["answer"].lower()
 
 
 @pytest.mark.asyncio
@@ -91,11 +96,14 @@ async def test_synthesis_times_out_after_llm_agent_timeout(
         nonlocal call_count
         call_count += 1
 
-        # First call is evaluation - return quickly
-        if call_count == 1:
-            return ModelResponse(parts=[TextPart(content="relevant")])
+        # The eval agent's structured tool call - answer it quickly.
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
 
-        # Second call is synthesis - take 10 seconds (exceeds timeout)
+        # Synthesis (plain text) - take 10 seconds (exceeds timeout)
         await asyncio.sleep(10)
         return ModelResponse(parts=[TextPart(content="This is the synthesized answer")])
 
@@ -143,7 +151,12 @@ async def test_timeout_is_configurable_via_settings(
         info: AgentInfo,
     ) -> ModelResponse:
         await asyncio.sleep(3)  # Takes 3 seconds (under timeout)
-        return ModelResponse(parts=[TextPart(content="relevant")])
+        if info.output_tools:
+            tool = info.output_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
+            )
+        return ModelResponse(parts=[TextPart(content="synthesized answer")])
 
     model = FunctionModel(moderate_speed_model)
 

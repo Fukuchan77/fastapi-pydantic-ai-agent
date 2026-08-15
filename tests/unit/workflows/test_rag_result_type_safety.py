@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
+from llama_index.core.workflow import Workflow
 from pydantic import SecretStr
 from pydantic_ai.models.test import TestModel
 
@@ -80,7 +81,7 @@ async def test_type_error_raised_for_non_dict_result_from_workflow():
     )
 
     # Mock the parent workflow's run() to return a non-dict value
-    with patch.object(workflow.__class__.__bases__[0], "run", new_callable=AsyncMock) as mock_run:
+    with patch.object(Workflow, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = "not a dict"  # Invalid return value
 
         # Before fix: dict("not a dict") creates dict from string chars
@@ -113,7 +114,7 @@ async def test_type_error_raised_for_none_result():
     )
 
     # Mock the parent workflow's run() to return None
-    with patch.object(workflow.__class__.__bases__[0], "run", new_callable=AsyncMock) as mock_run:
+    with patch.object(Workflow, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = None
 
         # Should raise TypeError for None value

@@ -4,6 +4,19 @@ Domain-specific exceptions for the Corrective RAG workflow, providing
 explicit error classification for better error handling and retry logic.
 """
 
+import httpx
+from pydantic_ai.exceptions import FallbackExceptionGroup
+from pydantic_ai.exceptions import ModelHTTPError
+
+
+# Frozen set of HTTP status codes classified as transient (retryable): request
+# timeout, conflict, rate limit, and upstream unavailability. Anything outside
+# this set defaults to permanent, matching the classifier's pre-existing
+# default of False. `pydantic-ai-litellm` wraps every provider error into
+# `ModelHTTPError`, so keying on `.status_code` is the one signal that survives
+# a dependency wording change (Req 7.1).
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({408, 409, 429, 500, 502, 503, 504})
+
 
 class RAGWorkflowError(Exception):
     """Base exception for all RAG workflow errors.
@@ -14,6 +27,7 @@ class RAGWorkflowError(Exception):
     Attributes:
         message: Human-readable error message
         is_transient: Whether this error is transient and can be retried
+        is_permanent: Whether this error is permanent and should not be retried
     """
 
     def __init__(self, message: str) -> None:
@@ -34,13 +48,26 @@ class RAGWorkflowError(Exception):
         """
         return False
 
+    @property
+    def is_permanent(self) -> bool:
+        """Whether this error is permanent and should not be retried.
+
+        Lifted onto the base class so every subclass answers this from
+        `is_transient` instead of raising `AttributeError` when unset.
+
+        Returns:
+            The logical negation of `is_transient`.
+        """
+        return not self.is_transient
+
     @staticmethod
     def is_error_transient(exception: Exception) -> bool:
         """Classify an exception as transient or permanent.
 
-        This static method examines an exception and determines if it represents
-        a transient error (timeout, rate limit, connection issue) that should be
-        retried, or a permanent error that should not be retried.
+        Classification rests on the exception's type or its structured
+        attributes (e.g. `ModelHTTPError.status_code`), never on message
+        substrings — a provider wording change can no longer silently flip
+        the retry decision (Req 7.1).
 
         Args:
             exception: The exception to classify
@@ -48,26 +75,28 @@ class RAGWorkflowError(Exception):
         Returns:
             True if the error is transient and should be retried, False otherwise
         """
-        # Check if it's already a RAGTransientError
+        # FallbackModel raises FallbackExceptionGroup even for a chain of one
+        # model, so unwrap before classifying. For a multi-model chain, the
+        # last entry is the final attempt's error — the one that actually
+        # ended the run.
+        if isinstance(exception, FallbackExceptionGroup):
+            if not exception.exceptions:
+                return False
+            return RAGWorkflowError.is_error_transient(exception.exceptions[-1])
+
+        # Narrow arms for the project's own transient/permanent errors.
         if isinstance(exception, RAGTransientError):
             return True
+        if isinstance(exception, RAGPermanentError):
+            return False
 
-        # Check exception type - these are inherently transient
-        if isinstance(exception, (TimeoutError, ConnectionError)):
-            return True
+        # Primary signal: the status code litellm-wrapped provider errors
+        # arrive as.
+        if isinstance(exception, ModelHTTPError):
+            return exception.status_code in _TRANSIENT_STATUS_CODES
 
-        # Check error message for transient indicators
-        error_msg = str(exception).lower()
-        transient_indicators = [
-            "timeout",
-            "429",
-            "rate limit",
-            "503",
-            "connection",
-            "temporary",
-            "unavailable",
-        ]
-        return any(indicator in error_msg for indicator in transient_indicators)
+        # Defence-in-depth for timeout/network errors that leak unwrapped.
+        return isinstance(exception, (httpx.TimeoutException, httpx.NetworkError))
 
 
 class RAGRetrievalError(RAGWorkflowError):
@@ -152,7 +181,8 @@ class RAGTransientError(RAGWorkflowError):
         message: Human-readable error message
         cause: The underlying exception that caused this error
         is_transient: Always True for this error type
-        is_permanent: Always False for this error type
+        is_permanent: Always False for this error type (via the base class's
+            `not is_transient`)
     """
 
     def __init__(self, message: str, cause: Exception | None = None) -> None:
@@ -173,15 +203,6 @@ class RAGTransientError(RAGWorkflowError):
             True - this error type is always transient
         """
         return True
-
-    @property
-    def is_permanent(self) -> bool:
-        """Transient errors are not permanent.
-
-        Returns:
-            False - this error type is never permanent
-        """
-        return False
 
     @classmethod
     def from_exception(cls, exception: Exception) -> "RAGTransientError":
@@ -207,7 +228,8 @@ class RAGPermanentError(RAGWorkflowError):
         message: Human-readable error message
         cause: The underlying exception that caused this error
         is_transient: Always False for this error type
-        is_permanent: Always True for this error type
+        is_permanent: Always True for this error type (via the base class's
+            `not is_transient`)
     """
 
     def __init__(self, message: str, cause: Exception | None = None) -> None:
@@ -229,15 +251,6 @@ class RAGPermanentError(RAGWorkflowError):
         """
         return False
 
-    @property
-    def is_permanent(self) -> bool:
-        """Permanent errors are not transient.
-
-        Returns:
-            True - this error type is always permanent
-        """
-        return True
-
     @classmethod
     def from_exception(cls, exception: Exception) -> "RAGPermanentError":
         """Create a RAGPermanentError from an existing exception.
@@ -250,3 +263,43 @@ class RAGPermanentError(RAGWorkflowError):
         """
         message = f"Permanent error: {exception!s}"
         return cls(message, cause=exception)
+
+
+class EmptyCitationError(RAGWorkflowError):
+    """Raised when a generated answer has no citations but citations are required.
+
+    Attributes:
+        message: Human-readable error message.
+    """
+
+    def __init__(self) -> None:
+        """Initialize empty citation error."""
+        super().__init__(
+            "Generated answer contains no citations, but citations are required "
+            "for a fully grounded response."
+        )
+
+
+class DanglingCitationError(RAGWorkflowError):
+    """Raised when a generated answer cites an id absent from the current hit set.
+
+    Attributes:
+        message: Human-readable error message.
+        unknown_ids: Cited ids that do not belong to the current run's retrieved hits.
+        known_ids: The full set of hit ids actually retrieved in the current run.
+    """
+
+    def __init__(self, unknown_ids: set[str], known_ids: set[str]) -> None:
+        """Initialize dangling citation error.
+
+        Args:
+            unknown_ids: Cited ids absent from the current run's retrieved hit set.
+            known_ids: The full set of hit ids actually retrieved in the current run.
+        """
+        self.unknown_ids = frozenset(unknown_ids)
+        self.known_ids = frozenset(known_ids)
+        message = (
+            f"Generated answer cites unknown id(s): {sorted(self.unknown_ids)}; "
+            f"known ids for this run: {sorted(self.known_ids)}"
+        )
+        super().__init__(message)

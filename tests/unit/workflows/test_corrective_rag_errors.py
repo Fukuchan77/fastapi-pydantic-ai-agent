@@ -4,7 +4,9 @@ Fix RAG Workflow error classification at app/workflows/corrective_rag.py:337
 by introducing an explicit error hierarchy for better error handling.
 """
 
+import httpx
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 
 from app.workflows.exceptions import RAGEvaluationError
 from app.workflows.exceptions import RAGPermanentError
@@ -128,18 +130,26 @@ class TestRAGErrorFactoryMethods:
         assert error.cause is auth_error
 
     def test_classify_error_as_transient_or_permanent(self):
-        """Should classify unknown exceptions as transient or permanent."""
-        # Timeout should be transient
-        timeout = TimeoutError("timeout")
+        """Should classify exceptions by structured signal, not builtin type (Req 7.1)."""
+        # A leaked httpx.TimeoutException is transient defence-in-depth.
+        timeout = httpx.TimeoutException("timeout")
         assert RAGWorkflowError.is_error_transient(timeout) is True
 
         # Generic exception should be permanent (safer default)
         generic = Exception("unknown error")
         assert RAGWorkflowError.is_error_transient(generic) is False
 
-        # Connection errors should be transient
-        connection = ConnectionError("connection failed")
+        # A leaked httpx.NetworkError is transient defence-in-depth.
+        connection = httpx.ConnectError("connection failed")
         assert RAGWorkflowError.is_error_transient(connection) is True
+
+        # `ModelHTTPError.status_code` is the primary signal for provider errors.
+        rate_limited = ModelHTTPError(status_code=429, model_name="m")
+        assert RAGWorkflowError.is_error_transient(rate_limited) is True
+
+        # Builtin TimeoutError/ConnectionError carry no structured signal.
+        assert RAGWorkflowError.is_error_transient(TimeoutError("timeout")) is False
+        assert RAGWorkflowError.is_error_transient(ConnectionError("connection failed")) is False
 
 
 class TestRAGErrorIntegration:
