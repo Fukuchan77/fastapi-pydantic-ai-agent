@@ -29,6 +29,14 @@ jobs:
   ci:
     name: Lint, Test, Audit
     runs-on: ubuntu-latest
+    # Without this the job inherits the GitHub Actions default of 360 minutes.
+    # Run 31862477318 hung on a single unbounded `asyncio.Event.wait()` in the
+    # test suite and burned 5h59m before that limit killed it - and because the
+    # kill arrives as a cancellation, pytest never printed its failure summary,
+    # so the tracebacks for the tests that had already failed were lost too.
+    # The full step takes ~4 minutes here (about half of it the Docker image
+    # build), so 30 leaves ample headroom while capping a hang at minutes.
+    timeout-minutes: 30
     services:
       redis:
         image: redis:7-alpine

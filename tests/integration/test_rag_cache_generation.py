@@ -11,6 +11,7 @@ convention in `test_rag_workflow.py` and `test_corrective_rag_timeout.py`.
 """
 
 import asyncio
+import contextlib
 
 import pytest
 from pydantic_ai.messages import ModelResponse
@@ -23,6 +24,19 @@ from app.security.principal import derive_principal_id
 from app.stores.vector_store import InMemoryVectorStore
 from app.workflows.corrective_rag import CorrectiveRAGWorkflow
 from tests.conftest import build_test_settings
+
+
+# Upper bound for every inter-task handshake in this module.
+#
+# These waits used to be unbounded. `eval_started` is set only when the eval
+# agent is invoked with output tools, so anything that stops the workflow from
+# reaching its structured-output call - a bug, or an earlier failure in the
+# same module - leaves the event unset and `wait()` blocks forever. That is not
+# hypothetical: PR CI run 31862477318 hung here for 5h59m and was killed by the
+# GitHub Actions 6-hour job limit, which meant pytest never printed its failure
+# summary and the tracebacks for the eight tests that had already failed were
+# lost with it. A test must fail when the thing it waits for does not happen.
+_EVENT_WAIT_TIMEOUT = 30.0
 
 
 @pytest.mark.asyncio
@@ -122,7 +136,8 @@ async def test_pending_query_survives_generation_bump_during_ingest() -> None:
         call_count += 1
         if info.output_tools:
             eval_started.set()
-            await release_eval.wait()
+            async with asyncio.timeout(_EVENT_WAIT_TIMEOUT):
+                await release_eval.wait()
             tool = info.output_tools[0]
             return ModelResponse(
                 parts=[ToolCallPart(tool.name, {"sufficient": True, "rationale": "relevant"})]
@@ -138,7 +153,17 @@ async def test_pending_query_survives_generation_bump_during_ingest() -> None:
     cache_key_before_ingest = workflow._generate_cache_key("cats", 1)
 
     query_task = asyncio.create_task(workflow.run(query="cats", max_retries=1))
-    await eval_started.wait()
+    try:
+        async with asyncio.timeout(_EVENT_WAIT_TIMEOUT):
+            await eval_started.wait()
+    except TimeoutError:  # pragma: no cover - only on a regression
+        # Surface why the eval call never happened instead of reporting a bare
+        # timeout: if the workflow already failed, its exception is the real
+        # diagnosis and awaiting the task re-raises it here.
+        query_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await query_task
+        raise
 
     # The leader has registered its pending future under the pre-ingest key.
     assert cache_key_before_ingest in workflow._pending_futures

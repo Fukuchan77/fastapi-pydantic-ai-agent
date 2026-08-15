@@ -95,6 +95,26 @@ def test_main_push_runs_are_not_cancelled_by_a_later_merge() -> None:
     )
 
 
+def test_every_workflow_job_declares_a_timeout() -> None:
+    """Every job bounds its own runtime instead of inheriting the 360-minute default.
+
+    Run 31862477318 hung on a single unbounded wait in the test suite and ran
+    5h59m before the default limit killed it. The kill arrives as a
+    cancellation, so pytest never printed its failure summary and the
+    tracebacks of the tests that had already failed were lost - a hang cost
+    both the CI time and the diagnosis.
+    """
+    for path in (PR_WORKFLOW, SECURITY_WORKFLOW):
+        workflow = _load_workflow(path)
+        for job_name, job in workflow["jobs"].items():
+            timeout = job.get("timeout-minutes")
+            assert timeout is not None, f"{path}: job {job_name!r} declares no timeout-minutes"
+            assert 0 < timeout < 360, (
+                f"{path}: job {job_name!r} timeout-minutes={timeout} is not below the "
+                f"360-minute default it exists to replace"
+            )
+
+
 def test_pr_workflow_actions_are_pinned_to_commit_sha() -> None:
     """AC 1.9: third-party actions are pinned to a full commit SHA, not a tag."""
     workflow = _load_workflow(PR_WORKFLOW)

@@ -16,6 +16,9 @@ jobs:
   scan:
     name: pip-audit + gitleaks
     runs-on: ubuntu-latest
+    # Bounded for the same reason as pr.yml: the 360-minute default is far
+    # longer than any legitimate run of these two scanners.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
