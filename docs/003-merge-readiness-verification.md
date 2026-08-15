@@ -443,7 +443,15 @@ binding on one proves nothing about the other.
 
 | Check | Result |
 |---|---|
-| `ruff format` / `ruff check app/ evals/ tests/` | clean |
+| `ruff format --check` / `ruff check app/ evals/ tests/` | clean (295 files already formatted) |
 | `ty check app/ evals/` | All checks passed |
-| `pytest tests/unit tests/integration tests/e2e` | see the PR comment for the final count |
-| XFF proof-of-concept | 1 bucket (was 3) |
+| `pytest tests/unit tests/integration tests/e2e` | **1519 passed, 23 skipped** (1490 before; +29 new) |
+| Coverage (80% gate) | **96.27%** (96.19% before) |
+| XFF proof-of-concept | **1 bucket** (was 3) |
+
+Per-module coverage of everything touched: `app/api/health.py` 100%,
+`app/agents/deps.py` 100%, `app/deps/settings.py` 100%,
+`app/middleware/rate_limit.py` 99%.
+
+Not runnable here and left to PR CI, unchanged from the earlier review: the Redis
+live lane, the Docker deployment tests, the Ollama-gated local lane, and evals.
