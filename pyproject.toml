@@ -43,7 +43,7 @@ dependencies = [
     # closed by TrustedHostMiddleware in main.py, and the rest are unreachable here
     # (no request.form(), no HTTPEndpoint, no StaticFiles).
     "starlette>=0.52.1,<1.0",
-    "uvicorn[standard]>=0.52.1,<1.0",
+    "uvicorn[standard]>=0.52.2,<1.0",
 ]
 
 [dependency-groups]
