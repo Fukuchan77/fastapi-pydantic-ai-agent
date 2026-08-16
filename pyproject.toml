@@ -42,7 +42,7 @@ dependencies = [
     # instead: the reachable one (Host header reflected into redirect Location) is
     # closed by TrustedHostMiddleware in main.py, and the rest are unreachable here
     # (no request.form(), no HTTPEndpoint, no StaticFiles).
-    "starlette>=0.52.1,<1.0",
+    "starlette>=1.3.1,<2.0",
     "uvicorn[standard]>=0.52.1,<1.0",
 ]
 
