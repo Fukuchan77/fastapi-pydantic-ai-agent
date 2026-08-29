@@ -12,10 +12,12 @@
 # All 365 are the same two false-positive shapes, confirmed by inspecting
 # every distinct matched value (24 total) in the JSON report:
 #   - 361 `generic-api-key` matches, entirely inside tests/** (53 files):
-#     dummy fixtures like monkeypatch.setenv("API_KEY", "test-api-key-12345")
-#     used to exercise Settings validation, auth, and rate-limiting code.
+#     dummy API_KEY / X-API-Key fixture values (test-, sk-test-, gsk-test-,
+#     your-...-here style placeholders) used to exercise Settings
+#     validation, auth, and rate-limiting code.
 #   - 4 `curl-auth-header` matches in README.md's example curl commands
-#     (`-H "X-API-Key: <placeholder>"`), documentation, not credentials.
+#     (a placeholder value after the X-API-Key header), documentation, not
+#     credentials.
 # None resemble a real credential (all "test-"/"sk-test-"/"your-...-here"-
 # style placeholders with low entropy). No entry here covers app/ code.
 #
