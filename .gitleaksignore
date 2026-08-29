@@ -24,7 +24,16 @@
 # This file only silences fingerprints already listed below. A new secret
 # anywhere -- including a real one accidentally added to tests/ or
 # README.md -- gets a fingerprint not in this list and still fails the scan.
+#
+# One entry below (836d808...:.gitleaksignore:generic-api-key:15) is not
+# one of the original 365: it's this file's own first version, whose
+# header illustrated the false-positive shape with a literal matching
+# example and so matched its own rule. That commit is already merged into
+# main and can't be rewritten; the header was reworded in a later commit
+# to stop reproducing this, but the historical line is permanent, exactly
+# like the 365 below.
 
+836d808c3d3fee0fdbf954ada15b1c461dddd9cc:.gitleaksignore:generic-api-key:15
 831c83a7751da667c31d249236c0a560f572395c:README.md:curl-auth-header:112
 831c83a7751da667c31d249236c0a560f572395c:README.md:curl-auth-header:143
 831c83a7751da667c31d249236c0a560f572395c:README.md:curl-auth-header:166
