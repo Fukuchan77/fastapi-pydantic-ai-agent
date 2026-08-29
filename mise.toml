@@ -56,7 +56,9 @@ run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --co
 
 [tasks.audit]
 description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
-# Ignored IDs are all on `starlette`, held below 1.0 (pyproject.toml) because
+# Ignored IDs fall into two groups.
+#
+# Group 1 - all on `starlette`, held below 1.0 (pyproject.toml) because
 # `slowapi` 0.1.10 is incompatible with starlette 1.x (see tasks.md Task 20.3).
 # Assessed in .sdd/specs/001-agent-architecture-enhancements/tasks.md Task 20.3:
 #   PYSEC-2026-161 - reachable (Host header into redirect Location), but
@@ -70,7 +72,36 @@ description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
 #     path issue besides.
 # Re-run `uv run pip-audit` (without --ignore-vuln) after any starlette bump
 # to confirm these still apply before renewing the ignore list.
-run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281"
+#
+# Group 2 - all on `chromadb` 0.6.3 (held below 1.0, pyproject.toml, as a
+# shelved major pending a client-compatibility pass - see
+# docs/dependency-runbook.md). Unlike the starlette group, these have no fix
+# release to upgrade into: PyPI/OSV list `fixed_in: []` for all three, and the
+# affected range ("0.4.17 or later" / "0.5.0 or later") covers even the
+# latest chromadb (1.5.9 as of this writing) - so lifting the `<1.0` cap would
+# not close them either.
+#   CVE-2026-45830 (GHSA-2wm9-hf6c-p5cr) - a lack of authorization validation
+#     lets any authenticated user read/write/update/delete another tenant's
+#     collection.
+#   CVE-2026-45831 (GHSA-xph7-9rjv-w5fr) - `SimpleRBACAuthorizationProvider`
+#     checks whether a permission is held but never which tenant/database/
+#     collection it applies to.
+#   CVE-2026-45833 (GHSA-36p7-vc44-83pf) - an authenticated attacker with
+#     UPDATE_COLLECTION can achieve remote code execution via a malicious
+#     model repo plus `trust_remote_code=true` on the collections API.
+# All three require ChromaDB's server (multi-tenant HTTP API, RBAC,
+# `trust_remote_code`). This codebase never runs a Chroma server: `app/stores/
+# vector_store/chroma.py` only ever constructs `chromadb.PersistentClient` or
+# `chromadb.Client()` (the embedded, in-process client) - no `HttpClient`, no
+# tenants, no RBAC config. Unreachable today.
+# These are NOT dormant like the starlette entries above: the moment
+# `ChromaVectorStore` (or any new code) switches to `chromadb.HttpClient` or
+# this app starts talking to a standalone Chroma server process - see the
+# example in docs/production_deployment.md - all three become reachable and
+# this ignore list must be revisited before that ships. Re-run `uv run
+# pip-audit` (without --ignore-vuln) after any chromadb bump to check whether
+# upstream has since shipped a fix.
+run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833"
 
 [tasks."hooks:install"]
 description = "Install the pre-commit git hook (gitleaks/pip-audit/model-id/tool-conventions guards, Req 12.4)"

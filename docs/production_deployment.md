@@ -490,6 +490,18 @@ class ChromaVectorStore:
 app.state.vector_store = ChromaVectorStore("fastapi-pydantic-ai-agent")
 ```
 
+**Security note:** switching to `chromadb.HttpClient` (a standalone Chroma
+server) makes CVE-2026-45830, CVE-2026-45831, and CVE-2026-45833 reachable —
+cross-tenant collection read/write, an RBAC provider that never checks which
+tenant/database/collection a permission applies to, and remote code execution
+via a malicious model repo on the collections API. `mise.toml`'s `audit` task
+ignores these three IDs today only because `app/stores/vector_store/chroma.py`
+never uses `HttpClient` (embedded client only, no tenants, no RBAC). Deploying
+a Chroma server as shown above requires revisiting that ignore list — none of
+the three has a fixed release to upgrade into, so the mitigation has to be
+network/access-control at the Chroma server itself (it exposes no built-in
+authorization by default), not a version bump.
+
 ---
 
 ## Monitoring and Observability
