@@ -45,7 +45,7 @@ dependencies = [
     "pydantic-ai-slim[logfire]>=2.35.3,<3.0",
     "pydantic-settings>=2.13.1,<3.0",
     "redis>=5.0.0,<6.0",
-    "sentence-transformers>=5.2.0,<6.0",
+    "sentence-transformers>=5.2.0,<7.0",
     "slowapi>=0.1.9,<1.0",
     # Pinned below 1.0 because slowapi 0.1.10 is not compatible with starlette 1.x:
     # exception-handler dispatch misroutes (a ValidationError reaches slowapi's
