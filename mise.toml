@@ -56,7 +56,7 @@ run = "uv run pytest tests/unit/ tests/integration/ tests/e2e/ -v --cov=app --co
 
 [tasks.audit]
 description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
-# Ignored IDs fall into two groups.
+# Ignored IDs fall into three groups.
 #
 # Group 1 - all on `starlette`, held below 1.0 (pyproject.toml) because
 # `slowapi` 0.1.10 is incompatible with starlette 1.x (see tasks.md Task 20.3).
@@ -101,7 +101,29 @@ description = "Run pip-audit to fail on non-ignored dependency vulnerabilities"
 # this ignore list must be revisited before that ships. Re-run `uv run
 # pip-audit` (without --ignore-vuln) after any chromadb bump to check whether
 # upstream has since shipped a fix.
-run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833"
+#
+# Group 3 - `nltk` 3.10.3, a transitive of `llama-index-core` (nothing in
+# `app/`, `evals/`, or `tests/` imports nltk directly). First seen in the
+# 2026-09-05 dependency refresh.
+#   PYSEC-2026-3740 (GHSA-8mgp-746c-j5xp / CVE-2026-81726) - model-artifact
+#     import/export helpers call built-in `open()` on caller-controlled paths
+#     instead of the pathsec-aware helpers, so they read and write outside the
+#     allowed roots when NLTK path-security enforcement is on.
+# Like Group 2 this has no fix release: `fixed_in: []`, and 3.10.3 is the
+# latest nltk on PyPI as of this writing, so no bump closes it. Unreachable
+# here on two independent counts: (1) the advisory's own preconditions require
+# the application to enable `pathsec.ENFORCE` AND let untrusted input choose a
+# model import/export path - this codebase does neither; (2) none of the
+# affected components (`TransitionParser`, `AveragedPerceptron`,
+# `PerceptronTagger.save_to_json`, `save_maxent_params`) is reachable - the
+# only llama-index-core module that touches nltk is
+# `indices/keyword_table/utils.py` (stopword lookup), and this codebase never
+# builds a keyword-table index; the RAG path is `app/workflows/corrective_rag.py`
+# over the `VectorStore` protocol. Re-run `uv run pip-audit` (without
+# --ignore-vuln) after any llama-index-core bump to check for an nltk fix
+# release, and revisit this entry if any code starts calling nltk's model
+# serialization APIs.
+run = "uv run pip-audit --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-2280 --ignore-vuln PYSEC-2026-2281 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-3740"
 
 [tasks."hooks:install"]
 description = "Install the pre-commit git hook (gitleaks/pip-audit/model-id/tool-conventions guards, Req 12.4)"
