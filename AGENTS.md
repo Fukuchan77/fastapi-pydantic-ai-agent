@@ -155,6 +155,13 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 - **All eight of `004`'s change units (tasks 1–8) have shipped**; the only unchecked subtasks are 6.6–6.8, conditional gate-*failure* branches that never fired. No spec is in flight — new work opens a new one. `CLAUDE.md` and `AGENTS.md` are still edited **as a pair in one change unit** (`004` Req 8.2).
 - `pydantic-ai-slim` moved to the 2.x line (`>=2.27.0,<3.0` in `pyproject.toml`) in `004`'s task 7, unblocked by task 6's recorded gate PASS; `pydantic-ai-litellm` bumped alongside it to `>=0.2.3,<0.3.0`.
 
+## Cross-repo review
+
+`docs/cross-repo-adoption-backlog.md` lists what this repo exports to, and imports from, the four
+sibling Agentic AI repositories (`beeai-agentic-ai-sandbox`, `pydantic-ai-sandbox`, `vaz-ai-next`,
+`vaz-agentic-ai-next`). The full 5-repo matrix and the item bodies (X-1 … X-16) are in
+`vaz-agentic-ai-next/docs/cross-repo-adoption-review.md` — cite item IDs, do not restate them here.
+
 ## Adding a New Real Agent Tool
 
 Adding a non-mock `@agent.tool` under `app/agents/` triggers the `real-tool-conventions-guard` pre-commit hook. Read `docs/tool-design-conventions.md` before committing.
