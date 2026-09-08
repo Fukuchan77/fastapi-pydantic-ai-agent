@@ -10,6 +10,14 @@ before it is registered on the chat agent (Requirement 15). It exists now, ahead
 any real tool, so the conventions are settled and reviewable before the first real
 tool's design, rather than retrofitted after the fact.
 
+[`app/agents/examples/tool_design_reference.py`](../app/agents/examples/tool_design_reference.py)
+applies all four conventions together in one small, working, lint/type-checked,
+test-covered `directory_search`/`directory_get` pair — a template to copy from
+rather than four isolated snippets to reassemble. It is deliberately **not**
+decorated with `@agent.tool` and is never registered on `chat_agent`; wiring it in
+would itself be "the first real tool" and should go through the review this
+document (and `real-tool-conventions-guard`, below) exists to force.
+
 ## Table of Contents
 
 - [1. Naming: `<resource>_<verb>`](#1-naming-resource_verb)
@@ -133,9 +141,11 @@ A pre-commit hook, `real-tool-conventions-guard`
 nothing for it to flag), and it activates automatically the moment a real
 `@agent.tool`-decorated function is added anywhere under `app/agents/` outside
 `app/agents/tools_mock.py`. When it fires, it blocks the commit until a human
-reviews the new tool against the four conventions above and — if compliant —
-extends the hook (or adds an equivalent runtime test) to encode the real check
-mechanically, rather than silently letting the first real tool skip review.
+reviews the new tool against the four conventions above — using
+`app/agents/examples/tool_design_reference.py` as the starting shape — and — if
+compliant — extends the hook (or adds an equivalent runtime test) to encode the
+real check mechanically, rather than silently letting the first real tool skip
+review.
 
 This is deliberately a *reminder-and-block* stub, not a conventions checker: statically
 verifying "is this function's argument parsing lenient?" or "does this list-returning

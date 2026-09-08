@@ -56,6 +56,32 @@ def test_block_network_allows_af_unix_connect() -> None:
         sock.close()
 
 
+def test_block_network_blocks_af_inet_connect_ex() -> None:
+    """The non-raising `connect_ex` variant is loud-failed too, not silently allowed.
+
+    `connect_ex` is a distinct C-level entry point from `connect` (it returns
+    an errno instead of raising), so guarding `connect` alone leaves it as an
+    unguarded escape hatch for real outbound I/O.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(NetworkBlockedError):
+            sock.connect_ex(("93.184.216.34", 80))
+    finally:
+        sock.close()
+
+
+def test_block_network_blocks_getaddrinfo() -> None:
+    """A real DNS lookup with no subsequent `connect` is loud-failed too.
+
+    `getaddrinfo` itself performs a network round-trip against a resolver, so
+    guarding only `connect`/`connect_ex` leaves DNS resolution as a hole in
+    this guard.
+    """
+    with pytest.raises(NetworkBlockedError):
+        socket.getaddrinfo("example.com", 80)
+
+
 def test_ipv6_probe_reports_unavailable_when_socket_construction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -134,6 +134,8 @@ A third `--ignore-vuln` entry covers `PYSEC-2026-3740` (GHSA-8mgp-746c-j5xp / CV
 
 A separate `--ignore-vuln` group covers 3 CVEs on `chromadb` 0.6.3, held below 1.0 as a shelved major. None has a fix release (`fixed_in: []`, and the affected range covers even the latest 1.5.9), so upgrading chromadb would not close them — all three need ChromaDB's server (multi-tenant HTTP API/RBAC/`trust_remote_code`), and this codebase only ever uses the embedded client (`app/stores/vector_store/chroma.py`), so they're unreachable today. They become reachable the moment anything switches to `chromadb.HttpClient` — see the note beside that example in `docs/production_deployment.md`.
 
+**Suppression-policy tier (X-12, `docs/cross-repo-adoption-backlog.md`)**: across the sibling Agentic AI repos there's a 3-tier spectrum — no `--ignore-vuln` at all (`beeai-agentic-ai-sandbox`, unreachable advisories just aren't in a scanned extra), reasoned suppression with a mandatory dated deadline + tracking issue (`pydantic-ai-sandbox`'s Runbook R8.1/8.2), and reasoned suppression with no deadline (this repo, all three groups above). This repo is deliberately on tier 3 — its advisories are all reachable from the default scan (no extra to skip, so tier 1 doesn't fit) and it has no per-repo issue tracker to link a deadline against — but tier 2's dated review deadline is a real gap: nothing today forces an entry to be revisited except an incidental dependency bump. Not yet implemented; see CLAUDE.md for the fuller writeup.
+
 `pydantic-ai-litellm` is pinned `>=0.2.3,<0.3.0` in `pyproject.toml` — capped below its next **minor**, not its next major: it's a 0.x package depending on six private pydantic-ai APIs, so its minors are its breaking releases and `<1.0` would admit 0.3.x–0.9.x unreviewed. Mirrors how `fastapi` is handled for 0.x versioning; `tests/unit/test_pydantic_ai_api_lock.py` is what catches such a breakage, not the pin.
 
 A private-API coupling, not a version bound: the rate-limit-exceeded handler (`app/middleware/rate_limit.py`) delegates 429 header construction (`X-RateLimit-*`, delay-seconds `Retry-After`) to slowapi's `Limiter._inject_headers` — a leading-underscore method with no compatibility guarantee. A slowapi upgrade needs re-verification against `tests/unit/test_middleware_rate_limit_global_envelope.py` AND `tests/unit/middleware/test_rate_limit_retry_after.py`.
@@ -161,6 +163,14 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 sibling Agentic AI repositories (`beeai-agentic-ai-sandbox`, `pydantic-ai-sandbox`, `vaz-ai-next`,
 `vaz-agentic-ai-next`). The full 5-repo matrix and the item bodies (X-1 … X-16) are in
 `vaz-agentic-ai-next/docs/cross-repo-adoption-review.md` — cite item IDs, do not restate them here.
+
+**Multi-agent adoption gate (X-16)**: this codebase is single-agent today (`chat_agent` + the
+`corrective_rag` *workflow* — a fixed search/evaluate/synthesize path, not multiple cooperating
+agents). Before adopting an actual multi-agent construction, read `beeai-agentic-ai-sandbox`'s
+`effective_agents/README.md` (workflow-vs-agent decision framework, the 6 patterns, and the
+~15x-token cost warning for multi-agent constructions) and `pydantic-ai-sandbox`'s
+`patterns/deep-research/COMPARISON.md` (per-framework adopt/wrap guidance). Gating material for a
+future decision, not a to-do.
 
 ## Adding a New Real Agent Tool
 
