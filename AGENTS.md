@@ -17,6 +17,7 @@ mise run test:benchmark      # latency/throughput/cache-hit benchmarks (-s)
 mise run test:local          # requires a running Ollama instance (-m ollama)
 mise run test:redis          # requires a reachable Redis server (-m redis)
 mise run evals               # offline LLM-judge golden set; makes REAL LLM calls (pre-push only)
+mise run evals:pr-gate       # diff two EvalReport JSON files for regressions; offline, no LLM calls, not wired into CI
 mise run lint                # ruff check + ty check (type checker is `ty`, NOT mypy)
 mise run format              # ruff format
 mise run audit               # pip-audit dependency vulnerability scan
@@ -175,6 +176,13 @@ agents). Before adopting an actual multi-agent construction, read `beeai-agentic
 ~15x-token cost warning for multi-agent constructions) and `pydantic-ai-sandbox`'s
 `patterns/deep-research/COMPARISON.md` (per-framework adopt/wrap guidance). Gating material for a
 future decision, not a to-do.
+
+**Evals PR gate (X-8)**: `evals/pr_gate.py` (`mise run evals:pr-gate`) diffs two `EvalReport` JSON
+snapshots — pass/fail flips (`trigger_balance`, regressions vs. improvements kept separate), a
+pass-rate delta, per-case token/duration averages. (a) the `Judge[T]` DI seam it needed already
+existed in `evals/graders.py` before this work — nothing to build there. (b) is offline-metrics
+only: `_MIN_CASES_FOR_BLOCKING = 20` and the shipped golden set has 3 cases, so `report_only=True`
+is the honest state today; **no CI job wires this in** and it makes no LLM calls itself.
 
 ## Adding a New Real Agent Tool
 
