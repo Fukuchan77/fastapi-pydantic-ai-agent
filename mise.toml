@@ -133,6 +133,10 @@ run = "uv run pre-commit install"
 description = "Run the offline evals suite against the golden dataset (Req 6.5); pre-push only, never on GitHub Actions"
 run = "uv run python -m evals.runner"
 
+[tasks."evals:pr-gate"]
+description = "Compare two evals runs' EvalReport JSON files for regressions (X-8); offline, no LLM calls, not wired into CI"
+run = "uv run python -m evals.pr_gate"
+
 [tasks.lint]
 description = "Run ruff linter and ty type checker"
 run = ["uv run ruff check app/ evals/ tests/", "uv run ty check app/ evals/"]
