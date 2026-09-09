@@ -29,6 +29,19 @@ updates:
       # chromadb and redis majors are deliberately shelved pending a
       # client-compatibility verification pass, not unsupported. See
       # docs/dependency-runbook.md.
+      #
+      # chromadb is still shelved at 0.6.3: its three open advisories have no
+      # fix release (`fixed_in: []` on all three) and the affected range covers
+      # even the latest 1.5.9, so the major buys nothing security-wise, and the
+      # pass has not been run.
+      #
+      # redis has had its pass: 2026-09-05, client bumped 5.3.1 -> 8.1.0 in
+      # pyproject.toml after the live `-m redis` lane (EXPECT_LIVE_TESTS=7) and
+      # the full unit+integration+e2e suite both came back green. This entry
+      # stays because its meaning is forward-looking -- it now shelves redis 9.x
+      # until that major gets its own pass, exactly as it shelved 6.x-8.x until
+      # this one. `pyproject.toml`'s `redis<9.0` cap is the hard stop; this entry
+      # keeps Dependabot from proposing the bump that would need it lifted.
       - dependency-name: "chromadb"
         update-types: ["version-update:semver-major"]
       - dependency-name: "redis"

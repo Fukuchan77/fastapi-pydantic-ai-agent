@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "chromadb>=0.5.0,<1.0",
+    "chromadb>=0.6.3,<1.0",
     # Capped below 0.137 (bisected: 0.136.3 flattens, 0.137.2 does not) because
     # 0.137 wraps included routers in `_IncludedRouter` instead of flattening them
     # into `app.routes`. slowapi's `_find_route_handler` scans `app.routes`
@@ -13,16 +13,16 @@ dependencies = [
     # then treats every request as exempt - silently disabling the global rate
     # limit rather than failing loudly. Revisit when slowapi resolves routes
     # recursively; `tests/e2e/test_rate_limiting_enforcement.py` is the canary.
-    "fastapi>=0.135.1,<0.137",
+    "fastapi>=0.136.3,<0.137",
     "httpx>=0.28.1,<1.0",
     "llama-index-core>=0.14.24,<1.0",
     "llama-index-workflows>=2.23.3,<3.0",
-    "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0,<1.0",
     # Capped below its next minor, not its next major: this is a 0.x package
     # reaching into six private pydantic-ai APIs, so its minors are its
     # breaking releases. A `<1.0` bound would admit 0.3.x-0.9.x unreviewed --
     # the same 0.x classification trap the fastapi bound above closes.
-    "pydantic-ai-litellm>=0.2.3,<0.3.0",
+    "pydantic-ai-litellm>=0.2.8,<0.3.0",
     # Bumped to the 2.x line only after the adapter-compatibility gate
     # (docs/adapter-probe-report-2026-08-13-run1.md) recorded a PASS across
     # all six stages. Capped below 3.0 so a future major can't reintroduce
@@ -42,11 +42,22 @@ dependencies = [
     # by `tests/unit/agents/test_build_model_public_api.py`, which imports
     # `OpenAIResponsesModel` directly). Re-add the extra only once litellm's
     # own openai floor reaches 3.0.
-    "pydantic-ai-slim[logfire]>=2.35.3,<3.0",
-    "pydantic-settings>=2.13.1,<3.0",
-    "redis>=5.0.0,<6.0",
-    "sentence-transformers>=5.2.0,<6.0",
-    "slowapi>=0.1.9,<1.0",
+    "pydantic-ai-slim[logfire]>=2.40.0,<3.0",
+    "pydantic-settings>=2.15.0,<3.0",
+    # Bumped 5.3.1 -> 8.1.0 on 2026-09-05, retiring the "shelved major" status
+    # that `.github/dependabot.yml` and docs/dependency-runbook.md recorded for
+    # this package. The client-compatibility pass that shelving was waiting on
+    # was actually run: against a live server, `EXPECT_LIVE_TESTS=7 uv run pytest
+    # -m redis` passed all 7 cases (RedisSessionStore save/load/trim/TTL plus the
+    # v1-wire-format serializer pin), and the full unit+integration+e2e suite came
+    # back 1526 passed / 16 skipped at 96% coverage. Both consumers were exercised:
+    # `RedisSessionStore` directly, and slowapi's `limits` storage indirectly (the
+    # `redis` extra of `limits` is what the rate limiter uses when `redis_url` is
+    # set). Capped below the next major, which is shelved in turn until its own
+    # pass -- see the redis entry in `.github/dependabot.yml`.
+    "redis>=8.1.0,<9.0",
+    "sentence-transformers>=5.7.0,<6.0",
+    "slowapi>=0.1.10,<1.0",
     # Pinned below 1.0 because slowapi 0.1.10 is not compatible with starlette 1.x:
     # exception-handler dispatch misroutes (a ValidationError reaches slowapi's
     # _rate_limit_exceeded_handler and dies on the missing .detail), and
@@ -63,13 +74,13 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pip-audit>=2.9,<3",
+    "pip-audit>=2.10.1,<3",
     "pre-commit>=4.6.2,<5",
-    "pytest>=9.0.2,<10.0",
-    "pytest-asyncio>=1.3.0,<2.0",
-    "pytest-cov>=7.0.0,<8.0",
-    "ruff>=0.15.7,<1.0",
-    "ty>=0.0.24,<0.1.0",
+    "pytest>=9.1.1,<10.0",
+    "pytest-asyncio>=1.4.0,<2.0",
+    "pytest-cov>=7.1.0,<8.0",
+    "ruff>=0.16.6,<1.0",
+    "ty>=0.0.78,<0.1.0",
 ]
 
 # ============================================================================
@@ -139,6 +150,21 @@ markers = [
 # since this is process-wide pytest config: unit, integration, e2e,
 # benchmark, and the Ollama-gated local lane. `mise run evals` is out of
 # scope by construction -- it invokes evals.runner directly, not pytest.
+# Re-censused 2026-09-05 against pydantic-ai-slim 2.40.0, pydantic-ai-litellm
+# 0.2.8, litellm 1.99.0, and anyio 4.15.0 (the dependency refresh that also
+# retired the redis shelved major). Lanes actually run: unit, integration, e2e,
+# benchmark, and the live `-m redis` lane -- 1526 passed / 16 skipped, plus 7
+# benchmark and 7 redis cases. The Ollama-gated local lane was NOT run (no
+# reachable Ollama in this environment) and self-skips per its own gating, so it
+# is unverified this round rather than confirmed clean.
+# This census found exactly ONE new emitter, and it is the first entry this
+# ignore list has ever carried: anyio 4.15.0 deprecated the
+# `anyio.abc.BlockingPortal` alias, and starlette 0.52.1's `testclient.py` still
+# reads it at module import. The warning is attributed to `starlette.testclient`
+# (anyio raises it with stacklevel=3), it fires at COLLECTION time for every
+# module importing `TestClient`, and it errored out 29 unit modules before the
+# entry below was added. It cannot be fixed by upgrading -- starlette dropped the
+# alias in 1.x, which the `starlette<1.0` cap forbids. Nothing else regressed.
 # Re-censused 2026-08-29 against pydantic-ai-slim 2.35.3, pydantic-ai-litellm
 # 0.2.8, and litellm 1.98.0 (the dependency refresh that also fixed the
 # Security Scan pip-audit failure -- see mise.toml's `audit` task): zero
@@ -160,6 +186,20 @@ markers = [
 # constraint bump.
 filterwarnings = [
     "error::DeprecationWarning",
+    # Emitter: `starlette.testclient` (0.52.1). anyio 4.15.0 deprecated the
+    # `anyio.abc.BlockingPortal` alias, and starlette's `testclient.py` still
+    # reads it at module import to build `_PortalFactoryType`. The warning is
+    # attributed (stacklevel=3) to `starlette.testclient`, not to anyio, so this
+    # entry names the module the filter actually matches. It fires at COLLECTION
+    # time for every module that imports `TestClient`, which is why the whole
+    # unit lane errors out without it.
+    #
+    # Not fixable by upgrading: starlette moved off the alias in 1.x, and this
+    # project is held at `starlette<1.0` because slowapi 0.1.10 is incompatible
+    # with starlette 1.x (see the pin comment in [project].dependencies). Remove
+    # this entry the moment that cap can be lifted -- it is scoped to the single
+    # emitting module, so a deprecation raised anywhere else still hard-fails.
+    "ignore::DeprecationWarning:starlette.testclient",
 ]
 
 # ============================================================================

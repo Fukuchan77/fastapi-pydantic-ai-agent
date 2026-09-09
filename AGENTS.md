@@ -36,7 +36,7 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 - **File size**: <500 lines OK, 500–999 review splitting, ≥1000 **prohibited** — see `.sdd/steering/file-size-policy.md`
 - **No direct `os.environ` reads**: All env access goes through `Settings` / `get_settings()`. Constitution Principle 4.
 - **`evals/`** is production-linted code (not a scratch directory) — Ruff + `ty` cover it.
-- **`filterwarnings = ["error::DeprecationWarning"]`** in `pyproject.toml` — any deprecation warning from any module is a hard test error. Re-census on every pydantic-ai constraint bump, **and on every Python version change**.
+- **`filterwarnings = ["error::DeprecationWarning"]`** in `pyproject.toml` — any deprecation warning from any module is a hard test error. Re-census on every pydantic-ai constraint bump, **and on every Python version change**. One ignore entry exists as of 2026-09-05: `ignore::DeprecationWarning:starlette.testclient`, for the `anyio.abc.BlockingPortal` alias anyio 4.15.0 deprecated and starlette 0.52.1 still imports. It fires at *collection* time (29 unit modules error out without it) and cannot be closed by upgrading, since starlette dropped the alias in 1.x and `starlette<1.0` is load-bearing.
 - **Python is pinned to 3.13** (`.python-version` + `mise.toml`), not merely floored by `requires-python`. 3.14 deprecates `asyncio.iscoroutinefunction`, which `starlette` 0.52.x and `slowapi` 0.1.10 still call and the `starlette<1.0` pin prevents upgrading away from; with warnings-as-errors that is 63 test failures. Guarded by `tests/unit/test_python_version_pin.py`.
 
 ## Architecture
@@ -130,7 +130,11 @@ These fail on structural drift — understand what they assert before bypassing:
 
 `fastapi<0.137` and `starlette<1.0` in `pyproject.toml` both exist because the newer version **silently disables the global rate limit** (router flattening / slowapi incompatibility) — read the comments there first; `tests/e2e/test_rate_limiting_enforcement.py` is the canary. The starlette pin is also why `mise run audit` carries `--ignore-vuln` entries: each is app-layer-mitigated or unreachable here. Re-run `uv run pip-audit` without them after any starlette bump.
 
+A third `--ignore-vuln` entry covers `PYSEC-2026-3740` (GHSA-8mgp-746c-j5xp / CVE-2026-81726) on `nltk` 3.10.3, a `llama-index-core` transitive nothing here imports. No fix release exists (`fixed_in: []`; 3.10.3 is the latest nltk) and it is unreachable twice over — the advisory needs `pathsec.ENFORCE` on plus untrusted control of a model path, and none of `TransitionParser` / `AveragedPerceptron` / `PerceptronTagger.save_to_json` / `save_maxent_params` is called (llama-index-core touches nltk only in its keyword-table stopword helper, and no keyword-table index is ever built). Re-check after any llama-index-core bump.
+
 A separate `--ignore-vuln` group covers 3 CVEs on `chromadb` 0.6.3, held below 1.0 as a shelved major. None has a fix release (`fixed_in: []`, and the affected range covers even the latest 1.5.9), so upgrading chromadb would not close them — all three need ChromaDB's server (multi-tenant HTTP API/RBAC/`trust_remote_code`), and this codebase only ever uses the embedded client (`app/stores/vector_store/chroma.py`), so they're unreachable today. They become reachable the moment anything switches to `chromadb.HttpClient` — see the note beside that example in `docs/production_deployment.md`.
+
+**Suppression-policy tier (X-12, `docs/cross-repo-adoption-backlog.md`)**: across the sibling Agentic AI repos there's a 3-tier spectrum — no `--ignore-vuln` at all (`beeai-agentic-ai-sandbox`, unreachable advisories just aren't in a scanned extra), reasoned suppression with a mandatory dated deadline + tracking issue (`pydantic-ai-sandbox`'s Runbook R8.1/8.2), and reasoned suppression with no deadline (this repo, all three groups above). This repo is deliberately on tier 3 — its advisories are all reachable from the default scan (no extra to skip, so tier 1 doesn't fit) and it has no per-repo issue tracker to link a deadline against — but tier 2's dated review deadline is a real gap: nothing today forces an entry to be revisited except an incidental dependency bump. Not yet implemented; see CLAUDE.md for the fuller writeup.
 
 `pydantic-ai-litellm` is pinned `>=0.2.3,<0.3.0` in `pyproject.toml` — capped below its next **minor**, not its next major: it's a 0.x package depending on six private pydantic-ai APIs, so its minors are its breaking releases and `<1.0` would admit 0.3.x–0.9.x unreviewed. Mirrors how `fastapi` is handled for 0.x versioning; `tests/unit/test_pydantic_ai_api_lock.py` is what catches such a breakage, not the pin.
 
@@ -144,7 +148,7 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 - **Nightly** (`.github/workflows/security.yml`): `pip-audit` + gitleaks, cron `37 3 * * *`. Steps run sequentially — a red `pip-audit` means gitleaks never runs that night, which hid 365 pre-existing findings for months (all `main`'s history) until `pip-audit` was fixed on 2026-08-29. All 365 are confirmed false positives (dummy `test-`/`sk-test-` keys in `tests/**` fixtures, 4 placeholder curl `-H "X-API-Key: ..."` lines in `README.md`); none in `app/`. `.gitleaksignore` lists them by exact `<commit>:<file>:<rule>:<line>` fingerprint (from `gitleaks detect --source . --report-format json`) — fingerprint-scoped, not text- or path-scoped, so a new commit reusing the same dummy string still gets flagged (verified). Regenerate the same way to add new entries; never hand-edit existing lines.
 - **pre-commit** (`.pre-commit-config.yaml`): gitleaks, `pip-audit`, `no-hardcoded-model-id` pygrep, `real-tool-conventions-guard` (fires on any non-mock `@agent.tool` under `app/agents/`, forcing review of `docs/tool-design-conventions.md`).
 - **pre-push** (`.githooks/pre-push`, opt-in via `git config core.hooksPath .githooks`): probes Ollama, runs `EXPECT_LIVE_TESTS=6 mise run test:local` + `evals` when reachable (the pinned count guards against a lane that silently collects zero live cases), warns and lets the push through when not.
-- **Dependabot** (`.github/dependabot.yml`): weekly `uv` + `github-actions`, minors/patches grouped. Its `ignore:` list blocks the forbidden bumps — `starlette` majors and `fastapi` **minors and majors** (Dependabot reads fastapi's 0.x releases by patch position, so `0.136 → 0.137` is a minor) — plus `chromadb`/`redis` majors, shelved pending a client-compatibility pass. Guarded by `tests/unit/test_dependabot_config.py`; `docs/dependency-runbook.md` is the accept/shelve process.
+- **Dependabot** (`.github/dependabot.yml`): weekly `uv` + `github-actions`, minors/patches grouped. Its `ignore:` list blocks the forbidden bumps — `starlette` majors and `fastapi` **minors and majors** (Dependabot reads fastapi's 0.x releases by patch position, so `0.136 → 0.137` is a minor) — plus `chromadb`/`redis` majors, shelved pending a client-compatibility pass. **redis's pass was run on 2026-09-05** — the client moved 5.3.1 → 8.1.0 (`redis>=8.1.0,<9.0`) after the live `-m redis` lane (7/7) and the full unit+integration+e2e suite came back green; the ignore entry stays but now shelves redis **9.x**. `sentence-transformers` stays capped `<6.0` because its only exercise is the HF-download-gated `chroma` lane, which cannot run offline. Guarded by `tests/unit/test_dependabot_config.py`; `docs/dependency-runbook.md` is the accept/shelve process.
 
 ## Feature Status (`004-pydantic-ai-v2-unblock` complete; `003-pydantic-ai-v2-migration` sealed, both tracked under `.sdd/specs/`)
 
@@ -152,6 +156,21 @@ A private-API coupling, not a version bound: the rate-limit-exceeded handler (`a
 - `003` shipped units 1–9; its task 9 recorded the adapter-compatibility gate **FAILED**, so its tasks 10–12 (Requirements 9–11) are closed as superseded by `004` rather than completed. `004` re-executed that gate under its own Requirement 4 (run 1), recording it **PASSED** (evidence: `docs/adapter-probe-report-2026-08-13-run1.md`, cross-referencing the original 2026-08-11 finding at `docs/adapter-probe-report.md`), unblocking the v2 code migration, its behavioural pinning, and the Redis key-prefix cutover.
 - **All eight of `004`'s change units (tasks 1–8) have shipped**; the only unchecked subtasks are 6.6–6.8, conditional gate-*failure* branches that never fired. No spec is in flight — new work opens a new one. `CLAUDE.md` and `AGENTS.md` are still edited **as a pair in one change unit** (`004` Req 8.2).
 - `pydantic-ai-slim` moved to the 2.x line (`>=2.27.0,<3.0` in `pyproject.toml`) in `004`'s task 7, unblocked by task 6's recorded gate PASS; `pydantic-ai-litellm` bumped alongside it to `>=0.2.3,<0.3.0`.
+
+## Cross-repo review
+
+`docs/cross-repo-adoption-backlog.md` lists what this repo exports to, and imports from, the four
+sibling Agentic AI repositories (`beeai-agentic-ai-sandbox`, `pydantic-ai-sandbox`, `vaz-ai-next`,
+`vaz-agentic-ai-next`). The full 5-repo matrix and the item bodies (X-1 … X-16) are in
+`vaz-agentic-ai-next/docs/cross-repo-adoption-review.md` — cite item IDs, do not restate them here.
+
+**Multi-agent adoption gate (X-16)**: this codebase is single-agent today (`chat_agent` + the
+`corrective_rag` *workflow* — a fixed search/evaluate/synthesize path, not multiple cooperating
+agents). Before adopting an actual multi-agent construction, read `beeai-agentic-ai-sandbox`'s
+`effective_agents/README.md` (workflow-vs-agent decision framework, the 6 patterns, and the
+~15x-token cost warning for multi-agent constructions) and `pydantic-ai-sandbox`'s
+`patterns/deep-research/COMPARISON.md` (per-framework adopt/wrap guidance). Gating material for a
+future decision, not a to-do.
 
 ## Adding a New Real Agent Tool
 
