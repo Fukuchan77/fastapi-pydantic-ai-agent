@@ -1,6 +1,7 @@
 """Request and response models for RAG endpoints."""
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
@@ -16,10 +17,16 @@ MAX_CHUNK_CHARS = 100_000
 class IngestRequest(BaseModel):
     """Request model for document ingestion.
 
+    `extra="forbid"` rejects an unrecognized field with a 422 rather than
+    silently dropping it, so a caller cannot smuggle in fields this model
+    never defines (see `tests/unit/models/test_request_model_strictness.py`).
+
     Attributes:
         chunks: List of text chunks to ingest into the vector store (1-1000
             chunks, each at most MAX_CHUNK_CHARS characters).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     chunks: list[str] = Field(
         ...,
@@ -71,10 +78,18 @@ class IngestResponse(BaseModel):
 class RAGQueryRequest(BaseModel):
     """Request model for RAG query endpoint.
 
+    Deliberately defines no `context`/`hits`/`history` field: retrieved
+    context always comes from this run's own workflow search, never from the
+    caller. `extra="forbid"` makes an unrecognized field a 422 rather than a
+    silently-dropped extra key (see
+    `tests/unit/models/test_request_model_strictness.py`).
+
     Attributes:
         query: User query to search for relevant context (1-10000 chars).
         max_retries: Maximum number of search retries for relevance evaluation (1-10).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     query: str = Field(
         ...,
