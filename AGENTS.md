@@ -103,6 +103,8 @@ Run a single test: `uv run pytest tests/unit/stores/test_session_store.py::test_
 
 **Session trimming**: `trim_history()` (`app/stores/session_store/_trim.py`) is a pure function shared by both `SessionStore` backends, bounded by `session_max_messages` (default `1000`). Cuts land only between messages, never orphan a retained tool-call pair, and always keep `messages[0]` (the system prompt) — which is why the result can be `max_messages + 1` long, not exactly `max_messages`.
 
+**Context budget staged design (X-7, `docs/context-budget.md`)**: Stage 0 is trimming above, unchanged. Stage 1 (this PR) adds an opt-in seam only — both stores accept `history_compactor: HistoryCompactor | None = None` (type in `_trim.py`); when set, it runs *before* `trim_history()`, which still has final say. `None` (every current call site) is byte-identical to Stage 0; no compactor ships yet. Stage 2 (auto-summarization) is not started — gated on `budget_exceeded`/forced-trim becoming the dominant stop reason, which nothing currently measures. Separately, `Settings.rag_prompt_max_chars` (default `15000`) replaces what was a hardcoded `15000` literal at three RAG prompt-truncation call sites (`rag_llm.py` x2, `corrective_rag.py`) — independent of `session_max_messages`, bounds a single prompt's context instead of a session's message count.
+
 **Pluggable stores**: implement `typing.Protocol` in `app/stores/*/protocol.py`; register in `app/stores/factory.py`; wire via `lifespan`. Never subclass a concrete backend.
 
 ## Testing

@@ -157,3 +157,13 @@ class StoreSettingsMixin(BaseModel):
         description="Number of hits to retrieve on a CRAG retry after insufficient grading "
         "(widened from rag_initial_k)",
     )
+    rag_prompt_max_chars: int = Field(
+        default=15000,
+        ge=1000,
+        description="Character budget `PromptBuildingMixin._truncate_chunks`/"
+        "`_truncate_hits` (`app/workflows/rag_prompts.py`) truncate retrieved "
+        "context to before it enters an LLM prompt (X-7, "
+        "`docs/context-budget.md`). 15000 matches the value every call site "
+        "hardcoded before this setting existed, so the default is unchanged "
+        "behavior, not a new cap",
+    )
