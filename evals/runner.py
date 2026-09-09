@@ -5,9 +5,11 @@ Wired to `mise run evals`, invoked only from the availability-gated
 it makes real LLM calls against both the agent under test and the judge.
 """
 
+import argparse
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -58,12 +60,25 @@ class GoldenCase(BaseModel):
 
 
 class CaseResult(BaseModel):
-    """One graded golden case: the agent's output plus both axis ratings."""
+    """One graded golden case: the agent's output plus both axis ratings.
+
+    `total_tokens`/`duration_ms`/`skipped` exist for X-8's offline PR-gate
+    metrics (`evals/pr_gate.py`, `docs/cross-repo-adoption-backlog.md`).
+    `duration_ms` is populated by `run_evals()` below; `total_tokens` stays
+    `None` for now - `AgentRunner`'s `str`-only return carries no usage
+    data, so a real value needs that contract widened, which is out of
+    scope for this PR. `skipped` has no producer in this runner yet (there
+    is no live/gated case concept here); it exists so `evals/pr_gate.py`'s
+    average computation has a stable field to filter on when one is added.
+    """
 
     case_id: str
     agent_output: str
     outcome: Rating
     behavior: Rating
+    total_tokens: int | None = None
+    duration_ms: float | None = None
+    skipped: bool = False
 
 
 class EvalReport(BaseModel):
@@ -124,14 +139,17 @@ async def run_evals(
     """
     results: list[CaseResult] = []
     for case in cases:
+        start = time.monotonic()
         output = await agent_runner(case)
         graded = await grade_case(judge, case, output)
+        duration_ms = (time.monotonic() - start) * 1000
         results.append(
             CaseResult(
                 case_id=case.id,
                 agent_output=output,
                 outcome=graded.outcome,
                 behavior=graded.behavior,
+                duration_ms=duration_ms,
             )
         )
     return EvalReport(
@@ -233,16 +251,34 @@ async def _run_against_live_agent() -> EvalReport:
         return await run_evals(cases, agent_runner, judge)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for `mise run evals` (Req 6.5).
+
+    Args:
+        argv: Command-line arguments, or `None` to read `sys.argv` (the
+            normal case). `--output` is optional and does not change
+            default behavior when omitted - `mise run evals`'s invocation
+            (`python -m evals.runner`, no arguments) is unaffected.
 
     Returns:
         `0` when every graded axis meets the minimum passing score, `1`
         otherwise - the process exit code the pre-push hook blocks on
         (Req 1.6).
     """
+    parser = argparse.ArgumentParser(description="Offline golden-set evals runner.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path to persist this run's EvalReport as JSON, for a later "
+        "`evals.pr_gate` comparison (X-8, docs/cross-repo-adoption-backlog.md).",
+    )
+    args = parser.parse_args(argv)
+
     report = asyncio.run(_run_against_live_agent())
     _log_report(report)
+    if args.output is not None:
+        args.output.write_text(report.model_dump_json(indent=2))
     return 0 if report.passed else 1
 
 

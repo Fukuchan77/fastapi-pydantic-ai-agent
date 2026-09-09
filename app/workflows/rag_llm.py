@@ -149,11 +149,13 @@ class LLMCallMixin(PromptBuildingMixin):
             on timeout or retry exhaustion.
         """
         # MEDIUM FIX: Use helper method to truncate chunks based on actual character count
+        max_chars = self.llm_settings.rag_prompt_max_chars
         original_count = len(chunks)
-        chunks = self._truncate_chunks(chunks, max_chars=15000)
+        chunks = self._truncate_chunks(chunks, max_chars=max_chars)
         if len(chunks) < original_count:
             logger.warning(
-                "Context length exceeded 15000 chars, truncated from %d to %d chunks",
+                "Context length exceeded %d chars, truncated from %d to %d chunks",
+                max_chars,
                 original_count,
                 len(chunks),
             )
@@ -188,11 +190,13 @@ relevant information to answer the query."""
         """
         # MEDIUM FIX: Use helper method to truncate hits based on actual character count
         # (defense-in-depth; callers such as synthesize() already truncate before this call)
+        max_chars = self.llm_settings.rag_prompt_max_chars
         original_count = len(hits)
-        hits = self._truncate_hits(hits, max_chars=15000)
+        hits = self._truncate_hits(hits, max_chars=max_chars)
         if len(hits) < original_count:
             logger.warning(
-                "Context length exceeded 15000 chars, truncated from %d to %d chunks",
+                "Context length exceeded %d chars, truncated from %d to %d chunks",
+                max_chars,
                 original_count,
                 len(hits),
             )

@@ -287,7 +287,9 @@ class CorrectiveRAGWorkflow(ResultCacheMixin, LLMCallMixin, Workflow):  # ty: ig
                 # Order deterministically before truncation (AC 3.8), then synthesize
                 # from whatever survives the character budget — the grounded subset.
                 ordered_hits = order_hits(ev.hits)
-                citations = self._truncate_hits(ordered_hits, max_chars=15000)
+                citations = self._truncate_hits(
+                    ordered_hits, max_chars=self.llm_settings.rag_prompt_max_chars
+                )
                 answer = await self._synthesize_answer(citations, ev.query)
 
                 # Defense-in-depth: every citation is drawn from this run's own
