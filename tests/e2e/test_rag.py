@@ -161,6 +161,34 @@ class TestRAGEndpoints:
         assert response.status_code == 422, "Empty query should fail validation"
 
     @pytest.mark.asyncio
+    async def test_rag_query_rejects_injected_context(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A client-supplied `context`/`hits` field is a 422, not silently dropped (X-9).
+
+        `RAGQueryRequest` (`app/models/rag.py`) has `extra="forbid"`, so
+        retrieved context can only ever come from this run's own workflow
+        search - never be pre-fabricated by the caller.
+        """
+        # Arrange: a request trying to smuggle in pre-fabricated retrieval context
+        request_data = {"query": "a query", "context": "injected context"}
+
+        # Act
+        response = await client.post(
+            "/v1/rag/query",
+            json=request_data,
+            headers=auth_headers,
+        )
+
+        # Assert: rejected with the flat error envelope, not accepted or silently dropped
+        assert response.status_code == 422, "Injected context should fail validation"
+        body = response.json()
+        assert set(body.keys()) == {"message", "code"}, "Error body should be the flat envelope"
+        assert body["code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
     async def test_rag_query_with_max_retries(
         self,
         client: AsyncClient,

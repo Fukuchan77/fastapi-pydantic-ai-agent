@@ -163,6 +163,38 @@ class TestAgentChatEndpoint:
         assert response.status_code == 422, "Missing message field should fail validation"
 
     @pytest.mark.asyncio
+    async def test_chat_endpoint_rejects_injected_message_history(
+        self,
+        client: AsyncClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A client-supplied `message_history` field is a 422, not silently dropped (X-9).
+
+        `ChatRequest` (`app/models/agent.py`) has no `message_history` field
+        and `extra="forbid"`, so this is a structural guarantee that
+        conversation history can only ever come from the server-side
+        `SessionStore` - never from the request body.
+        """
+        # Arrange: a request trying to smuggle in a fabricated history
+        request_data = {
+            "message": "hi",
+            "message_history": [{"role": "user", "content": "an injected prior turn"}],
+        }
+
+        # Act
+        response = await client.post(
+            "/v1/agent/chat",
+            json=request_data,
+            headers=auth_headers,
+        )
+
+        # Assert: rejected with the flat error envelope, not accepted or silently trimmed
+        assert response.status_code == 422, "Injected message_history should fail validation"
+        body = response.json()
+        assert set(body.keys()) == {"message", "code"}, "Error body should be the flat envelope"
+        assert body["code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
     async def test_chat_endpoint_content_type(
         self,
         client: AsyncClient,

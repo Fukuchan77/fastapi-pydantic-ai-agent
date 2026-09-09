@@ -1,6 +1,7 @@
 """Request and response models for agent endpoints."""
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 
 from app.agents.guardrails import AuditRecord
@@ -10,6 +11,16 @@ from app.agents.guardrails import StopReason
 class ChatRequest(BaseModel):
     """Request model for chat endpoint.
 
+    Deliberately defines no `message_history`, `usage`, or `model` field:
+    conversation history is always server-loaded from `SessionStore` (never
+    client-supplied), so there is no field for a client to inject it
+    through. `extra="forbid"` makes that a *structural* guarantee rather
+    than an accident of the current field list — an unrecognized field
+    (including a client attempting to smuggle in `message_history`) is a
+    422, not a silently-dropped extra key. This closes the same class of
+    attack surface as CVE-2026-25580 (untrusted history/URL injection) by
+    construction. See `tests/unit/models/test_request_model_strictness.py`.
+
     Attributes:
         message: User message to send to the agent (1-32000 chars).
         session_id: Server-issued session ID from a previous response, for
@@ -17,6 +28,8 @@ class ChatRequest(BaseModel):
             (Req 11.1). Presenting a session_id bound to another principal
             is rejected with 403 (Req 11.2).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     message: str = Field(
         ...,
