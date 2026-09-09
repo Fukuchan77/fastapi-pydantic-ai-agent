@@ -53,11 +53,17 @@ class AuditRecord(BaseModel):
     the request-count/tool-call-count/token-count check that raised fires
     before any specific tool call is attempted, so there is no tool name to
     record.
+
+    `principal` is best-effort attribution, not a guarantee: it is read off
+    `deps.principal` by convention (see `_principal_of`), so it is `None` for
+    any route that runs before `bind_principal()` (`app/agents/deps.py`) has
+    set it, or for a `DepsT` shape that carries no such attribute at all.
     """
 
     tool_name: str
     stop_reason: StopReason
     detail: str = ""
+    principal: str | None = None
 
 
 class AuditTrail:
@@ -121,6 +127,26 @@ def _summarize_tool_args(tool_args: dict[str, Any]) -> str:
     return text
 
 
+def _principal_of(deps: object) -> str | None:
+    """Best-effort read of `deps.principal` for audit attribution (Req 4.7).
+
+    This module is deliberately generic over `DepsT` and knows nothing about
+    its shape; `AgentDeps.principal` (`app/agents/deps.py`) is an attribute
+    by convention, not a protocol this module depends on. A `deps` object
+    lacking it - or a route caught before `bind_principal()` runs - yields
+    `None` rather than raising, since attribution is best-effort audit
+    metadata, not a functional dependency of the guardrail checks themselves.
+
+    Args:
+        deps: The run's dependencies object, of whatever shape `DepsT` is.
+
+    Returns:
+        `deps.principal` when present and a `str`, otherwise `None`.
+    """
+    principal = getattr(deps, "principal", None)
+    return principal if isinstance(principal, str) else None
+
+
 @dataclass
 class _GuardedToolset[DepsT](WrapperToolset[DepsT]):
     """Wraps the agent's combined toolset to enforce allow-list/approval/budget checks."""
@@ -157,6 +183,7 @@ class _GuardedToolset[DepsT](WrapperToolset[DepsT]):
                     tool_name=name,
                     stop_reason="disallowed_tool",
                     detail=_summarize_tool_args(tool_args),
+                    principal=_principal_of(ctx.deps),
                 )
             )
             raise GuardrailStopError("disallowed_tool", name)
@@ -167,6 +194,7 @@ class _GuardedToolset[DepsT](WrapperToolset[DepsT]):
                     tool_name=name,
                     stop_reason="denied",
                     detail=_summarize_tool_args(tool_args),
+                    principal=_principal_of(ctx.deps),
                 )
             )
             raise GuardrailStopError("denied", name)
@@ -178,6 +206,7 @@ class _GuardedToolset[DepsT](WrapperToolset[DepsT]):
                     tool_name=name,
                     stop_reason="budget_exceeded",
                     detail=_summarize_tool_args(tool_args),
+                    principal=_principal_of(ctx.deps),
                 )
             )
             raise GuardrailStopError("budget_exceeded", name)
@@ -364,6 +393,7 @@ async def run_guarded[DepsT, OutputT](
                 tool_name="",
                 stop_reason=stop_reason,
                 detail=_usage_limit_detail(limits, usage),
+                principal=_principal_of(deps),
             )
         )
         return GuardedResult(

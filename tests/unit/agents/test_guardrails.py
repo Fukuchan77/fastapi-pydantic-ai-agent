@@ -43,11 +43,12 @@ def _build_agent(model: TestModel) -> Agent[AgentDeps, str]:
     return agent
 
 
-def _build_deps() -> AgentDeps:
+def _build_deps(*, principal: str | None = None) -> AgentDeps:
     return AgentDeps(
         http_client=Mock(spec=httpx.AsyncClient),
         settings=build_test_settings(),
         session_store=Mock(spec=SessionStore),
+        principal=principal,
     )
 
 
@@ -347,6 +348,94 @@ class TestRunGuardedUsageLimitAudit:
 
         assert "requests=3" in detail
         assert "no configured limit matched" in detail
+
+
+class TestAuditRecordPrincipalAttribution:
+    """Req 4.7 (X-9): every audit record carries the calling principal.
+
+    `AuditRecord.principal` is read off `deps.principal` (`_principal_of`),
+    the same field `bind_principal()` sets on `AgentDeps` at each agent
+    route's entry point (`app/api/v1/agent.py`), so a reviewer reading
+    `ChatResponse.audit` can attribute a refused/denied/budget-blocked
+    attempt without cross-referencing anything else.
+    """
+
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_record_carries_the_principal(self) -> None:
+        """A disallowed_tool stop's audit entry names the calling principal."""
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(principal="principal-abc"),
+            limits=UsageLimits(),
+            allowed_tools=set(),
+        )
+
+        assert result.stop_reason == "disallowed_tool"
+        assert result.audit[0].principal == "principal-abc"
+
+    @pytest.mark.asyncio
+    async def test_denied_record_carries_the_principal(self) -> None:
+        """A denied (approval hook refusal) stop's audit entry names the principal."""
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        async def refuse(tool_name: str, tool_args: dict) -> bool:
+            return False
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(principal="principal-abc"),
+            limits=UsageLimits(),
+            allowed_tools={"mock_web_search"},
+            approval_hook=refuse,
+        )
+
+        assert result.stop_reason == "denied"
+        assert result.audit[0].principal == "principal-abc"
+
+    @pytest.mark.asyncio
+    async def test_usage_limit_exceeded_record_carries_the_principal(self) -> None:
+        """A native UsageLimitExceeded stop's audit entry names the principal too.
+
+        This path never reaches `_GuardedToolset.call_tool` (the native
+        check raises first), so it exercises the separate `_principal_of(deps)`
+        read in `run_guarded`'s own `except UsageLimitExceeded` branch.
+        """
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(principal="principal-abc"),
+            limits=UsageLimits(request_limit=1),
+            allowed_tools={"mock_web_search"},
+        )
+
+        assert result.stop_reason == "max_iterations"
+        assert result.audit[0].principal == "principal-abc"
+
+    @pytest.mark.asyncio
+    async def test_no_principal_set_yields_none_rather_than_raising(self) -> None:
+        """A deps object with no principal bound yet still produces a valid record."""
+        model = TestModel(call_tools=["mock_web_search"])
+        agent = _build_agent(model)
+
+        result = await run_guarded(
+            agent,
+            "search for something",
+            deps=_build_deps(),  # principal defaults to None
+            limits=UsageLimits(),
+            allowed_tools=set(),
+        )
+
+        assert result.stop_reason == "disallowed_tool"
+        assert result.audit[0].principal is None
 
 
 class TestClassifyUsageLimitExceeded:
