@@ -40,6 +40,7 @@ def mock_settings():
     settings.rag_cache_size = 100  # Max 100 cached results
     settings.rag_initial_k = 2
     settings.rag_widened_k = 4
+    settings.rag_prompt_max_chars = 15000
     return settings
 
 

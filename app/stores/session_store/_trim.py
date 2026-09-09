@@ -6,6 +6,7 @@ retained tool return (Req 3.1, 3.2). See ADR-4 in
 derivation of the validity rule and the forward-search direction.
 """
 
+from collections.abc import Callable
 from collections.abc import Sequence
 
 from pydantic_ai.messages import BaseToolCallPart
@@ -14,6 +15,20 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import RetryPromptPart
+
+
+HistoryCompactor = Callable[[Sequence[ModelMessage]], Sequence[ModelMessage]]
+"""Stage 1 context-budget seam (`docs/context-budget.md`, X-7).
+
+Applied by a `SessionStore.save_history()` implementation *before*
+`trim_history()`, never after — `trim_history()` always has final say over
+what actually gets persisted, so a compactor cannot itself violate the
+message-boundary/tool-call-pairing/non-empty-parts invariants below; it can
+only change what `trim_history()` sees as its input. Not implementing one
+here (returning the input unchanged) is the default and is exactly Stage 0's
+current behavior — see `docs/context-budget.md` for the staged rollout this
+type is Stage 1 of.
+"""
 
 
 def trim_history(messages: Sequence[ModelMessage], max_messages: int) -> list[ModelMessage]:

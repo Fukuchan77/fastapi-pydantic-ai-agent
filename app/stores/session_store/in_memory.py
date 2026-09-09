@@ -10,6 +10,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 
+from app.stores.session_store._trim import HistoryCompactor
 from app.stores.session_store._trim import trim_history
 
 
@@ -37,6 +38,7 @@ class InMemorySessionStore:
         max_messages: int = DEFAULT_MAX_MESSAGES,
         session_ttl: int = DEFAULT_SESSION_TTL,
         max_sessions: int = DEFAULT_MAX_SESSIONS,
+        history_compactor: HistoryCompactor | None = None,
     ) -> None:
         """Initialize an empty in-memory session store with per-session locks and TTL.
 
@@ -49,6 +51,10 @@ class InMemorySessionStore:
                 Sessions not accessed for this duration will be eligible for cleanup.
             max_sessions: Maximum number of sessions to store (default: 10,000).
                 When exceeded, the least-recently-used session is evicted.
+            history_compactor: Stage 1 context-budget seam (`docs/context-budget.md`,
+                X-7). When set, `save_history()` applies it before `trim_history()`
+                on every save. `None` (the default) is Stage 0: byte-identical to
+                this store's behavior before this parameter existed.
         """
         self._store: dict[str, list[ModelMessage]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -60,6 +66,7 @@ class InMemorySessionStore:
         self.max_messages = max_messages
         self.session_ttl = session_ttl
         self.max_sessions = max_sessions
+        self.history_compactor = history_compactor
 
     async def get_history(self, session_id: str) -> list[ModelMessage]:
         """Retrieve message history for a session.
@@ -95,6 +102,11 @@ class InMemorySessionStore:
         rather than raising — reaching the cap is expected operation for a
         long conversation, not a failure.
 
+        If `self.history_compactor` is set (Stage 1, `docs/context-budget.md`),
+        it runs first and `trim_history()` runs on *its* output — trimming
+        always has final say over what is actually persisted, regardless of
+        what the compactor returns.
+
         Args:
             session_id: Unique identifier for the conversation session.
                 Must be 1-256 characters, containing only alphanumeric
@@ -105,10 +117,14 @@ class InMemorySessionStore:
         Raises:
             ValueError: If session_id is invalid (empty, too long, or contains
                 invalid characters).
-            TypeError: If messages list contains non-ModelMessage instances.
+            TypeError: If messages list contains non-ModelMessage instances
+                (before or, if a compactor is set, after compaction).
         """
         self._validate_session_id(session_id)
         self._validate_messages(messages)
+        if self.history_compactor is not None:
+            messages = self.history_compactor(messages)
+            self._validate_messages(messages)
         trimmed = trim_history(messages, self.max_messages)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             # Update last access time inside the lock, same as get_history: a

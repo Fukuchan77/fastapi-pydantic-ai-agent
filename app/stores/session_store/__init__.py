@@ -6,9 +6,10 @@ public surface so `from app.stores.session_store import SessionStore,
 InMemorySessionStore, RedisSessionStore` keeps working unchanged.
 """
 
+from app.stores.session_store._trim import HistoryCompactor
 from app.stores.session_store.in_memory import InMemorySessionStore
 from app.stores.session_store.protocol import SessionStore
 from app.stores.session_store.redis import RedisSessionStore
 
 
-__all__ = ["InMemorySessionStore", "RedisSessionStore", "SessionStore"]
+__all__ = ["HistoryCompactor", "InMemorySessionStore", "RedisSessionStore", "SessionStore"]

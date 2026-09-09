@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
+from app.stores.session_store._trim import HistoryCompactor
 from app.stores.session_store._trim import trim_history
 from app.stores.session_store.in_memory import InMemorySessionStore
 
@@ -42,6 +43,8 @@ class RedisSessionStore:
         max_messages: Maximum number of messages retained per session
             (default: `InMemorySessionStore.DEFAULT_MAX_MESSAGES`, matching
             the in-memory store's effective cap).
+        history_compactor: Stage 1 context-budget seam (`docs/context-budget.md`,
+            X-7); see `InMemorySessionStore.__init__`'s docstring.
 
     Key-prefix cutover (Req 7.1, 7.4): `DEFAULT_KEY_PREFIX` moved from
     `"session:"` to `"session:v2:"` alongside the pydantic-ai v2 migration, so
@@ -62,6 +65,7 @@ class RedisSessionStore:
         session_ttl: int = DEFAULT_SESSION_TTL,
         key_prefix: str = DEFAULT_KEY_PREFIX,
         max_messages: int = InMemorySessionStore.DEFAULT_MAX_MESSAGES,
+        history_compactor: HistoryCompactor | None = None,
     ) -> None:
         """Initialize Redis session store.
 
@@ -75,6 +79,11 @@ class RedisSessionStore:
                 a keyword default, not a required parameter, so every
                 existing call site keeps constructing a store with the same
                 effective cap it gets today.
+            history_compactor: Stage 1 context-budget seam
+                (`docs/context-budget.md`, X-7). When set, `save_history()`
+                applies it before `trim_history()` on every save. `None` (the
+                default) is Stage 0: byte-identical to this store's behavior
+                before this parameter existed.
         """
         import redis.asyncio as redis
 
@@ -82,6 +91,7 @@ class RedisSessionStore:
         self.session_ttl = session_ttl
         self.key_prefix = key_prefix
         self.max_messages = max_messages
+        self.history_compactor = history_compactor
         # Compile regex pattern for session_id validation
         self._session_id_pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
@@ -136,6 +146,11 @@ class RedisSessionStore:
         `app.stores.session_store._trim`) rather than raising — reaching the
         cap is expected operation for a long conversation, not a failure.
 
+        If `self.history_compactor` is set (Stage 1, `docs/context-budget.md`),
+        it runs first and `trim_history()` runs on *its* output — trimming
+        always has final say over what is actually persisted, regardless of
+        what the compactor returns.
+
         Args:
             session_id: Unique identifier for the conversation session.
             messages: Complete message history to store.
@@ -144,6 +159,9 @@ class RedisSessionStore:
             ValueError: If session_id is invalid.
         """
         self._validate_session_id(session_id)
+
+        if self.history_compactor is not None:
+            messages = self.history_compactor(messages)
 
         trimmed = trim_history(messages, self.max_messages)
 
