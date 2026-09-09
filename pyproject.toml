@@ -56,7 +56,7 @@ dependencies = [
     # set). Capped below the next major, which is shelved in turn until its own
     # pass -- see the redis entry in `.github/dependabot.yml`.
     "redis>=8.1.0,<9.0",
-    "sentence-transformers>=5.7.0,<6.0",
+    "sentence-transformers>=5.7.0,<7.0",
     "slowapi>=0.1.10,<1.0",
     # Pinned below 1.0 because slowapi 0.1.10 is not compatible with starlette 1.x:
     # exception-handler dispatch misroutes (a ValidationError reaches slowapi's
